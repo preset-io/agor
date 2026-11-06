@@ -6,6 +6,7 @@ import {
 } from '@agor/core/db';
 import type { TenantID } from '@agor/core/types';
 import { expect } from 'vitest';
+import { setBranchPathForTest } from '../../../packages/core/src/db/repositories/environment-commands.test-support';
 import { dbTest } from '../../../packages/core/src/db/test-helpers';
 import { retirementRouteApp } from '../test/retirement-route-app';
 import { seedPreferenceRace } from './services/teammate-preference-race.test-support';
@@ -27,9 +28,7 @@ dbTest(
     const fixture = await scoped(() => seedPreferenceRace(db));
     // Retirement is metadata-only even when another row owns the same path.
     await scoped(() =>
-      new BranchRepository(db).update(fixture.replacement.branch_id, {
-        path: fixture.branch.path,
-      })
+      setBranchPathForTest(db, fixture.replacement.branch_id, fixture.branch.path)
     );
     const app = await retirementRouteApp(db, config);
     const path = 'branches/:id/retire-teammate';

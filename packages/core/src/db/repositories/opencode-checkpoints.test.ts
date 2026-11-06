@@ -39,7 +39,7 @@ async function createSession(
     name: 'test-branch',
     ref: 'main',
     branch_unique_id: branchCounter++,
-    path: '/tmp/test/branch',
+    path: `/tmp/test/${generateId()}/branch`,
     created_by: owner as UUID,
   });
   const session = await new SessionRepository(db).create({

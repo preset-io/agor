@@ -10,7 +10,10 @@ import { proveBoundedTeamsCleanup } from './branch-deletion-teams.test-support';
 import { executeRaw, insert, runDatabaseTransaction, select } from './database-wrapper';
 import { BranchMaintenanceRepository } from './repositories/branch-maintenance';
 import { BranchRepository } from './repositories/branches';
-import { seedEnvironmentCommandBranch } from './repositories/environment-commands.test-support';
+import {
+  seedEnvironmentCommandBranch,
+  setBranchPathForTest,
+} from './repositories/environment-commands.test-support';
 import { SessionRepository } from './repositories/sessions';
 import { TaskRepository } from './repositories/tasks';
 import { branches, messages } from './schema';
@@ -21,7 +24,7 @@ test('drains a large single session in bounded transactions, preserves shared ne
 }) => {
   const { branch, user } = await seedEnvironmentCommandBranch(db);
   const { branch: neighbor } = await seedEnvironmentCommandBranch(db);
-  await new BranchRepository(db).update(neighbor.branch_id, { path: '/tmp/neighbor-fixture' });
+  await setBranchPathForTest(db, neighbor.branch_id, '/tmp/neighbor-fixture');
   const session = await new SessionRepository(db).create({
     branch_id: branch.branch_id,
     created_by: user.user_id,
@@ -95,7 +98,7 @@ test('reference reconciliation clears exact structured pointers but leaves arbit
 }) => {
   const { branch } = await seedEnvironmentCommandBranch(db);
   const { branch: neighbor } = await seedEnvironmentCommandBranch(db);
-  await new BranchRepository(db).update(neighbor.branch_id, { path: '/tmp/neighbor-fixture' });
+  await setBranchPathForTest(db, neighbor.branch_id, '/tmp/neighbor-fixture');
   await executeRaw(
     db,
     sql`UPDATE branches SET data = json_set(data, '$.custom_context.fixture.branch_id', ${branch.branch_id}, '$.custom_context.fixture.text', ${branch.branch_id}) WHERE branch_id = ${neighbor.branch_id}`
@@ -139,7 +142,7 @@ test('completed reference scan fences late teammate dependencies and namespace o
   const { branch } = await seedEnvironmentCommandBranch(db);
   const { branch: neighbor } = await seedEnvironmentCommandBranch(db);
   const branches = new BranchRepository(db);
-  await branches.update(neighbor.branch_id, { path: '/tmp/late-reference-neighbor' });
+  await setBranchPathForTest(db, neighbor.branch_id, '/tmp/late-reference-neighbor');
   const namespaces = new KnowledgeNamespaceRepository(db);
   const namespace = await namespaces.create({
     slug: 'deleting-owner',

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   BRANCH_ARCHIVE_COMMAND,
   BRANCH_CLEANUP_COMMAND,
@@ -159,11 +159,12 @@ it.each(['clone', 'worktree'] as const)(
     try {
       const repoPath = join(root, 'repo');
       const branchesRoot = join(root, 'branches');
-      const branchPath = join(branchesRoot, 'victim');
+      const branchPath = join(branchesRoot, 'org', 'repo', 'victim');
       const neighbor = join(branchesRoot, 'neighbor');
       const home = join(root, 'sdk-home');
       await Promise.all([mkdir(repoPath), mkdir(branchesRoot), mkdir(home)]);
       await mkdir(neighbor);
+      await mkdir(dirname(branchPath), { recursive: true });
       await writeFile(join(home, 'retained'), 'sdk');
       const git = simpleGit(repoPath);
       await git.init();
@@ -172,7 +173,7 @@ it.each(['clone', 'worktree'] as const)(
       await git.commit('fixture', { '--allow-empty': null });
       if (storageMode === 'worktree')
         await git.raw(['worktree', 'add', '-b', 'victim', branchPath]);
-      else await mkdir(branchPath);
+      else await mkdir(branchPath, { recursive: true });
       await writeFile(join(branchPath, 'discard'), 'workspace');
       const request = payload(branchPath);
       const {

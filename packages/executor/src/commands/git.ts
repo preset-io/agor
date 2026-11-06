@@ -15,7 +15,7 @@ import { validateExistingRestore } from './branch-restore-validation.js';
  */
 
 import { existsSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { getReposDir } from '@agor/core/config';
@@ -26,7 +26,7 @@ import {
   isCanonicalTeammateFrameworkRepo,
   TEAMMATE_FRAMEWORK_REPO_URL,
 } from '@agor/core/types';
-import { diagnoseGit } from '@agor/git';
+import { diagnoseGit, resolveManagedBranchWorkspacePath } from '@agor/git';
 import type { UserGitEnvironment } from '@agor/git/pure';
 import { cloneDiagnostic } from '../git/clone-diagnostic.js';
 import { appendGitConfigParameterPairs } from '../git/config-parameters.js';
@@ -925,7 +925,19 @@ export async function handleGitBranchAdd(
 
     // Get parameters
     const repoId = payload.params.repoId;
-    const branchPath = branchRecord.path;
+    resolvedBranchPath = branchRecord.path;
+    // The stored path is revalidated here, where the filesystem is: no
+    // component below the tenant root may be a symlink planted by a writer
+    // of a neighboring workspace. The root itself is server-derived.
+    await mkdir(payload.params.branchesRoot, { recursive: true });
+    const branchPath = await resolveManagedBranchWorkspacePath(
+      branchRecord.path,
+      payload.params.branchesRoot
+    ).catch((error: unknown) => {
+      throw new Error(
+        `Branch workspace path failed containment: ${error instanceof Error ? error.message : String(error)}`
+      );
+    });
     const repoPath = repo.local_path;
     const branchName = branchRecord.name;
     resolvedRepoPath = repoPath;
@@ -1370,6 +1382,7 @@ export async function handleGitBranchRemove(
       branchesRoot,
       repoPath: payload.params.repoPath,
       storageMode,
+      branchId,
     });
     // Preserve the legacy caller's explicit ref policy outside workspace removal.
     // Permanent deletion retains shared Git refs and does not request this step.

@@ -453,6 +453,237 @@ it('clears distributed authorization caches without disconnecting sockets for ad
   });
 });
 
+const EXECUTOR_MULTI_TENANCY = {
+  mode: 'required_from_auth',
+  static_tenant_id: 'default' as never,
+  auth_claim: 'tenant_id',
+} as const;
+
+function connectTaskExecutor(
+  app: ReturnType<typeof buildHarness>['app'],
+  io: FakeIO,
+  id: string,
+  userId: UserID,
+  taskId: string
+): FakeSocket {
+  const fence = getOrCreateExecutorConnectionRevocationFence(app);
+  const executor = makeSocket(id, io);
+  executor.feathers = {};
+  const authResult = {
+    user: { user_id: userId },
+    authentication: {
+      strategy: 'jwt',
+      payload: {
+        type: 'executor-session',
+        purpose: 'executor-task',
+        session_id: `session-${taskId}`,
+        task_id: taskId,
+        tenant_id: 'tenant-a',
+      },
+    },
+  };
+  attachExecutorConnectionCandidate(authResult, {
+    tenantId: 'tenant-a',
+    taskId,
+    tokenFingerprint: fingerprintExecutorSessionToken(`executor-token-${taskId}`),
+    revocationGeneration: fence.snapshot('tenant-a'),
+  });
+  finalizeAuthenticatedConnectionAuthority({
+    connection: executor.feathers,
+    authResult,
+    multiTenancy: EXECUTOR_MULTI_TENANCY,
+    executorRevocationFence: fence,
+  });
+  connect(io, executor);
+  return executor;
+}
+
+it('keeps task executor sockets connected through tenant authorization eviction', () => {
+  const { app, io } = buildHarness({ adapter: {} as never, multiTenancy: EXECUTOR_MULTI_TENANCY });
+  const executor = connectTaskExecutor(app, io, 'executor-running-turn', ALICE, 'task-1');
+  const user = makeSocket('tenant-a-user', io);
+  asUser(user, ALICE, 'tenant-a');
+  connect(io, user);
+
+  (app as any).eventHandlers.get('realtime:authorization-invalidated')?.({
+    tenantId: 'tenant-a',
+    disconnectSockets: true,
+  });
+
+  expect(user.connected).toBe(false);
+  expect(executor.connected).toBe(true);
+});
+
+it("disconnects only the changed user's task executors on a user-level eviction", () => {
+  const { app, io } = buildHarness({ adapter: {} as never, multiTenancy: EXECUTOR_MULTI_TENANCY });
+  const aliceExecutor = connectTaskExecutor(app, io, 'executor-alice', ALICE, 'task-alice');
+  const bobExecutor = connectTaskExecutor(app, io, 'executor-bob', BOB, 'task-bob');
+  const bob = makeSocket('tenant-a-bob', io);
+  asUser(bob, BOB, 'tenant-a');
+  connect(io, bob);
+
+  // e.g. users.patch(ALICE, { role }) — the hook names the changed user.
+  const invalidation = { tenantId: 'tenant-a', disconnectSockets: true, userId: ALICE };
+  (app as any).eventHandlers.get('realtime:authorization-invalidated')?.(invalidation);
+
+  expect(aliceExecutor.connected).toBe(false);
+  expect(bobExecutor.connected).toBe(true);
+  // Interactive sockets still reconnect so passive room capabilities rebuild.
+  expect(bob.connected).toBe(false);
+  expect(io.serverSideEmitted).toContainEqual({
+    event: HA_AUTHORIZATION_INVALIDATION_EVENT,
+    data: invalidation,
+  });
+
+  // A peer replica applies the same principal-scoped fence.
+  const { io: peerIo, app: peerApp } = buildHarness({
+    adapter: {} as never,
+    multiTenancy: EXECUTOR_MULTI_TENANCY,
+  });
+  const peerAlice = connectTaskExecutor(peerApp, peerIo, 'peer-alice', ALICE, 'task-peer-alice');
+  const peerBob = connectTaskExecutor(peerApp, peerIo, 'peer-bob', BOB, 'task-peer-bob');
+  peerIo.serverHandlers.get(HA_AUTHORIZATION_INVALIDATION_EVENT)?.(invalidation);
+  expect(peerAlice.connected).toBe(false);
+  expect(peerBob.connected).toBe(true);
+});
+
+it('revokes a branch-scoped ACL change without reconnecting unrelated sockets', () => {
+  const { app, io } = buildHarness({ adapter: {} as never });
+  const affectedBranchId = '018f0000-0000-7000-8000-0000000000a4';
+  const otherBranchId = '018f0000-0000-7000-8000-0000000000b4';
+  const fence = getOrCreateExecutorConnectionRevocationFence(app);
+  const taskSocket = (id: string, branchId?: string, tenantId = 'default') => {
+    const socket = makeSocket(id, io);
+    socket.feathers = {};
+    const result = {
+      user: { user_id: ALICE },
+      authentication: {
+        strategy: 'jwt',
+        payload: {
+          type: 'executor-session',
+          purpose: 'executor-task',
+          sub: ALICE,
+          session_id: 'session-1',
+          task_id: 'task-1',
+          branch_id: branchId,
+          tenant_id: tenantId,
+        },
+      },
+    };
+    attachExecutorConnectionCandidate(result, {
+      tenantId,
+      taskId: 'task-1',
+      tokenFingerprint: fingerprintExecutorSessionToken(id),
+      revocationGeneration: fence.snapshot(tenantId),
+    });
+    finalizeAuthenticatedConnectionAuthority({
+      connection: socket.feathers,
+      authResult: result,
+      multiTenancy: { mode: 'static', static_tenant_id: tenantId as never },
+      executorRevocationFence: fence,
+    });
+    connect(io, socket);
+    return socket;
+  };
+  const affectedTask = taskSocket('affected-task', affectedBranchId);
+  const otherTask = taskSocket('other-task', otherBranchId);
+  const unboundTask = taskSocket('unbound-task');
+  // Same branch id in another tenant is a different branch.
+  const foreignTask = taskSocket('foreign-task', affectedBranchId, 'tenant-b');
+  const mover = makeSocket('mover', io);
+  asUser(mover, ALICE, 'default');
+  connect(io, mover);
+  const viewer = makeSocket('viewer', io);
+  asUser(viewer, BOB, 'default');
+  connect(io, viewer);
+  const service = makeSocket('service', io);
+  asServiceHandshake(service);
+  connect(io, service);
+  const affectedTerminal = makeSocket('affected-terminal', io);
+  asServiceForUser(affectedTerminal, ALICE, 'terminal-a', { branchId: affectedBranchId });
+  connect(io, affectedTerminal);
+  const otherTerminal = makeSocket('other-terminal', io);
+  asServiceForUser(otherTerminal, BOB, 'terminal-b', { branchId: otherBranchId });
+  connect(io, otherTerminal);
+  const foreign = makeSocket('other-tenant', io);
+  asUser(foreign, BOB, 'tenant-b');
+  connect(io, foreign);
+
+  const event = {
+    tenantId: 'default',
+    disconnectSockets: true,
+    affectedBranchId: affectedBranchId.toUpperCase(),
+    revocationScope: 'branch',
+  };
+  (app as unknown as { eventHandlers: Map<string, (data: unknown) => void> }).eventHandlers.get(
+    'realtime:authorization-invalidated'
+  )?.(event);
+
+  // Only the moved branch's terminal retires. User, service and unrelated
+  // terminal sockets stay, and task executors keep the full-eviction rule
+  // (no `userId`, so they stay connected).
+  expect(affectedTerminal.connected).toBe(false);
+  for (const socket of [
+    mover,
+    viewer,
+    service,
+    otherTerminal,
+    foreign,
+    affectedTask,
+    otherTask,
+    unboundTask,
+    foreignTask,
+  ])
+    expect(socket.connected).toBe(true);
+  expect(app.emit).toHaveBeenCalledWith(LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT, {
+    tenantId: 'default',
+  });
+  expect(app.emit).toHaveBeenCalledWith('terminal:close-branch', {
+    tenantId: 'default',
+    branchId: affectedBranchId,
+  });
+  expect(app.emit).not.toHaveBeenCalledWith(LOCAL_AUTHORIZATION_INVALIDATION_EVENT, {
+    tenantId: 'default',
+  });
+  expect(io.serverSideEmitted).toContainEqual({
+    event: HA_AUTHORIZATION_INVALIDATION_EVENT,
+    data: event,
+  });
+
+  // A peer replica applies the same targeted scope.
+  io.serverHandlers.get(HA_AUTHORIZATION_INVALIDATION_EVENT)?.({
+    ...event,
+    affectedBranchId: otherBranchId,
+  });
+  expect(otherTerminal.connected).toBe(false);
+  for (const socket of [mover, viewer, service, foreign, foreignTask])
+    expect(socket.connected).toBe(true);
+});
+
+it.each([undefined, '', 'not-a-branch'])(
+  'falls back to tenant-wide eviction for a branch scope without a valid branch (%j)',
+  (affectedBranchId) => {
+    const { app, io } = buildHarness();
+    const user = makeSocket('user', io);
+    asUser(user, ALICE, 'default');
+    connect(io, user);
+
+    (app as unknown as { eventHandlers: Map<string, (data: unknown) => void> }).eventHandlers.get(
+      'realtime:authorization-invalidated'
+    )?.({
+      tenantId: 'default',
+      disconnectSockets: true,
+      affectedBranchId,
+      revocationScope: 'branch',
+    });
+
+    expect(user.connected).toBe(false);
+    expect(app.emit).toHaveBeenCalledWith(LOCAL_AUTHORIZATION_INVALIDATION_EVENT, {
+      tenantId: 'default',
+    });
+  }
+);
+
 it('fences already-authenticated task executors on local and HA exact revocation', async () => {
   const { app, io } = buildHarness({
     adapter: {} as never,

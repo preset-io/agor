@@ -58,7 +58,7 @@ execution:
   });
 
   dbTest(
-    'uses tenant routing for every entity link but leaves OAuth on the deployment origin',
+    'uses tenant routing for every entity link and the API origin but leaves OAuth on the deployment origin',
     async ({ db }) => {
       await enableHostedConfig();
       await runWithTenantDatabaseTransaction(db, 'tenant-a', (scoped) =>
@@ -82,7 +82,7 @@ execution:
         for (const url of urls) expect(new URL(url).origin).toBe(base);
         expect(urls[5]).toBe(`${base}/ui/kb/team/docs/a%20b.md`);
         expect(urls[5]).not.toContain('mode=edit');
-        await expect(getDaemonBaseUrl()).resolves.toBe('https://cell.example.test');
+        await expect(getDaemonBaseUrl(db)).resolves.toBe(base);
         await expect(requirePublicBaseUrl()).resolves.toBe('https://cell.example.test');
       });
     }
@@ -95,6 +95,7 @@ execution:
       await expect(getBaseUrl(db)).rejects.toThrow('trusted tenant identity');
       await runWithTenantContext('tenant-a', async () => {
         await expect(getBaseUrl(db)).resolves.toBe('');
+        await expect(getDaemonBaseUrl(db)).resolves.toBe('');
         expect(getKnowledgeUrl('team', 'readme.md', await getBaseUrl(db))).toBe('');
       });
     }

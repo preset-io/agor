@@ -1,3 +1,4 @@
+import { getBranchPath } from '@agor/core/config';
 import {
   BoardRepository,
   BranchMaintenanceRepository,
@@ -43,7 +44,9 @@ for (const facade of [false, true]) {
     dbTest(
       `authenticated MCP archive ${filesystemAction ?? 'default'} (facade=${facade}, policy=${policyEnabled}) uses owned writes, not public patches`,
       async ({ db }) => {
-        const { branch, user } = await seedEnvironmentCommandBranch(db);
+        const { branch, user } = await seedEnvironmentCommandBranch(db, {
+          path: getBranchPath('test/archive', 'branch'),
+        });
         const { rawKey } = await new UserApiKeysRepository(db).create(
           user.user_id,
           'archive fixture'

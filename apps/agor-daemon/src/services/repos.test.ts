@@ -1,26 +1,29 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { getBranchesDir, getBranchPath } from '@agor/core/config';
 import {
+  BranchWorkspaceOverlapError,
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   runWithTenantContext,
 } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
+import { type Application, Conflict } from '@agor/core/feathers';
 import type { AuthenticatedParams, Branch } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BranchesService, type BranchParams } from './branches';
 import { ReposService } from './repos';
 
-/** Create a temp dir that looks like a materialized git checkout (has `.git`). */
+/** Create a managed branch dir that looks like a materialized git checkout (has `.git`). */
 function makeValidCheckout(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'agor-branch-'));
+  const parent = join(getBranchesDir(), 'acme/app');
+  mkdirSync(parent, { recursive: true });
+  const dir = mkdtempSync(join(parent, 'agor-branch-'));
   writeFileSync(join(dir, '.git'), 'gitdir: /somewhere/.git/worktrees/x');
   return dir;
 }
-/** A path guaranteed not to exist on disk. */
+/** A managed branch path guaranteed not to exist on disk. */
 function missingPath(): string {
-  return join(tmpdir(), `agor-missing-${Math.floor(performance.now())}-${process.pid}`);
+  return getBranchPath('acme/app', `agor-missing-${Math.floor(performance.now())}-${process.pid}`);
 }
 
 vi.mock('@agor/core/config', async (importOriginal) => {
@@ -143,6 +146,7 @@ beforeEach(() => {
   executorMocks.spawnExecutorFireAndForget.mockReset();
   delegatedHomeMocks.resolve.mockReset().mockResolvedValue(undefined);
   sandboxMountMocks.resolve.mockReset().mockResolvedValue({});
+  repositoryMocks.findAllBranchesByRepoId.mockReset().mockResolvedValue([]);
   repositoryMocks.resolveBranchUserAccess.mockReset().mockResolvedValue({
     can: 'all',
     fs_access: 'write',
@@ -194,7 +198,7 @@ describe('ReposService .agor.yml normalized branch access', () => {
     branch_id: '550e8400-e29b-41d4-a716-446655440002',
     repo_id: repo.repo_id,
     name: 'rbac-remodel',
-    path: '/managed/worktrees/preset-io/agor/rbac-remodel',
+    path: getBranchPath('preset-io/agor', 'rbac-remodel'),
   };
   const user = {
     user_id: '550e8400-e29b-41d4-a716-446655440004',
@@ -394,10 +398,81 @@ describe('ReposService.addLocalRepository executor boundary', () => {
 });
 
 describe('ReposService.createBranch Git lifecycle execution', () => {
-  // The workspace path is derived from the branch name and stays owned by the
-  // row even once archived, whose checkout lifecycle cleanup still preserves.
-  // Creating a second row against that same path would give two branches one
-  // workspace, so archiving/deleting either could damage the other.
+  // The repository fences overlapping workspaces tenant-wide (across repos,
+  // so a renamed slug cannot reuse another repo's paths) under a lock.
+  it('maps a workspace overlap to 409 without provisioning', async () => {
+    const branches = {
+      create: vi.fn(async () => {
+        throw new BranchWorkspaceOverlapError('feature/x', '550e8400-e29b-41d4-a716-446655440009');
+      }),
+      find: vi.fn(async () => []),
+    };
+    const app = {
+      get: () => ({}),
+      sessionTokenService: { generateCommandToken: vi.fn(async () => 'token') },
+      settings: { authentication: { secret: 'test-secret' } },
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return { get: vi.fn(async () => ({ objects: {} })) };
+        if (name === 'branches') return branches;
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue({
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'org/v',
+      local_path: '/managed/repos/v',
+      default_branch: 'main',
+    } as never);
+
+    const result = service.createBranch(
+      '550e8400-e29b-41d4-a716-446655440001',
+      {
+        name: 'feature/x',
+        ref: 'feature/x',
+        createBranch: true,
+        sourceBranch: 'main',
+        boardId: '550e8400-e29b-41d4-a716-446655440003',
+        storage_mode: 'worktree',
+      },
+      { user: { user_id: '550e8400-e29b-41d4-a716-446655440004' } } as never
+    );
+    await expect(result).rejects.toBeInstanceOf(Conflict);
+    await expect(result).rejects.toThrow(/would share a workspace path with another branch/);
+    expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+  });
+
+  // repos.createBranch is the only route that derives a branch workspace path.
+  it.each(['../../globex/worktrees/victim', '/abs', 'a/../b', 'a//b'])(
+    'rejects unsafe branch name %j before creating a row',
+    async (name) => {
+      const branches = { create: vi.fn(), find: vi.fn(async () => []) };
+      const app = {
+        get: () => ({}),
+        service: vi.fn((service: string) => {
+          if (service === 'branches') return branches;
+          throw new Error(`Unexpected service: ${service}`);
+        }),
+      } as unknown as Application;
+      const service = new ReposService({} as never, app);
+      vi.spyOn(service, 'get').mockResolvedValue({
+        repo_id: '550e8400-e29b-41d4-a716-446655440001',
+        slug: 'org/v',
+        local_path: '/managed/repos/v',
+        default_branch: 'main',
+      } as never);
+
+      await expect(
+        service.createBranch(
+          '550e8400-e29b-41d4-a716-446655440001',
+          { name, ref: 'main', createBranch: true, sourceBranch: 'main', storage_mode: 'worktree' },
+          { user: { user_id: '550e8400-e29b-41d4-a716-446655440004' } } as never
+        )
+      ).rejects.toMatchObject({ code: 400 });
+      expect(branches.create).not.toHaveBeenCalled();
+    }
+  );
+
   it('refuses to create a branch whose deterministic path an archived branch still owns', async () => {
     const branches = { create: vi.fn(), find: vi.fn(async () => []) };
     const app = {
@@ -502,7 +577,7 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
       branch_id: '550e8400-e29b-41d4-a716-446655440002',
       repo_id: repo.repo_id,
       name: 'dispatch-failure',
-      path: '/managed/worktrees/preset-io/agor/dispatch-failure',
+      path: getBranchPath('preset-io/agor', 'dispatch-failure'),
       filesystem_status: 'creating',
     };
     const failedBranch = {
@@ -575,7 +650,7 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
       branch_id: '550e8400-e29b-41d4-a716-446655440002',
       repo_id: repo.repo_id,
       name: 'fix-lifecycle-identity',
-      path: '/managed/worktrees/preset-io/agor/fix-lifecycle-identity',
+      path: getBranchPath('preset-io/agor', 'fix-lifecycle-identity'),
       others_fs_access: 'read',
     };
     const branches = {
@@ -812,7 +887,7 @@ describe('ReposService.remove branch inventory', () => {
         branch_id: '550e8400-e29b-41d4-a716-446655440002',
         repo_id: repo.repo_id,
         name: 'feature',
-        path: '/managed/worktrees/preset-io/repo/feature',
+        path: getBranchPath('preset-io/repo', 'feature'),
       },
     ];
     repositoryMocks.findAllBranchesByRepoId.mockReset().mockResolvedValue(branches);

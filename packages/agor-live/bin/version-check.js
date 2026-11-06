@@ -20,3 +20,27 @@ export function checkNodeVersion() {
     process.exit(1);
   }
 }
+
+// First releases with the fixed Brotli decoder (CVE-2026-111497); unlisted lines below 27 are end-of-life.
+const BROTLI_FIXED_RELEASES = { 22: [23, 4], 24: [22, 1], 26: [12, 1] };
+
+export function hasUnpatchedBrotliDecoder(nodeVersion) {
+  const [major, minor, patch] = nodeVersion.split('.').map((part) => parseInt(part, 10));
+  if (major >= 27) return false;
+  const fixed = BROTLI_FIXED_RELEASES[major];
+  if (!fixed) return true;
+  return minor < fixed[0] || (minor === fixed[0] && patch < fixed[1]);
+}
+
+export function warnUnpatchedNode() {
+  const nodeVersion = process.versions.node;
+  if (!hasUnpatchedBrotliDecoder(nodeVersion)) return;
+  console.warn(
+    chalk.yellow(
+      `⚠ Node.js v${nodeVersion} has a known remote code execution flaw in its Brotli decoder (CVE-2026-111497)`
+    )
+  );
+  console.warn(
+    `  Upgrade to v22.23.4, v24.22.1, v26.12.1 or newer: ${chalk.cyan('https://nodejs.org/')}\n`
+  );
+}

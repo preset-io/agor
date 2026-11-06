@@ -1,5 +1,5 @@
 import { setImmediate as nextTurn } from 'node:timers/promises';
-import { DEFAULT_STATIC_TENANT_ID } from '@agor/core/config';
+import { DEFAULT_STATIC_TENANT_ID, resolveMultiTenancyConfig } from '@agor/core/config';
 import {
   BranchRepository,
   createDatabaseAsync,
@@ -14,12 +14,20 @@ import {
   runWithTenantDatabaseScope,
   SessionRepository,
   TaskRepository,
+  UserApiKeysRepository,
   UsersRepository,
 } from '@agor/core/db';
-import { type Application, feathers, feathersExpress, socketio } from '@agor/core/feathers';
+import {
+  type Application,
+  authenticate,
+  feathers,
+  feathersExpress,
+  socketio,
+} from '@agor/core/feathers';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
 import type {
   AuthenticatedParams,
+  HookContext,
   MessageCreate,
   Session,
   SessionUpdate,
@@ -28,7 +36,10 @@ import type {
 } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { getLogContext, runWithLogContext } from '@agor/core/utils/log-context';
+import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createRequireAuthHook } from './auth/require-auth.js';
+import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from './auth/runtime-tokens.js';
 import { type RegisterRoutesContext, registerRoutes } from './register-routes.js';
 import {
   type GatewayAdmissionFenceParams,
@@ -37,6 +48,7 @@ import {
 } from './services/gateway-authority.js';
 import { TasksService } from './services/tasks.js';
 
+const JWT_SECRET = 'disposable-test-not-a-credential';
 const cleanup: Array<() => void> = [];
 afterEach(() => {
   vi.restoreAllMocks();
@@ -44,7 +56,9 @@ afterEach(() => {
   for (const close of cleanup.splice(0)) close();
 });
 
-async function fixture() {
+async function fixture(
+  options: { requireAuth?: (context: HookContext) => Promise<HookContext> } = {}
+) {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
   cleanup.push(() => (rawDb as unknown as { $client: { close(): void } }).$client.close());
   await runMigrations(rawDb);
@@ -115,7 +129,8 @@ async function fixture() {
   app.use('messages', {
     create: (data: MessageCreate) => scoped(() => messages.create(data)),
   });
-  app.use('users', { get: (id: string) => usersRepository.findById(id) });
+  // Like the production users service, the lookup opens its own tenant scope.
+  app.use('users', { get: (id: string) => scoped(() => usersRepository.findById(id)) });
   app.use('repos', { get: vi.fn() });
   const tasksService = new TasksService(db, app);
   app.use('tasks', tasksService);
@@ -141,8 +156,8 @@ async function fixture() {
         db,
         config: {},
         externalLaunchProvider: { enabled: false },
-        jwtSecret: 'disposable-test-not-a-credential',
-        requireAuth: (context: unknown) => context,
+        jwtSecret: JWT_SECRET,
+        requireAuth: options.requireAuth ?? ((context: unknown) => context),
         enforcePasswordChange: (context: unknown) => context,
         sessionsService,
         sessionsRepository,
@@ -168,6 +183,7 @@ async function fixture() {
       ...extraParams,
     } as AuthenticatedParams) as Promise<Task>;
   return {
+    app,
     db,
     scoped,
     session,
@@ -397,6 +413,55 @@ describe('registered prompt route launch handoff', () => {
   });
 });
 
+describe('prompt route REST authentication on the identity-only boundary', () => {
+  // Production's REST auth chain in front of the real registered route. Long
+  // routes carry tenant identity but no request-wide database scope, so every
+  // DB read a strategy or `requireAuth` makes must open its own unit (#3204).
+  const restFixture = () =>
+    fixture({
+      requireAuth: createRequireAuthHook(
+        authenticate({ strategies: ['api-key', 'jwt'] }),
+        resolveMultiTenancyConfig({})
+      ),
+    });
+  const restPrompt = (f: Awaited<ReturnType<typeof fixture>>, authentication: object) =>
+    f.app
+      .service('sessions/:id/prompt')
+      .create(
+        { prompt: 'rest fixture' },
+        { provider: 'rest', headers: {}, route: { id: f.session.session_id }, authentication }
+      ) as Promise<Task>;
+
+  it('admits a personal API key and records its use', async () => {
+    const f = await restFixture();
+    const apiKeys = new UserApiKeysRepository(f.db);
+    const { rawKey, key } = await f.scoped(() => apiKeys.create(f.actor.user_id, 'REST fixture'));
+
+    const task = await restPrompt(f, { strategy: 'api-key', apiKey: rawKey });
+
+    expect(task).toMatchObject({ status: TaskStatus.DISPATCHING, created_by: f.actor.user_id });
+    await vi.waitFor(() => expect(f.launchObservations).toHaveLength(1));
+    await vi.waitFor(async () => {
+      const [row] = await f.scoped(() => apiKeys.findByPrefix(key.prefix));
+      expect(row.last_used_at).toBeTruthy();
+    });
+  });
+
+  it('admits a user access token', async () => {
+    const f = await restFixture();
+    const accessToken = jwt.sign({ sub: f.actor.user_id, type: 'access' }, JWT_SECRET, {
+      issuer: RUNTIME_JWT_ISSUER,
+      audience: RUNTIME_JWT_AUDIENCE,
+      expiresIn: '5m',
+    });
+
+    const task = await restPrompt(f, { strategy: 'jwt', accessToken });
+
+    expect(task).toMatchObject({ status: TaskStatus.DISPATCHING, created_by: f.actor.user_id });
+    await vi.waitFor(() => expect(f.launchObservations).toHaveLength(1));
+  });
+});
+
 /**
  * Adversarial coverage for the server-stamped provenance envelope.
  *
@@ -621,5 +686,27 @@ describe('dispatch log context', () => {
       session_id: f.session.session_id,
       task_id: task.task_id,
     });
+  });
+
+  it('writes the spawn failure into the transcript from the deferred launch', async () => {
+    const f = await fixture();
+    // Production's tenant hooks scope `tasks`; the fixture registers the bare service.
+    f.app.service('tasks').hooks({ around: { all: [(_context, next) => f.scoped(next)] } });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    f.executeTask.mockImplementationOnce(async () => {
+      throw new Error('launch prerequisites failed');
+    });
+    const task = await f.prompt({ prompt: 'disposable fixture' });
+    await vi.waitFor(async () => {
+      const rows = await f.scoped(() => f.messages.findByTaskId(task.task_id));
+      expect(rows.map((row) => row.content_preview)).toContainEqual(
+        expect.stringContaining('The agent failed to start')
+      );
+    });
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('Failed to write system error message'),
+      expect.anything()
+    );
   });
 });

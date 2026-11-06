@@ -30,7 +30,7 @@ beforeEach(async () => {
   storage = {
     tenantDataRoot,
     branchesRoot: join(tenantDataRoot, 'worktrees'),
-    branchPath: join(tenantDataRoot, 'worktrees', 'repo', 'victim'),
+    branchPath: join(tenantDataRoot, 'worktrees', 'org', 'repo', 'victim'),
     repoPath: join(tenantDataRoot, 'repos', 'repo'),
     storageMode: 'clone',
   };

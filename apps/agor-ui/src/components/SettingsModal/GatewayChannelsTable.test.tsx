@@ -309,8 +309,8 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     expect(screen.getByRole('radio', { name: 'AI Teammate' })).toBeChecked();
     expect(screen.getByRole('radio', { name: 'Specific branch' })).not.toBeChecked();
     expect(screen.getByText('Enabled')).toBeInTheDocument();
-    // Slack-specific options (App Name / Surfaces) are not shown yet.
-    expect(screen.queryByText('Surfaces')).not.toBeInTheDocument();
+    // Slack-specific options (App Name / listening surfaces) are not shown yet.
+    expect(screen.queryByText('Where it listens')).not.toBeInTheDocument();
     // Slack owns identity later — no generic "Post messages as".
     expect(screen.queryByText('Post messages as')).not.toBeInTheDocument();
   });
@@ -348,8 +348,8 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     expect(getButton(/^Back$/).disabled).toBe(false);
     expect(getButton(/^Continue$/)).toBeInTheDocument();
 
-    // Surfaces appear on the Options step.
-    expect(screen.getByText('Surfaces')).toBeInTheDocument();
+    // Listening surfaces appear on the Options step.
+    expect(screen.getByText('Where it listens')).toBeInTheDocument();
     expect(screen.getByText('Align Slack users')).toBeInTheDocument();
 
     // Slack aligns users by default, so no run-as user is required to advance.
@@ -367,7 +367,7 @@ describe('GatewayChannelsTable Slack create wizard', () => {
   it('updates the derived scope/event list as surfaces change, without the raw manifest', async () => {
     renderTable(null);
     clickButton(/Add Channel/);
-    // Surfaces live on the Options step (step 1).
+    // Listening surfaces live on the Options step (step 1).
     await advanceToOptions();
 
     // The Options step configures; the raw JSON manifest is reserved for the
@@ -378,16 +378,91 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     expect(manifestBlocks).toHaveLength(1);
     expect(manifestBlocks[0]).not.toBeVisible();
 
-    // Public-channel scopes/events are absent until the surface is enabled.
-    expect(scopeTagTexts()).not.toContain('channels:history');
-    expect(scopeTagTexts()).not.toContain('app_mention');
+    // Guided setup listens on every surface by default.
+    await waitFor(() => expect(scopeTagTexts()).toContain('channels:history'));
+    expect(scopeTagTexts()).toContain('groups:history');
+    expect(scopeTagTexts()).toContain('mpim:history');
+    expect(scopeTagTexts()).toContain('app_mention');
 
     fireEvent.click(screen.getByText('Public channels'));
 
-    // Now they appear in the derived scope/event list (Form.useWatch flush).
-    await waitFor(() => expect(scopeTagTexts()).toContain('channels:history'));
+    // Dropping public channels removes only its scopes (Form.useWatch flush).
+    await waitFor(() => expect(scopeTagTexts()).not.toContain('channels:history'));
+    expect(scopeTagTexts()).toContain('groups:history');
     expect(scopeTagTexts()).toContain('app_mentions:read');
     expect(scopeTagTexts()).toContain('app_mention');
+  });
+
+  it('starts every listening surface checked', async () => {
+    renderTable(null);
+    clickButton(/Add Channel/);
+    await advanceToOptions();
+
+    expect(document.querySelector('#enable_channels')).toBeChecked();
+    expect(document.querySelector('#enable_groups')).toBeChecked();
+    expect(document.querySelector('#enable_mpim')).toBeChecked();
+    expect(document.querySelector('#slack_limit_channels')).not.toBeChecked();
+  });
+
+  it('requires channel IDs for a channel limit and keeps it when public channels are off', async () => {
+    const { client, channelCreate } = makeClient();
+    renderTable(client);
+    clickButton(/Add Channel/);
+    await advanceToOptions();
+
+    fireEvent.click(screen.getByText('Public channels'));
+    fireEvent.click(screen.getByText('Limit to specific channels'));
+    await waitFor(() => expect(document.querySelector('#allowed_channel_ids')).not.toBeNull());
+    clickButton(/^Continue$/);
+    expect(
+      await screen.findByText('Add at least one Slack channel ID, or turn off the limit.')
+    ).toBeInTheDocument();
+
+    const idInput = document.querySelector('#allowed_channel_ids') as HTMLInputElement;
+    fireEvent.change(idInput, { target: { value: 'G01PRIVATE' } });
+    fireEvent.keyDown(idInput, { key: 'Enter', code: 'Enter', keyCode: 13 });
+    clickButton(/^Continue$/);
+    await waitForStep('Create app');
+    clickButton(/^Continue$/);
+    await waitForStep('Tokens & test');
+    fireEvent.change(screen.getByPlaceholderText('xoxb-...'), { target: { value: 'xoxb-test' } });
+    fireEvent.change(screen.getByPlaceholderText('xapp-...'), { target: { value: 'xapp-test' } });
+    clickButton(/Create channel/);
+
+    await waitFor(() => expect(channelCreate).toHaveBeenCalledTimes(1));
+    expect(channelCreate.mock.calls[0][0].config).toMatchObject({
+      enable_channels: false,
+      enable_groups: true,
+      enable_mpim: true,
+      allowed_channel_ids: ['G01PRIVATE'],
+    });
+  });
+
+  it('resets the channel limit when creation is cancelled', async () => {
+    renderTable(makeClient().client);
+    clickButton(/Add Channel/);
+    await advanceToOptions();
+
+    fireEvent.click(screen.getByText('Limit to specific channels'));
+    await waitFor(() => expect(document.querySelector('#allowed_channel_ids')).not.toBeNull());
+    const idInput = document.querySelector('#allowed_channel_ids') as HTMLInputElement;
+    fireEvent.change(idInput, { target: { value: 'C01LIMIT' } });
+    fireEvent.keyDown(idInput, { key: 'Enter', code: 'Enter', keyCode: 13 });
+    const limitTags = () => document.querySelectorAll('.ant-select-selection-item-content');
+    await waitFor(() => expect(limitTags()).toHaveLength(1));
+
+    clickButton(/^Cancel$/);
+    await waitFor(() => expect(queryButton(/^Discard$/)).toBeDefined());
+    clickButton(/^Discard$/);
+    await waitFor(() => expect(queryButton(/Add Channel/)).toBeDefined());
+    clickButton(/Add Channel/);
+    await advanceToOptions();
+
+    expect(document.querySelector('#slack_limit_channels')).not.toBeChecked();
+    expect(document.querySelector('#allowed_channel_ids')).toBeNull();
+    fireEvent.click(screen.getByText('Limit to specific channels'));
+    await waitFor(() => expect(document.querySelector('#allowed_channel_ids')).not.toBeNull());
+    expect(limitTags()).toHaveLength(0);
   });
 
   it('runs the connection probe and renders team/bot/notVerifiable honestly', async () => {
@@ -451,6 +526,10 @@ describe('GatewayChannelsTable Slack create wizard', () => {
           bot_token: 'xoxb-test',
           app_token: 'xapp-test',
           align_slack_users: true,
+          enable_channels: true,
+          enable_groups: true,
+          enable_mpim: true,
+          allowed_channel_ids: [],
           // The wizard only creates inbound/Socket-Mode Slack channels, so it
           // records connection_mode:'socket' — this is what makes
           // getRequiredSecretFields require app_token for UI-created channels.
@@ -534,9 +613,7 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     renderTable(client);
     clickButton(/Add Channel/);
 
-    // Enable a public-channel surface (Options step) so the scope option is in play.
     await advanceToOptions();
-    fireEvent.click(screen.getByText('Public channels'));
 
     // Slack aligns users by default — no run-as user needed. Walk to Tokens step.
     clickButton(/^Continue$/);
@@ -549,9 +626,9 @@ describe('GatewayChannelsTable Slack create wizard', () => {
 
     expect(await screen.findByText('Connection succeeded')).toBeInTheDocument();
 
-    // Narrowing public channels to a specific set changes the probe config and
+    // Limiting listening to specific channels changes the probe config and
     // must clear the now-stale green result.
-    fireEvent.click(screen.getByText('Specific channels only'));
+    fireEvent.click(screen.getByText('Limit to specific channels'));
 
     await waitFor(() => expect(screen.queryByText('Connection succeeded')).toBeNull());
   });
@@ -672,7 +749,7 @@ describe('GatewayChannelsTable Slack edit mode', () => {
 
     // Edit keeps the collapsible sections; the create-only wizard is absent.
     expect(screen.getByText('Credentials')).toBeInTheDocument();
-    expect(screen.getByText('Message Sources')).toBeInTheDocument();
+    expect(screen.getByText('Where it listens')).toBeInTheDocument();
     // No unified step indicator and no wizard footer in edit mode.
     expect(screen.queryByText('Tokens & test')).not.toBeInTheDocument();
     expect(queryButton(/^Continue$/)).toBeUndefined();
@@ -839,9 +916,9 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     expect(screen.getByPlaceholderText('xapp-...')).toHaveValue('xapp-kept');
   });
 
-  it('derives the Message Sources scope/event list without broad message subscriptions', async () => {
+  it('derives the scope/event list without broad message subscriptions', async () => {
     renderEditTable(null, makeSlackChannel());
-    expandPanel('Message Sources');
+    expandPanel('App Manifest');
 
     // Derived from requiredBotScopes/requiredBotEvents for public channels; the
     // watched enable_channels value propagates on the next tick.
@@ -968,7 +1045,7 @@ describe('GatewayChannelsTable Slack edit mode', () => {
   it('warns with the added scope when a capability toggle needs a scope the saved config lacks', async () => {
     const { client } = makeClient(undefined, { appId: 'A0123ABC', teamId: 'T1' });
     renderEditTable(client, makeSlackChannel());
-    expandPanel('Message Sources');
+    expandPanel('What agents can do');
 
     // Nothing has changed yet — no scope-change warning.
     expect(screen.queryByText(/This change adds the/)).toBeNull();
@@ -986,7 +1063,8 @@ describe('GatewayChannelsTable Slack edit mode', () => {
   it('warns that delivering reactions adds reactions:read and subscribes to reaction events', async () => {
     const { client } = makeClient(undefined, { appId: 'A0123ABC', teamId: 'T1' });
     renderEditTable(client, makeSlackChannel());
-    expandPanel('Message Sources');
+    expandPanel('What it receives');
+    expandPanel('App Manifest');
 
     expect(screen.queryAllByText('reaction_added')).toHaveLength(0);
     fireEvent.click(document.querySelector('#inbound_reactions') as HTMLElement);
@@ -1008,8 +1086,8 @@ describe('GatewayChannelsTable Slack edit mode', () => {
       },
       { onUpdate }
     );
-    expandPanel('Message Sources');
-    expect(document.querySelector('#inbound_reactions')).toHaveAttribute('aria-checked', 'true');
+    expandPanel('What it receives');
+    expect(document.querySelector('#inbound_reactions')).toBeChecked();
 
     clickButton(/^Save$/);
 
@@ -1021,7 +1099,8 @@ describe('GatewayChannelsTable Slack edit mode', () => {
 
   it('does not warn on unrelated edits or on toggles that only remove scopes', async () => {
     renderEditTable(null, makeSlackChannel());
-    expandPanel('Message Sources');
+    expandPanel('What agents can do');
+    expandPanel('App Manifest');
 
     // Turning OFF thread history removes nothing scope-wise (it has no scopes)…
     fireEvent.click(document.querySelector('#agent_thread_history') as HTMLElement);
@@ -1031,6 +1110,83 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     // The scope list re-derives (drop of channels:history) before we assert.
     await waitFor(() => expect(screen.queryAllByText('channels:history').length).toBe(0));
     expect(screen.queryByText(/This change adds the/)).toBeNull();
+  });
+
+  it('keeps omitted surfaces off when an older channel is saved untouched', async () => {
+    const onUpdate = vi.fn();
+    renderEditTable(
+      null,
+      { ...makeSlackChannel(), config: { bot_token: '••••••••' } },
+      { onUpdate }
+    );
+
+    // The create-only all-on defaults never reach the edit form.
+    expect(screen.getByText('DMs')).toBeInTheDocument();
+    expect(document.querySelector('#enable_channels')).not.toBeChecked();
+    expect(document.querySelector('#enable_groups')).not.toBeChecked();
+    expect(document.querySelector('#enable_mpim')).not.toBeChecked();
+
+    clickButton(/^Save$/);
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      config: expect.objectContaining({
+        enable_channels: false,
+        enable_groups: false,
+        enable_mpim: false,
+        allowed_channel_ids: [],
+      }),
+    });
+  });
+
+  it('summarizes a stored channel limit and clears it when the limit is turned off', async () => {
+    const onUpdate = vi.fn();
+    renderEditTable(
+      null,
+      {
+        ...makeSlackChannel(),
+        config: { ...makeSlackChannel().config, enable_groups: true, allowed_channel_ids: ['C1'] },
+      },
+      { onUpdate }
+    );
+
+    expect(screen.getByText('DMs, public, private · 1 channel only')).toBeInTheDocument();
+    expect(document.querySelector('#slack_limit_channels')).toBeChecked();
+
+    fireEvent.click(screen.getByText('Limit to specific channels'));
+    clickButton(/^Save$/);
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      config: expect.objectContaining({ allowed_channel_ids: [] }),
+    });
+  });
+
+  it.each([
+    ['an array', ['C1']],
+    ['a single string', 'C1'],
+  ])('keeps a stored channel limit stored as %s when saved untouched', async (_label, stored) => {
+    const onUpdate = vi.fn();
+    renderEditTable(
+      null,
+      {
+        ...makeSlackChannel(),
+        config: {
+          ...makeSlackChannel().config,
+          enable_channels: true,
+          allowed_channel_ids: stored,
+        },
+      },
+      { onUpdate }
+    );
+
+    expect(screen.getByText('DMs, public · 1 channel only')).toBeInTheDocument();
+    clickButton(/^Save$/);
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      config: expect.objectContaining({ allowed_channel_ids: ['C1'] }),
+    });
   });
 
   it("preserves a channel's stored mcpServerIds on save, even when the current user has their own agent defaults", async () => {

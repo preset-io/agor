@@ -7,6 +7,7 @@ import { executeRaw } from '../database-wrapper';
 import { initializeDatabase } from '../migrate';
 import { createTenantScopedDatabaseProxy, runWithTenantDatabaseScope } from '../tenant-scope';
 import { BranchMaintenanceRepository } from './branch-maintenance';
+import { BranchWorkspaceOverlapError } from './branch-path-overlap';
 import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
 import { UserPrimaryTeammateRepository } from './user-primary-teammate';
@@ -208,5 +209,42 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         });
       }
     );
+    it('admits only one of two concurrent nested workspace creates', async () => {
+      const one = createTenantScopedDatabaseProxy(first, { requireScope: true });
+      const two = createTenantScopedDatabaseProxy(second, { requireScope: true });
+      const tenant = `paths-${generateId()}` as TenantID;
+      const { owner, repo } = await runWithTenantDatabaseScope(one, tenant, async () => ({
+        owner: await new UsersRepository(one).create({
+          email: 'paths@example.test',
+          role: 'member',
+        }),
+        repo: await new RepoRepository(one).create({
+          name: 'Paths',
+          slug: 'fixture/paths',
+          repo_type: 'local',
+          local_path: '/fixture/paths',
+          default_branch: 'main',
+        }),
+      }));
+      const create = (db: Database, name: string, uniqueId: number) =>
+        runWithTenantDatabaseScope(db, tenant, () =>
+          new BranchRepository(db).create({
+            repo_id: repo.repo_id,
+            created_by: owner.user_id,
+            name,
+            ref: name,
+            path: `/fixture/worktrees/fixture/paths/${name}`,
+            branch_unique_id: uniqueId,
+          })
+        );
+      const results = await Promise.allSettled([
+        create(one, 'parent', 1),
+        create(two, 'parent/child', 2),
+      ]);
+      expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
+      expect(
+        (results.find(({ status }) => status === 'rejected') as PromiseRejectedResult).reason
+      ).toBeInstanceOf(BranchWorkspaceOverlapError);
+    });
   }
 );

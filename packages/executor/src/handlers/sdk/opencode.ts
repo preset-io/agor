@@ -13,7 +13,9 @@ import {
 import {
   discardOpenCodeScratch,
   isOpenCodeCleanupUnverifiedError,
+  type OpenCodePermissionRejection,
   OpenCodeTool,
+  openCodePartialMessage,
 } from '@agor/agentic-tool-opencode/runtime';
 import { generateId, shortId } from '@agor/core';
 import { getMcpServersForSession } from '@agor/core/mcp';
@@ -27,7 +29,10 @@ import type {
 } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { getDaemonUrl } from '../../config.js';
-import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
+import {
+  createFeathersBackedRepositories,
+  type MessagesRepository,
+} from '../../db/feathers-repositories.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { PermissionService } from '../../permissions/permission-service.js';
@@ -48,6 +53,34 @@ import {
   type ManagedOpenCodeTurn,
   prepareManagedOpenCodeTurn,
 } from './opencode-managed.js';
+
+/**
+ * Tell the transcript which permissions Agor refused during a turn that went on.
+ * A user's own denial is already on its permission card, so it is not repeated.
+ */
+async function reportPermissionRejections(
+  messagesRepo: MessagesRepository,
+  args: { sessionId: SessionID; taskId: TaskID; rejections: OpenCodePermissionRejection[] }
+): Promise<void> {
+  for (const { permission, reason } of args.rejections) {
+    if (reason === 'user_denied') continue;
+    try {
+      await messagesRepo.create({
+        message_id: generateId() as MessageID,
+        session_id: args.sessionId,
+        task_id: args.taskId,
+        type: 'system',
+        role: MessageRole.SYSTEM,
+        index: await messagesRepo.getNextIndexBySessionId(args.sessionId),
+        timestamp: new Date().toISOString(),
+        content_preview: `OpenCode permission "${permission}" rejected (${reason})`,
+        content: `Agor rejected the OpenCode permission "${permission}" (${reason}). The agent was told why and the turn continued.`,
+      });
+    } catch {
+      console.warn(`[opencode] could not report rejected permission "${permission}" (${reason})`);
+    }
+  }
+}
 
 export async function executeOpenCodeTask(params: {
   client: AgorClient;
@@ -71,6 +104,7 @@ export async function executeOpenCodeTask(params: {
   }, params.resolvedConfig?.execution?.permission_timeout_ms ?? 600_000);
   globalPermissionManager.register(sessionId, permissionService);
   let managed: ManagedOpenCodeTurn | null | undefined;
+  let persistPartialAssistantMessage: ((error: unknown) => Promise<void>) | undefined;
 
   try {
     const session = await client.service('sessions').get(sessionId);
@@ -116,6 +150,25 @@ export async function executeOpenCodeTask(params: {
     });
 
     const assistantMessageId = generateId() as MessageID;
+    persistPartialAssistantMessage = async (error) => {
+      const partial = openCodePartialMessage(error);
+      if (!partial) return;
+      try {
+        await repos.messagesService.create({
+          message_id: assistantMessageId,
+          session_id: sessionId,
+          task_id: taskId,
+          type: 'assistant' as const,
+          role: MessageRole.ASSISTANT,
+          index: await repos.messages.getNextIndexBySessionId(sessionId),
+          timestamp: new Date().toISOString(),
+          content_preview: partial.content.substring(0, 200),
+          content: partial.contentBlocks,
+        });
+      } catch {
+        console.warn('[opencode] could not persist partial assistant output');
+      }
+    };
     const permissionLocks = new Map<SessionID, Promise<void>>();
     const tool = new OpenCodeTool({
       resolveMcpServers: async (targetSessionId) => {
@@ -216,6 +269,11 @@ export async function executeOpenCodeTask(params: {
       tool_uses: result.finalMessage.toolUses.length > 0 ? result.finalMessage.toolUses : undefined,
       metadata: result.finalMessage.metadata,
     });
+    await reportPermissionRejections(repos.messages, {
+      sessionId,
+      taskId,
+      rejections: result.permissionRejections,
+    });
     // Stop can win while the final message is persisted; never publish completion then.
     if (params.abortController.signal.aborted) return;
     const completion = {
@@ -247,6 +305,8 @@ export async function executeOpenCodeTask(params: {
       return;
     }
     if (!params.abortController.signal.aborted) {
+      // Keep what was streamed before the failure; it sits ahead of the failure notice.
+      await persistPartialAssistantMessage?.(failure);
       await settleTaskFailure(
         client,
         sessionId,

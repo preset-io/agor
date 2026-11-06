@@ -8,10 +8,12 @@ import type {
 } from '@agor/core/types';
 import { BRANCH_DELETION_ACTION_EFFECTS, BRANCH_DELETION_REPORT_SERVICE } from '@agor/core/types';
 import {
+  assertBranchWorkspaceMarker,
   deleteBranchDirectory,
   prepareBranchDirectoryForRemoval,
   removeBranchWorkspace,
   resolveManagedBranchDeletionPath,
+  resolveManagedBranchWorkspacePath,
 } from '@agor/git';
 import type { BranchDeletePayload, ExecutorResult } from '../payload-types.js';
 import type { CommandOptions } from './index.js';
@@ -289,8 +291,11 @@ export async function handleBranchDelete(
 
       // Validate ALL roots before starting destructive work. The SDK home is
       // UUID-owned; never erase a user's shared provider/execution home.
-      await storageStep('validate_workspace', () =>
-        resolveManagedBranchDeletionPath(p.branchPath, p.branchesRoot)
+      await storageStep('validate_workspace', async () =>
+        assertBranchWorkspaceMarker(
+          await resolveManagedBranchWorkspacePath(p.branchPath, p.branchesRoot),
+          p.branchId
+        )
       );
       await storageStep('validate_sdk_home', async () => {
         if (p.branchHome !== resolve(p.tenantDataRoot, 'branch-homes', p.branchId))

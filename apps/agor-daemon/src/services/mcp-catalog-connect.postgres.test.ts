@@ -872,6 +872,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             authorizationUrl: string;
           };
           expect(started.success).toBe(true);
+          const query = {
+            code: 'code',
+            state: new URL(started.authorizationUrl).searchParams.get('state')!,
+            iss: 'https://provider.example.test',
+          };
           let status = 0;
           await (
             oauthCallbackHandler as unknown as (
@@ -879,13 +884,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
               response: unknown
             ) => Promise<void>
           )(
-            {
-              query: {
-                code: 'code',
-                state: new URL(started.authorizationUrl).searchParams.get('state'),
-                iss: 'https://provider.example.test',
-              },
-            },
+            { query, headers: {} },
             {
               setHeader() {},
               status(code: number) {
@@ -895,9 +894,17 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
               send() {
                 return this;
               },
+              redirect(code: number) {
+                status = code;
+                return this;
+              },
             }
           );
-          expect(status).toBe(200);
+          // The provider redirect forwards to the UI; the user finishes it there.
+          expect(status).toBe(303);
+          await expect(
+            oauthApp.service('mcp-servers/oauth-complete').create(query, params(user, tenantId))
+          ).resolves.toMatchObject({ success: true });
         };
         return { connectGrant, close };
       } catch (error) {

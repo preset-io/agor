@@ -19,7 +19,7 @@ import { redactUserAuthMetadata } from './user-redaction.js';
 interface RefreshTokenServiceOptions {
   jwtSecret: string;
   accessTokenTtl: SignOptions['expiresIn'];
-  refreshTokenTtl: SignOptions['expiresIn'];
+  refreshTokenTtl: number;
   tenantClaim?: string;
   usersService: {
     get(id: UserID, params?: Params): Promise<User>;

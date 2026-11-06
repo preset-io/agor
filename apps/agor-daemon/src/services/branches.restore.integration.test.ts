@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type AgorClient, createClient } from '@agor/core/api';
-import { resolveMultiTenancyConfig } from '@agor/core/config';
+import { getBranchesDir, resolveMultiTenancyConfig } from '@agor/core/config';
 import {
   BoardRepository,
   BranchMaintenanceRepository,
@@ -88,7 +88,8 @@ for (const scenario of [
   dbTest(`archive clean → restore → new session: ${scenario}`, async ({ db: raw }) => {
     const root = await mkdtemp(join(tmpdir(), 'agor-restore-'));
     const base = join(root, 'base');
-    const path = join(root, 'home');
+    const path = join(getBranchesDir(), 'fixture/restore', `home-${generateId()}`);
+    await mkdir(join(path, '..'), { recursive: true });
     await mkdir(base);
     const { git } = createGit(base);
     await git.init(['--initial-branch=main']);
@@ -447,12 +448,11 @@ for (const scenario of [
               ]);
               expect(executions).toHaveLength(1);
               await Promise.all(executions.splice(0));
-              // A board move intentionally evicts user sockets after commit.
-              // Move + creating arrive first; readiness is available on refresh.
-              await vi.waitFor(() =>
-                expect(observers.every((client) => !client.io.connected)).toBe(true)
-              );
-              expect(delivered).toHaveLength(2);
+              // A board move revokes only the moved branch's capabilities.
+              // Observers stay connected: the authorized owner sees readiness
+              // live and the outsider still receives nothing (asserted below).
+              await vi.waitFor(() => expect(delivered).toHaveLength(3));
+              expect(observers.every((client) => client.io.connected)).toBe(true);
               expect(patched.mock.calls.map(([value]) => value.filesystem_status)).toEqual([
                 'cleaned',
                 'creating',
@@ -461,6 +461,7 @@ for (const scenario of [
               expect(delivered.map((value) => value.filesystem_status)).toEqual([
                 'cleaned',
                 'creating',
+                'ready',
               ]);
               expect(delivered.every((value) => value.board_id === destination.board_id)).toBe(
                 true
@@ -704,6 +705,7 @@ for (const scenario of [
       for (const client of observers) client.io.close();
       await server.close();
       await rm(root, { recursive: true, force: true });
+      await rm(path, { recursive: true, force: true });
     }
   });
 }

@@ -5,11 +5,11 @@
  * land (filesystem materialization, path-traversal defenses).
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import os, { tmpdir } from 'node:os';
 import path from 'node:path';
 import { generateId } from '@agor/core';
-import { getDaemonBaseUrl } from '@agor/core/config';
+import { __resetConfigCacheForTests, getDaemonBaseUrl } from '@agor/core/config';
 import {
   ArtifactRepository,
   artifacts,
@@ -19,8 +19,11 @@ import {
   eq,
   RepoRepository,
   runWithTenantContext,
+  runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
   SessionRepository,
   shortId,
+  TenantPublicRoutingRepository,
   UsersRepository,
   update,
 } from '@agor/core/db';
@@ -33,8 +36,9 @@ import type {
   SessionID,
   UUID,
 } from '@agor/core/types';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { hostedTenantRouting } from '../../test/hosted-tenant-routing-fixture';
 import { requestExecutor } from '../utils/spawn-executor';
 import { ArtifactsService, escapeEnvValue } from './artifacts';
 
@@ -225,6 +229,23 @@ describe('ArtifactsService executor sandbox ownership', () => {
   };
   const tenant = { tenant_id: 'tenant-a', source: 'auth_claim' } as const;
 
+  // Stored branch paths are revalidated against the deployment config file,
+  // so mirror the fake app's tenant storage layout there.
+  beforeEach(() => {
+    const agorHome = path.join(os.homedir(), '.agor');
+    mkdirSync(agorHome, { recursive: true });
+    writeFileSync(
+      path.join(agorHome, 'config.yaml'),
+      'multi_tenancy:\n  filesystem_isolation_enabled: true\n  tenants_base_folder: /srv/agor-tenants\n'
+    );
+    __resetConfigCacheForTests();
+  });
+
+  afterEach(() => {
+    rmSync(path.join(os.homedir(), '.agor', 'config.yaml'), { force: true });
+    __resetConfigCacheForTests();
+  });
+
   dbTest(
     'passes the authenticated actor home and tenant mounts to publish, validate, and land',
     async ({ db }) => {
@@ -234,7 +255,7 @@ describe('ArtifactsService executor sandbox ownership', () => {
         filesystem_home: '/srv/external-homes/artifact-collaborator',
       });
       await seedUser(db, 'user-owner');
-      const branchPath = '/srv/agor-tenants/tenant-a/worktrees/artifact-branch';
+      const branchPath = '/srv/agor-tenants/tenant-a/worktrees/org/repo/artifact-branch';
       const branch = await seedRepoAndBranch(db, branchPath);
       const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
       const serviceBranchRepo = (service as unknown as { branchRepo: BranchRepository }).branchRepo;
@@ -294,7 +315,7 @@ describe('ArtifactsService executor sandbox ownership', () => {
       await seedUser(db, 'user-owner');
       const branch = await seedRepoAndBranch(
         db,
-        '/srv/agor-tenants/tenant-a/worktrees/canonical-artifact-branch'
+        '/srv/agor-tenants/tenant-a/worktrees/org/repo/canonical-artifact-branch'
       );
       const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
       vi.mocked(requestExecutor).mockReset();
@@ -331,7 +352,7 @@ describe('ArtifactsService executor sandbox ownership', () => {
       await seedUser(db, 'user-owner');
       const branch = await seedRepoAndBranch(
         db,
-        '/srv/agor-tenants/tenant-a/worktrees/missing-tenant-artifact-branch'
+        '/srv/agor-tenants/tenant-a/worktrees/org/repo/missing-tenant-artifact-branch'
       );
       const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
       vi.mocked(requestExecutor).mockReset();
@@ -351,7 +372,7 @@ describe('ArtifactsService executor sandbox ownership', () => {
     await seedUser(db, 'user-owner');
     const branch = await seedRepoAndBranch(
       db,
-      '/srv/agor-tenants/tenant-a/worktrees/conflicting-tenant-artifact-branch'
+      '/srv/agor-tenants/tenant-a/worktrees/org/repo/conflicting-tenant-artifact-branch'
     );
     const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
     vi.mocked(requestExecutor).mockReset();
@@ -375,7 +396,7 @@ describe('ArtifactsService executor sandbox ownership', () => {
     await seedUser(db, 'user-owner');
     const branch = await seedRepoAndBranch(
       db,
-      '/srv/agor-tenants/tenant-a/worktrees/clone-artifact-branch',
+      '/srv/agor-tenants/tenant-a/worktrees/org/repo/clone-artifact-branch',
       { storageMode: 'clone' }
     );
     const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
@@ -907,6 +928,7 @@ describe('ArtifactsService.getPayload trust + .env synthesis', () => {
 
     expect(payload.files['/.env']).toContain('REACT_APP_AGOR_API_URL="http://[::1]:3030"');
     expect(getDaemonBaseUrl).toHaveBeenCalledOnce();
+    expect(getDaemonBaseUrl).toHaveBeenCalledWith(db);
   });
 
   dbTest(
@@ -2379,5 +2401,93 @@ describe('ArtifactsService.find SQL pushdown', () => {
     // Whole-table fall-through; JS $in matches the orphan AND both branch1 rows.
     expect(repoFindAll).toHaveBeenCalledWith({});
     expect(result.data.map((a) => a.name).sort()).toEqual(['a-branch1', 'a-orphan', 'b-branch1']);
+  });
+});
+
+/**
+ * Hosted cell: the `agor_api_url` grant must name the viewer's own workspace.
+ *
+ * The artifact's API key is minted for the viewer's tenant and personal keys
+ * resolve to a tenant by request Host, so a cell-wide (or other-tenant) origin
+ * sends one workspace's key to another workspace's API.
+ */
+describe('ArtifactsService agor_api_url grant on a hosted cell', () => {
+  const TENANT_A = 'tenant-a';
+  const TENANT_B = 'tenant-b';
+  const ORIGIN_A = 'https://tenant-a.example.test';
+  const ORIGIN_B = 'https://tenant-b.example.test';
+
+  let hosted: Awaited<ReturnType<typeof hostedTenantRouting>> | undefined;
+  afterEach(async () => {
+    vi.mocked(getDaemonBaseUrl).mockReset();
+    vi.mocked(getDaemonBaseUrl).mockImplementation(async () => 'http://localhost:3030');
+    await hosted?.cleanup();
+    hosted = undefined;
+  });
+
+  async function useRealDaemonBaseUrl() {
+    const actual = await vi.importActual<typeof import('@agor/core/config')>('@agor/core/config');
+    vi.mocked(getDaemonBaseUrl).mockImplementation(actual.getDaemonBaseUrl);
+  }
+
+  /** Seed one tenant's API-grant artifact and render it as its author. */
+  async function renderApiGrantArtifact(db: Database, tenantId: string) {
+    const service = new ArtifactsService(db as never, makeFakeApp());
+    return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+      const board = await seedBoard(scoped as Database);
+      const created = await new ArtifactRepository(scoped as Database).create({
+        artifact_id: generateId(),
+        board_id: board.board_id,
+        name: `api-grant-${tenantId}`,
+        template: 'react',
+        files: { '/index.js': 'console.log("api")', '/package.json': '{}' },
+        agor_grants: { agor_api_url: true },
+        public: true,
+        created_by: 'user-owner',
+      });
+      const payload = await service.getPayload(created.artifact_id, 'user-owner' as never);
+      return payload.files['/.env'] ?? '';
+    });
+  }
+
+  it("gives each tenant its own public origin, never another tenant's or the cell's", async () => {
+    hosted = await hostedTenantRouting({ tenantId: TENANT_A, origin: ORIGIN_A });
+    const db = hosted.db as unknown as Database;
+    await useRealDaemonBaseUrl();
+
+    expect(await renderApiGrantArtifact(db, TENANT_A)).toContain(
+      `REACT_APP_AGOR_API_URL="${ORIGIN_A}"`
+    );
+
+    // Tenant B launches on the same cell. SQLite keeps a single routing row
+    // (per-tenant rows are Postgres-only, see tenant-public-routing.postgres
+    // .test.ts), so B's launch replaces A's — which also proves the reverse:
+    // a row bound to another tenant is never served.
+    await runWithTenantDatabaseTransaction(hosted.db, TENANT_B, (scoped) =>
+      new TenantPublicRoutingRepository(scoped).observeVerifiedLaunch({
+        public_base_url: ORIGIN_B,
+        assertion_issued_at: 200,
+      })
+    );
+
+    const envB = await renderApiGrantArtifact(db, TENANT_B);
+    expect(envB).toContain(`REACT_APP_AGOR_API_URL="${ORIGIN_B}"`);
+    expect(envB).not.toContain(ORIGIN_A);
+    expect(envB).not.toContain(new URL(hosted.cellBaseUrl).host);
+
+    const envA = await renderApiGrantArtifact(db, TENANT_A);
+    expect(envA).toMatch(/^REACT_APP_AGOR_API_URL=$/m);
+    expect(envA).not.toContain(ORIGIN_B);
+  });
+
+  it('emits the grant empty for a tenant with no routing yet', async () => {
+    hosted = await hostedTenantRouting({ tenantId: TENANT_A, origin: ORIGIN_A });
+    await useRealDaemonBaseUrl();
+
+    const envB = await renderApiGrantArtifact(hosted.db as unknown as Database, TENANT_B);
+
+    expect(envB).toMatch(/^REACT_APP_AGOR_API_URL=$/m);
+    expect(envB).not.toContain(ORIGIN_A);
+    expect(envB).not.toContain(new URL(hosted.cellBaseUrl).host);
   });
 });

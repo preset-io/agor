@@ -47,6 +47,7 @@ import type {
 } from '../connector';
 import { GatewayListenerError } from '../listener-error';
 import { sanitizeGatewayProviderError } from '../provider-error';
+import { normalizeAllowedChannelIds } from './slack-manifest';
 import { createSlackSdkLoggerController, type SlackSdkLoggerController } from './slack-sdk-logger';
 
 function slackProviderFailure(prefix: string, error: unknown): Error {
@@ -777,16 +778,6 @@ function buildTestFailure(
   if (needed) failure.needed = needed;
   if (provided) failure.provided = provided;
   return failure;
-}
-
-/**
- * Normalize an `allowed_channel_ids` config value (which may be a string,
- * array, or malformed) into a clean `string[]`.
- */
-function normalizeAllowedChannelIds(raw: unknown): string[] {
-  if (Array.isArray(raw)) return raw.filter((id): id is string => typeof id === 'string');
-  if (typeof raw === 'string' && raw) return [raw];
-  return [];
 }
 
 /**

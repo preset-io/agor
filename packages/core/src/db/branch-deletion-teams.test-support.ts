@@ -17,9 +17,8 @@ import {
 } from './schema';
 
 export async function seedTeamsDeletionHome(db: Database) {
-  const { branch, user } = await seedEnvironmentCommandBranch(db);
-  await new BranchRepository(db).update(branch.branch_id, {
-    path: `/tmp/teams-delete-${branch.branch_id}`,
+  const { branch, user } = await seedEnvironmentCommandBranch(db, {
+    path: `/tmp/teams-delete-${generateId()}`,
   });
   const session = await new SessionRepository(db).create({
     branch_id: branch.branch_id,

@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { getBranchesDir, getTenantDataRoot } from '@agor/core/config';
 import {
   BoardRepository,
@@ -33,6 +34,9 @@ vi.mock('../utils/spawn-executor', () => ({
   getDaemonUrl: () => 'http://127.0.0.1:3030',
 }));
 const tenant = { tenant_id: 'default' as TenantID, source: 'explicit' as const };
+const managedBranchPath = (name: string) => join(getBranchesDir(), 'fixture', 'repo', name);
+const seedManagedBranch = (db: Database) =>
+  seedEnvironmentCommandBranch(db, { path: managedBranchPath(`env-${generateId()}`) });
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(requestExecutor).mockImplementation(async (payload) => ({
@@ -76,7 +80,7 @@ function setup(db: Database, allowSuperadmin = false) {
 test('clean rejects policy, protection, public overrides, and busy activity before dispatch; accepts only one worker', async ({
   db,
 }) => {
-  const { branch, user } = await seedEnvironmentCommandBranch(db);
+  const { branch, user } = await seedManagedBranch(db);
   const { service } = setup(db);
   const repos = new RepoRepository(db);
   const branches = new BranchRepository(db);
@@ -141,10 +145,34 @@ test('clean rejects policy, protection, public overrides, and busy activity befo
   expect(spawnExecutor).toHaveBeenCalledOnce();
 });
 
-test('Collaborators and read-only Managers cannot clean; Preserve needs management but no filesystem grant', async ({
+test('clean refuses an out-of-root row before claiming maintenance or probing the executor', async ({
   db,
 }) => {
   const { branch, user } = await seedEnvironmentCommandBranch(db);
+  const { service } = setup(db);
+  await new RepoRepository(db).update(branch.repo_id, {
+    cleanup_policy: { enabled: true, command: 'git clean -fdX', allow_branch_protection: true },
+  });
+  await expect(service.clean({ branchId: branch.branch_id }, { user, tenant })).rejects.toThrow(
+    'managed branch directory'
+  );
+  expect(requestExecutor).not.toHaveBeenCalled();
+  expect(spawnExecutor).not.toHaveBeenCalled();
+  const archiveParams = { user, tenant };
+  markBranchArchiveDeleteAuthorized(archiveParams, branch.branch_id, 'archive');
+  await expect(
+    service.archiveOrDelete(
+      branch.branch_id,
+      { metadataAction: 'archive', filesystemAction: 'preserved' },
+      archiveParams
+    )
+  ).resolves.toMatchObject({ archived: true, workspace_operation: { status: 'succeeded' } });
+});
+
+test('Collaborators and read-only Managers cannot clean; Preserve needs management but no filesystem grant', async ({
+  db,
+}) => {
+  const { branch, user } = await seedManagedBranch(db);
   const member = await new UsersRepository(db).create({
     email: 'workspace-member@example.test',
     role: 'member',
@@ -209,7 +237,7 @@ test('Collaborators and read-only Managers cannot clean; Preserve needs manageme
 test('archive removal uses the shared workspace worker and does not claim filesystem success on dispatch', async ({
   db,
 }) => {
-  const { branch, user } = await seedEnvironmentCommandBranch(db);
+  const { branch, user } = await seedManagedBranch(db);
   const { service } = setup(db);
   const params = { user, tenant };
   markBranchArchiveDeleteAuthorized(params, branch.branch_id, 'archive');
@@ -247,7 +275,7 @@ for (const filesystemAction of ['cleaned'] as const) {
     test(`archive ${filesystemAction}: ${failure} preflight does not archive or destroy; explicit Preserve can retry`, async ({
       db,
     }) => {
-      const { branch, user } = await seedEnvironmentCommandBranch(db);
+      const { branch, user } = await seedManagedBranch(db);
       const { service, archiveBranchSessions } = setup(db);
       await new RepoRepository(db).update(branch.repo_id, {
         cleanup_policy: { enabled: true, command: 'git clean -fdX', allow_branch_protection: true },
@@ -302,7 +330,7 @@ for (const filesystemAction of ['cleaned'] as const) {
 test('delegated Preserve needs no executor; legacy linked worktree changes remain unsupported', async ({
   db,
 }) => {
-  const { branch, user } = await seedEnvironmentCommandBranch(db);
+  const { branch, user } = await seedManagedBranch(db);
   const { service, app, context } = setup(db);
   vi.spyOn(app, 'get').mockReturnValue({ execution: { unix_user_mode: 'delegated' } });
   context.mockRejectedValue(new Error('executor identity unavailable'));
@@ -362,7 +390,7 @@ for (const execution of [
     test(`external ${JSON.stringify(execution)} ${action}: forwards caller home and bounded clone storage`, async ({
       db,
     }) => {
-      const { branch, user } = await seedEnvironmentCommandBranch(db);
+      const { branch, user } = await seedManagedBranch(db);
       const { service, app, context } = setup(db);
       vi.spyOn(app, 'get').mockReturnValue(execution);
       context.mockResolvedValue({
@@ -432,7 +460,7 @@ for (const binding of ['inherit', 'override'] as const) {
     test(`${binding} ${authority}: effective-access agrees with shared cleanup admission`, async ({
       db,
     }) => {
-      const { branch: seed, user: creator } = await seedEnvironmentCommandBranch(db);
+      const { branch: seed, user: creator } = await seedManagedBranch(db);
       const owner = await new UsersRepository(db).create({
         email: `${generateId()}@example.test`,
         role: authority === 'superadmin-owner' ? 'superadmin' : 'member',
@@ -455,7 +483,7 @@ for (const binding of ['inherit', 'override'] as const) {
         repo_id: seed.repo_id,
         name: `owner-cleanup-${generateId()}`,
         ref: seed.ref,
-        path: `/tmp/cleanup-owner-${generateId()}`,
+        path: managedBranchPath(`cleanup-owner-${generateId()}`),
         filesystem_status: 'ready',
         environment_instance: { status: 'stopped' },
         created_by: creator.user_id,
@@ -582,7 +610,7 @@ for (const binding of ['inherit', 'override'] as const) {
 test('explicit Manager retirement clears revoked collaborators preferences, preserves files and retains board protection', async ({
   db,
 }) => {
-  const { branch, user } = await seedEnvironmentCommandBranch(db);
+  const { branch, user } = await seedManagedBranch(db);
   const { service } = setup(db);
   const branches = new BranchRepository(db);
   const boards = new BoardRepository(db);

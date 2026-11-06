@@ -56,6 +56,7 @@ import {
 } from '../../services/teammate-knowledge.js';
 import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
+import { assertManagedBranchPath } from '../../utils/managed-branch-path.js';
 import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
 import { resolveMcpCallerSandboxMounts } from '../caller-sandbox-mounts.js';
 import { resolveBranchId } from '../resolve-ids.js';
@@ -748,7 +749,10 @@ async function runBranchKnowledgeCommand(
       daemonUrl: getDaemonUrl(),
       params: {
         ...params,
-        cwd: workspace.branch.path,
+        cwd: assertManagedBranchPath(
+          workspace.branch.path,
+          ctx.baseServiceParams.tenant?.tenant_id
+        ),
         principalBranchAccess: workspace.fsAccess,
         ...sandboxMounts,
       },

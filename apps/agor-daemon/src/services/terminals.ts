@@ -41,6 +41,7 @@ import {
 } from '../terminal-socket-connection.js';
 import { REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE } from '../utils/agentic-tool-runtime.js';
 import { isSuperAdmin } from '../utils/branch-authorization.js';
+import { assertManagedBranchPath } from '../utils/managed-branch-path.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
 import {
   generateTerminalExecutorToken,
@@ -388,7 +389,7 @@ export class TerminalsService {
             terminalId,
             channel,
             sessionName,
-            cwd: branch.path,
+            cwd: assertManagedBranchPath(branch.path, tenantId),
             cols: data.cols || 160,
             rows: data.rows || 40,
             sandboxHomeStore: projection.sandboxHomeStore,

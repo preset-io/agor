@@ -111,9 +111,11 @@ export type {
 } from './connectors/slack-manifest';
 export {
   buildSlackManifest,
+  normalizeAllowedChannelIds,
   requiredBotEvents,
   requiredBotScopes,
   SLACK_AGENT_TOOL_SCOPES,
+  SLACK_SETUP_DEFAULTS,
 } from './connectors/slack-manifest';
 export type { NormalizedTeamsActivity, TeamsMemberIdentity } from './connectors/teams';
 export {

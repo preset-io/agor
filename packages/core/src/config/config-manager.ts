@@ -405,6 +405,51 @@ function parseOptionalPortEnvironmentValue(
   return port;
 }
 
+function parseOptionalBoundedIntegerEnvironmentValue(
+  value: string | undefined,
+  name: string,
+  min: number,
+  max: number
+): number | undefined {
+  if (value === undefined || value === '') return undefined;
+  const parsed = /^\d+$/.test(value) ? Number(value) : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(`Config error: ${name} must be an integer between ${min} and ${max}`);
+  }
+  return parsed;
+}
+
+/** Default browser refresh-token lifetime (30 days) when `daemon.refresh_token_ttl_seconds` is unset. */
+export const DEFAULT_REFRESH_TOKEN_TTL_SECONDS = 2_592_000;
+// Lower bound keeps the refresh token longer than the 15-minute access token;
+// upper bound stops a typo (an extra zero) from issuing year-long tokens.
+const MIN_REFRESH_TOKEN_TTL_SECONDS = 3_600;
+const MAX_REFRESH_TOKEN_TTL_SECONDS = 7_776_000;
+
+function assertValidRefreshTokenTtlSeconds(value: unknown): void {
+  if (
+    value !== undefined &&
+    (!Number.isSafeInteger(value) ||
+      (value as number) < MIN_REFRESH_TOKEN_TTL_SECONDS ||
+      (value as number) > MAX_REFRESH_TOKEN_TTL_SECONDS)
+  ) {
+    throw new Error(
+      `Config error: daemon.refresh_token_ttl_seconds must be an integer between ${MIN_REFRESH_TOKEN_TTL_SECONDS} and ${MAX_REFRESH_TOKEN_TTL_SECONDS}`
+    );
+  }
+}
+
+/**
+ * Browser refresh-token lifetime in seconds for an effective (env-resolved)
+ * config. The single source for every refresh-token issuer. Re-checks bounds so
+ * a config that skipped load-time validation still fails closed.
+ */
+export function resolveRefreshTokenTtlSeconds(config: AgorConfig): number {
+  const value = config.daemon?.refresh_token_ttl_seconds;
+  assertValidRefreshTokenTtlSeconds(value);
+  return value ?? DEFAULT_REFRESH_TOKEN_TTL_SECONDS;
+}
+
 function parseOptionalSdkHomeModeEnvironmentValue(
   value: string | undefined
 ): 'inherit' | 'per_branch' | undefined {
@@ -820,6 +865,7 @@ function validateConfig(config: AgorConfig): void {
     'externalAppLink',
     'externalAppLabel',
     'impersonation_token_expiry_ms',
+    'refresh_token_ttl_seconds',
     'cors_allow_sandpack',
     'cors_origins',
     'trust_proxy_hops',
@@ -832,6 +878,7 @@ function validateConfig(config: AgorConfig): void {
   ) {
     throw new Error('Config error: daemon.websocket_compression must be a boolean');
   }
+  assertValidRefreshTokenTtlSeconds(config.daemon?.refresh_token_ttl_seconds);
   only(config.ui, 'ui', ['base_url', 'port', 'host']);
   only(config.uploads, 'uploads', ['location', 'max_age_days', 'max_file_size_mb']);
   only(config.external_launch, 'external_launch', [
@@ -1650,6 +1697,12 @@ export function resolveEffectiveConfig(
     env.AGOR_WEBSOCKET_COMPRESSION,
     'AGOR_WEBSOCKET_COMPRESSION'
   );
+  const refreshTokenTtlSeconds = parseOptionalBoundedIntegerEnvironmentValue(
+    env.AGOR_REFRESH_TOKEN_TTL_SECONDS,
+    'AGOR_REFRESH_TOKEN_TTL_SECONDS',
+    MIN_REFRESH_TOKEN_TTL_SECONDS,
+    MAX_REFRESH_TOKEN_TTL_SECONDS
+  );
   const apmTraceServices = parseOptionalApmTraceDepthEnvironmentValue(env.AGOR_APM_TRACE_SERVICES);
   const externalLaunch = resolveEffectiveExternalLaunchConfig(config.external_launch, env);
 
@@ -1732,6 +1785,9 @@ export function resolveEffectiveConfig(
       ...(env.EXTERNAL_APP_LABEL ? { externalAppLabel: env.EXTERNAL_APP_LABEL } : {}),
       ...(websocketCompression !== undefined
         ? { websocket_compression: websocketCompression }
+        : {}),
+      ...(refreshTokenTtlSeconds !== undefined
+        ? { refresh_token_ttl_seconds: refreshTokenTtlSeconds }
         : {}),
     },
     ui: { ...defaults.ui, ...config.ui },
@@ -2102,17 +2158,28 @@ function resolveBaseUrl(
  * Distinct from {@link getDaemonUrl}, which uses `DAEMON_URL` for internal
  * backend-to-backend communication.
  *
- * Resolution order:
+ * Hosted (`required_from_auth`): delegates to {@link getBaseUrl}, i.e. the
+ * current trusted tenant's durable public origin, or `''` before its first
+ * verified launch. The API is tenant-scoped there — personal API keys resolve
+ * to a tenant by request Host — so a cell-wide origin would point a workspace
+ * at another workspace's API. `db` is required for the same reason as on
+ * {@link getBaseUrl}: no caller can forget the tenant read.
+ *
+ * Static/local resolution order (the handle is untouched):
  * 1. AGOR_BASE_URL environment variable (highest priority)
  * 2. daemon.base_url from config.yaml
  * 3. ui.base_url from legacy one-origin configs
  * 4. Default daemon host and port
  */
-export async function getDaemonBaseUrl(): Promise<string> {
+export async function getDaemonBaseUrl(db: Database): Promise<string> {
+  const config = await loadConfig();
+  if (config.multi_tenancy?.mode === 'required_from_auth') {
+    return getBaseUrl(db);
+  }
   if (process.env.AGOR_BASE_URL) {
     return validateBaseUrl(process.env.AGOR_BASE_URL);
   }
-  return resolveBaseUrl(await loadConfig(), 'daemon');
+  return resolveBaseUrl(config, 'daemon');
 }
 
 /**
@@ -2539,7 +2606,75 @@ export function getBranchesDir(tenantId?: string): string {
  * @returns Absolute path to the branch
  */
 export function getBranchPath(repoSlug: string, branchName: string, tenantId?: string): string {
+  assertSafeWorkspaceSegments(repoSlug, 'Repository slug');
+  assertSafeWorkspaceSegments(branchName, 'Branch name');
   return path.join(getBranchesDir(tenantId), repoSlug, branchName);
+}
+
+/**
+ * Reject a relative path component sequence that could leave its parent once
+ * joined: absolute values, backslashes, NULs, and empty, `.` or `..` segments.
+ */
+export function assertSafeWorkspaceSegments(value: string, label: string): void {
+  if (
+    typeof value !== 'string' ||
+    !value ||
+    value.startsWith('/') ||
+    value.includes('\\') ||
+    value.includes('\0') ||
+    value.split('/').some((segment) => !segment || segment === '.' || segment === '..')
+  ) {
+    throw new Error(`${label} ${JSON.stringify(value)} is not a valid workspace path segment`);
+  }
+}
+
+/**
+ * Pure containment rule for a stored branch path: an absolute, normalized
+ * directory at least `<repoSlug>/<branchName>` deep below `branchesRoot`.
+ */
+export function isManagedBranchPath(branchPath: unknown, branchesRoot: string): boolean {
+  if (typeof branchPath !== 'string' || !path.isAbsolute(branchPath)) return false;
+  if (
+    branchPath.includes('\0') ||
+    branchPath.endsWith(path.sep) ||
+    path.normalize(branchPath) !== branchPath
+  )
+    return false;
+  const relative = path.relative(path.resolve(branchesRoot), branchPath);
+  if (!relative || path.isAbsolute(relative)) return false;
+  const segments = relative.split(path.sep);
+  // `<org>/<repo>/<branch...>`: a repo directory holds every branch of that repo.
+  return segments.length >= 3 && segments.every((segment) => segment && segment !== '..');
+}
+
+/**
+ * The pre-`data_home` branches location. The documented local-to-containerized
+ * migration leaves it as a symlink to the new root, so older rows still name it.
+ */
+export function getLegacyBranchesDir(): string {
+  return path.join(getAgorHome(), 'worktrees');
+}
+
+/**
+ * Every stored spelling of one workspace: `branchPath` under the tenant root
+ * and under the legacy alias. Overlap checks compare strings, so they must try
+ * both; an alias that does not resolve to the root only over-refuses.
+ */
+export function branchPathSpellings(branchPath: string, tenantId?: string): string[] {
+  const roots = [getLegacyBranchesDir()];
+  try {
+    roots.unshift(getBranchesDir(tenantId));
+  } catch {
+    // Filesystem isolation without a tenant derives no root; sinks refuse such rows.
+  }
+  const spellings = new Set([branchPath]);
+  for (const root of roots) {
+    const relative = path.relative(root, branchPath);
+    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`)) continue;
+    if (path.isAbsolute(relative)) continue;
+    for (const other of roots) spellings.add(path.join(other, relative));
+  }
+  return [...spellings];
 }
 
 /**

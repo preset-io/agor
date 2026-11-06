@@ -11,6 +11,7 @@
 
 import type { AgorConfig } from '@agor/core/config';
 import {
+  acquireTenantWriteGate,
   createDatabase,
   createTenantScopedDatabaseProxy,
   type Database,
@@ -19,6 +20,7 @@ import {
   getCurrentTenantId,
   initializeDatabase,
   isPostgresDatabase,
+  releaseTenantWriteGate,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
   sql,
@@ -31,6 +33,7 @@ import type { HookContext } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createTenantDatabaseScopeAroundHook } from '../utils/tenant-db-scope.js';
 import { createApiKeyHostTenantResolver } from './api-key-host-tenant.js';
+import { ApiKeyStrategy } from './api-key-strategy.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -121,24 +124,38 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     });
 
     /**
-     * Drive the real tenant scope hook with an external REST request, then
-     * verify the key the way the api-key strategy does: inside the scope the
-     * hook opened, through the RLS-bound repository.
+     * Drive the real tenant hook with an external REST request on an
+     * identity-only boundary (as long routes do: no request-wide DB scope),
+     * then authenticate with the real api-key strategy. The strategy opens its
+     * own RLS-bound unit; a key RLS hides is its `Invalid API key`.
      */
     async function authenticate(headers: Record<string, unknown>, rawKey: string) {
       const around = createTenantDatabaseScopeAroundHook({
         db,
         config: hostedConfig,
         jwtSecret: 'unused-jwt-secret',
+        transaction: false,
       });
+      const strategy = new ApiKeyStrategy();
+      // Self-scoped, like the production users service.
+      const users = {
+        get: (id: string) =>
+          runWithTenantDatabaseScope(db, getCurrentTenantId(), () =>
+            new UsersRepository(db).findById(id)
+          ),
+      };
+      strategy.setDependencies(new UserApiKeysRepository(db), users, db);
       const context = { params: { provider: 'rest', headers } } as unknown as HookContext;
-      let observed: { tenantId: string | undefined; keyTenant: unknown } | undefined;
+      let observed: { tenantId: string | undefined; accepted: boolean } | undefined;
       await around(context, async () => {
-        const row = await new UserApiKeysRepository(db).verifyKey(rawKey);
-        observed = {
-          tenantId: getCurrentTenantId(),
-          keyTenant: row ? (row as { tenant_id?: unknown }).tenant_id : null,
-        };
+        const accepted = await strategy.authenticate({ apiKey: rawKey }, context.params).then(
+          () => true,
+          (error: Error) => {
+            if (error.message !== 'Invalid API key') throw error;
+            return false;
+          }
+        );
+        observed = { tenantId: getCurrentTenantId(), accepted };
       });
       return { tenant: context.params.tenant, observed };
     }
@@ -146,16 +163,16 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     it('admits a key only at the workspace URL of the tenant that owns it', async () => {
       const result = await authenticate({ host: hostA, authorization: `Bearer ${keyA}` }, keyA);
       expect(result.tenant).toEqual({ tenant_id: tenantA, source: 'trusted_host' });
-      expect(result.observed).toEqual({ tenantId: tenantA, keyTenant: tenantA });
+      expect(result.observed).toEqual({ tenantId: tenantA, accepted: true });
 
       const viaHeader = await authenticate({ host: hostB, 'x-api-key': keyB }, keyB);
-      expect(viaHeader.observed).toEqual({ tenantId: tenantB, keyTenant: tenantB });
+      expect(viaHeader.observed).toEqual({ tenantId: tenantB, accepted: true });
     });
 
     it('never finds a valid key from another tenant through the wrong workspace URL', async () => {
       const crossed = await authenticate({ host: hostB, authorization: `Bearer ${keyA}` }, keyA);
       expect(crossed.tenant?.tenant_id).toBe(tenantB);
-      expect(crossed.observed).toEqual({ tenantId: tenantB, keyTenant: null });
+      expect(crossed.observed).toEqual({ tenantId: tenantB, accepted: false });
     });
 
     it.each([
@@ -199,14 +216,38 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         { host: moved, authorization: `Bearer ${currentKey}` },
         currentKey
       );
-      expect(current.observed).toEqual({ tenantId: currentTenant, keyTenant: currentTenant });
+      expect(current.observed).toEqual({ tenantId: currentTenant, accepted: true });
 
       // The stale claim no longer selects its tenant, so its key finds no row.
       const stale = await authenticate(
         { host: moved, authorization: `Bearer ${previousKey}` },
         previousKey
       );
-      expect(stale.observed).toEqual({ tenantId: currentTenant, keyTenant: null });
+      expect(stale.observed).toEqual({ tenantId: currentTenant, accepted: false });
+    });
+
+    it('authenticates a write-gated tenant without writing last_used_at', async () => {
+      const frozenTenant = `key-host-frozen-${suffix}`;
+      const frozenHost = `ws-frozen-${suffix}.cloud.test`;
+      const key = await seedTenant(frozenTenant, frozenHost);
+      const keys = new UserApiKeysRepository(db);
+      const read = () => runWithTenantDatabaseScope(db, frozenTenant, () => keys.verifyKey(key));
+      const id = (await read())!.id;
+      // Settles only after the post-commit UPDATE (or its skip) has run.
+      const touch = () =>
+        runWithTenantDatabaseScope(db, frozenTenant, () => keys.updateLastUsed(id));
+
+      const { generation } = await acquireTenantWriteGate(rawDb, frozenTenant);
+      try {
+        const result = await authenticate({ host: frozenHost, 'x-api-key': key }, key);
+        expect(result.observed).toEqual({ tenantId: frozenTenant, accepted: true });
+        await touch();
+        expect((await read())?.last_used_at).toBeNull();
+      } finally {
+        await releaseTenantWriteGate(rawDb, frozenTenant, { generation });
+      }
+      await touch();
+      expect((await read())?.last_used_at).toBeTruthy();
     });
 
     it('caches Host → tenant answers briefly and bounds the misses', async () => {

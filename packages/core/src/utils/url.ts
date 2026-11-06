@@ -110,6 +110,11 @@ export function mcpOAuthConnectPath(): string {
   return '/connect/mcp';
 }
 
+/** Authenticated browser surface that finishes a provider redirect for its initiator. */
+export function mcpOAuthReturnPath(): string {
+  return '/connect/mcp/return';
+}
+
 function encodePathSegments(path: string): string {
   return path
     .split('/')
@@ -200,6 +205,11 @@ export function getMcpSlackRecoveryUrl(baseUrl: string): string {
 /** Preserve any operator-configured base path while adding the UI mount. */
 export function getMcpOAuthConnectUrl(baseUrl: string): string {
   return fullUrl(mcpOAuthConnectPath(), baseUrl);
+}
+
+/** Preserve any operator-configured base path while adding the UI mount. */
+export function getMcpOAuthReturnUrl(baseUrl: string): string {
+  return fullUrl(mcpOAuthReturnPath(), baseUrl);
 }
 
 /** Generate a Knowledge URL from namespace + optional document path. */

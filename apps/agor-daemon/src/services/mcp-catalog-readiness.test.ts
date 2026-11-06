@@ -7,7 +7,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { MCPCatalogReadinessService } from './mcp-catalog-readiness';
+import { type MCPCatalogReadinessDeps, MCPCatalogReadinessService } from './mcp-catalog-readiness';
 
 const ALICE = '00000000-0000-7000-8000-00000000a11c' as UserID;
 const PARAMS = { user: { user_id: ALICE } } as AuthenticatedParams;
@@ -52,7 +52,7 @@ function peer(overrides: Partial<MCPServer> = {}): MCPServer {
 function build(
   servers: MCPServer[],
   entry: MCPCatalogEntry = ENTRY,
-  redirectUri?: (entry: MCPCatalogEntry) => string | undefined
+  redirectUri?: MCPCatalogReadinessDeps['redirectUri']
 ) {
   const catalogGet = vi.fn(async () => entry);
   const listCandidates = vi.fn(
@@ -117,20 +117,22 @@ describe('MCPCatalogReadinessService', () => {
     await expect(
       build([], allowlisted, redirectUri).service.get(ENTRY.name, PARAMS)
     ).resolves.toMatchObject({ redirect_uri: 'https://cloud.example/mcp/oauth/callback/abc' });
-    expect(redirectUri).toHaveBeenCalledWith(allowlisted);
+    expect(redirectUri).toHaveBeenCalledWith(allowlisted, PARAMS);
     redirectUri.mockClear();
     const plain = await build([], ENTRY, redirectUri).service.get(ENTRY.name, PARAMS);
     expect(plain).not.toHaveProperty('redirect_uri');
     expect(redirectUri).not.toHaveBeenCalled();
   });
 
-  it('shows the direct callback for a redirect_allowlist entry', async () => {
-    const redirectUri = vi.fn(() => 'https://agor.example/mcp-servers/oauth-callback');
+  it("shows the caller's direct callback for a redirect_allowlist entry", async () => {
+    // Hosted daemons resolve the callback per tenant, asynchronously, from the
+    // caller's params; the service forwards both and awaits the result.
+    const redirectUri = vi.fn(async () => 'https://acme.example/mcp-servers/oauth-callback');
     const allowlist = { ...ENTRY, oauth: { redirect_allowlist: true as const } };
     await expect(
       build([], allowlist, redirectUri).service.get(ENTRY.name, PARAMS)
-    ).resolves.toMatchObject({ redirect_uri: 'https://agor.example/mcp-servers/oauth-callback' });
-    expect(redirectUri).toHaveBeenCalledWith(allowlist);
+    ).resolves.toMatchObject({ redirect_uri: 'https://acme.example/mcp-servers/oauth-callback' });
+    expect(redirectUri).toHaveBeenCalledWith(allowlist, PARAMS);
   });
 
   it('reports reusable OAuth without returning peer or grant metadata', async () => {

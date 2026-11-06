@@ -38,10 +38,12 @@ export {
   type OpenCodeCanUseToolCallback,
   OpenCodeInteractionTimeoutError,
   type OpenCodeInvocationConfig,
-  OpenCodePermissionRejectedError,
+  type OpenCodePartialMessage,
+  type OpenCodePermissionRejection,
   type OpenCodeStreamingCallbacks,
   OpenCodeTool,
   type OpenCodeToolDependencies,
   type OpenCodeTurnResult,
+  openCodePartialMessage,
   type RunOpenCodeTurnInput,
 } from './opencode-tool.js';

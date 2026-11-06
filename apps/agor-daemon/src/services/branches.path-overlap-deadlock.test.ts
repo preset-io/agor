@@ -1,10 +1,12 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { getBranchesDir } from '@agor/core/config';
 import {
   BranchRepository,
   createTenantScopedDatabaseProxy,
   type Database,
+  generateId,
   RepoRepository,
   runWithTenantContext,
 } from '@agor/core/db';
@@ -12,7 +14,10 @@ import type { Application } from '@agor/core/feathers';
 import { simpleGit } from '@agor/core/git/exec';
 import type { AuthenticatedParams, BranchID, TenantID } from '@agor/core/types';
 import { beforeEach, expect, vi } from 'vitest';
-import { seedEnvironmentCommandBranch } from '../../../../packages/core/src/db/repositories/environment-commands.test-support';
+import {
+  createBranchAtPathForTest,
+  seedEnvironmentCommandBranch,
+} from '../../../../packages/core/src/db/repositories/environment-commands.test-support';
 import { ownedDbTest as test } from '../../../../packages/core/src/db/test-helpers';
 import { markBranchArchiveDeleteAuthorized } from '../utils/branch-archive-delete-authorization';
 import { requestExecutor, spawnExecutor } from '../utils/spawn-executor';
@@ -114,7 +119,7 @@ for (const status of ['failed', 'cleaned', 'deleted'] as const) {
     const { branch, user } = await seedEnvironmentCommandBranch(db);
     const branches = new BranchRepository(db);
     await branches.update(branch.branch_id, { filesystem_status: status });
-    const sibling = await branches.create({
+    const sibling = await createBranchAtPathForTest(db, {
       repo_id: branch.repo_id,
       name: 'sibling',
       ref: 'sibling',
@@ -171,7 +176,9 @@ for (const status of ['cleaned', 'failed'] as const) {
   test(`retained ${status} sibling files block deletion and archive filesystem operations`, async ({
     db,
   }) => {
-    const root = await mkdtemp(join(tmpdir(), 'agor-overlap-retained-'));
+    // Inside the managed root, so clean reaches the overlap fence rather than containment.
+    const root = join(getBranchesDir(), 'fixture', 'overlap', `retained-${generateId()}`);
+    await mkdir(root, { recursive: true });
     try {
       await writeFile(join(root, 'tracked.txt'), 'retained tracked content');
       await writeFile(join(root, 'untracked.txt'), 'retained ordinary untracked content');
@@ -179,10 +186,9 @@ for (const status of ['cleaned', 'failed'] as const) {
       await git.init();
       await git.add('tracked.txt');
       expect((await git.status()).not_added).toContain('untracked.txt');
-      const { branch, user } = await seedEnvironmentCommandBranch(db);
+      const { branch, user } = await seedEnvironmentCommandBranch(db, { path: root });
       const branches = new BranchRepository(db);
-      await branches.update(branch.branch_id, { path: root });
-      const sibling = await branches.create({
+      const sibling = await createBranchAtPathForTest(db, {
         repo_id: branch.repo_id,
         name: 'retained',
         ref: 'retained',
@@ -232,10 +238,9 @@ test('a failed sibling retry is safe because shared-workspace deletion is never 
 }) => {
   const root = await mkdtemp(join(tmpdir(), 'agor-overlap-retry-'));
   try {
-    const { branch, user } = await seedEnvironmentCommandBranch(db);
+    const { branch, user } = await seedEnvironmentCommandBranch(db, { path: root });
     const branches = new BranchRepository(db);
-    await branches.update(branch.branch_id, { path: root });
-    const sibling = await branches.create({
+    const sibling = await createBranchAtPathForTest(db, {
       repo_id: branch.repo_id,
       name: 'retry',
       ref: 'retry',

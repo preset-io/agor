@@ -260,13 +260,19 @@ export class MCPOAuthPendingFlowAuthority {
     return attemptId;
   }
 
-  async claimForCallback(rawState: string): Promise<MCPOAuthPendingFlowClaimResult> {
+  /**
+   * Which tenant owns this state, for the unauthenticated provider redirect.
+   * Read-only: the flow is completed only through claimForUser() by the
+   * authenticated user who started it.
+   */
+  async findForCallback(
+    rawState: string
+  ): Promise<Pick<MCPOAuthPendingFlowRecord, 'tenantId' | 'status'> | null> {
     const stateHash = fingerprintMCPOAuthState(rawState);
     return runWithSystemDatabaseScope(
       this.db,
-      'MCP OAuth provider callback claim',
-      (systemDb) =>
-        new MCPOAuthPendingFlowRepository(systemDb).claimForCallback(stateHash, randomUUID()),
+      'MCP OAuth provider callback lookup',
+      (systemDb) => new MCPOAuthPendingFlowRepository(systemDb).findForCallback(stateHash),
       { capability: 'mcp_oauth_callback' }
     );
   }

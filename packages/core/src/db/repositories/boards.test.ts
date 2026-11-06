@@ -89,7 +89,7 @@ async function createBranchForBoard(
     name,
     ref: name,
     branch_unique_id: branchUniqueId++,
-    path: `/tmp/${name}`,
+    path: `/tmp/boards/${generateId()}/${name}`,
     board_id: boardId,
     archived: overrides.archived,
     created_by: overrides.created_by ?? ('test-user' as UUID),

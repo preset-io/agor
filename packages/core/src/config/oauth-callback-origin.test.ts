@@ -3,7 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadConfigFromFile } from './config-manager';
-import { resolveDeploymentConfig, resolveMcpOAuthCallbackOrigin } from './deployment';
+import {
+  resolveDeploymentConfig,
+  resolveMcpOAuthCallbackOrigin,
+  resolveMcpOAuthCallbackUrlsForOrigin,
+} from './deployment';
 import type { AgorConfig } from './types';
 
 const temporaryDirectories: string[] = [];
@@ -127,5 +131,25 @@ describe('startup MCP OAuth callback origin', () => {
     if (deployment.mode !== 'ha') throw new Error('expected HA');
     expect(deployment.capabilities.mcpOAuth).toBe(true);
     expect(deployment.mcpOAuthCallbackUrl).toBe(origin.haCallbackUrl);
+  });
+});
+
+describe('MCP OAuth callback URLs for a trusted origin', () => {
+  it('derives the origin-root callback for a public HTTPS workspace origin', () => {
+    expect(resolveMcpOAuthCallbackUrlsForOrigin('https://acme.agor.example/')).toEqual({
+      standaloneCallbackUrl: 'https://acme.agor.example/mcp-servers/oauth-callback',
+      haCallbackUrl: 'https://acme.agor.example/mcp-servers/oauth-callback',
+    });
+  });
+
+  it('refuses an HA callback for HTTP or private origins, and anything for none', () => {
+    expect(resolveMcpOAuthCallbackUrlsForOrigin('http://acme.agor.example').haCallbackUrl).toBe(
+      null
+    );
+    expect(resolveMcpOAuthCallbackUrlsForOrigin('https://10.0.0.5').haCallbackUrl).toBe(null);
+    expect(resolveMcpOAuthCallbackUrlsForOrigin(undefined)).toEqual({
+      standaloneCallbackUrl: null,
+      haCallbackUrl: null,
+    });
   });
 });

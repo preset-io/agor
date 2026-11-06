@@ -145,6 +145,7 @@ import {
   isSuperAdmin,
   withoutPrefetchedRecord,
 } from '../utils/branch-authorization.js';
+import { markBranchBoardChanged } from '../utils/branch-board-move-invalidation.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { verifyBranchWorkspacePreflight } from '../utils/branch-workspace-preflight.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
@@ -153,6 +154,7 @@ import {
   ExecutorLaunchRefusedError,
 } from '../utils/environment-command-dispatch.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
+import { assertManagedBranchPath, removalBranchesRoot } from '../utils/managed-branch-path.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
 import { getDaemonUrl, requestExecutor, spawnExecutor } from '../utils/spawn-executor.js';
@@ -394,6 +396,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           : branch.nuke_command;
     if (!command) throw new BadRequest(`No ${action} command configured`);
     const execution = await this.resolveEnvironmentCommand(command, action);
+    // Refuse an uncontained row before admission so no attempt is recorded.
+    const managedPath =
+      execution.kind === 'command' ? this.managedBranchPath(branch, params) : undefined;
     const context =
       execution.kind === 'command'
         ? await this.resolveEnvironmentExecutorContext(branch, params)
@@ -495,8 +500,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           env: context!.env,
           params: {
             branchId: branch.branch_id,
-            branchPath: branch.path,
-            cwd: branch.path,
+            branchPath: managedPath,
+            cwd: managedPath,
             principalBranchAccess: context!.branchFsAccess,
             ...context!.sandboxMounts,
             action,
@@ -767,6 +772,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     });
   }
 
+  /** Revalidate a stored branch path against the caller tenant's branch root. */
+  private managedBranchPath(branch: Branch, params?: BranchParams): string {
+    return assertManagedBranchPath(branch.path, params?.tenant?.tenant_id ?? getCurrentTenantId());
+  }
+
   private async fetchEnvironmentLogsViaExecutor(
     branch: Branch,
     logsCommand: string,
@@ -779,6 +789,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const sessionToken = await this.withTenantDatabase(params, () =>
       issueExecutorCommandToken(this.app, 'environment-logs', executionUserId, branch.branch_id)
     );
+    const managedPath = this.managedBranchPath(branch, params);
     const result = await requestExecutor(
       {
         command: 'environment.logs',
@@ -787,8 +798,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         env,
         params: {
           branchId: branch.branch_id,
-          branchPath: branch.path,
-          cwd: branch.path,
+          branchPath: managedPath,
+          cwd: managedPath,
           principalBranchAccess: branchFsAccess,
           // Sandbox mount inputs consumed by spawn-executor → buildSandboxWrap.
           ...sandboxMounts,
@@ -1001,6 +1012,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     data: Partial<Branch> | Partial<Branch>[],
     params?: BranchParams
   ): Promise<Branch | Branch[]> {
+    // Branch rows own filesystem workspaces. External callers must go through
+    // repos.createBranch, which checks name collisions and materializes files.
+    if (params?.provider && !params[BRANCH_MATERIALIZATION_INTENT]) {
+      throw new BadRequest('Create branches through repos.createBranch.');
+    }
     const assertHasBoard = (item: Partial<Branch>) => {
       if (!item.board_id) {
         throw new BadRequest('board_id is required when creating a branch');
@@ -1480,6 +1496,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (Object.hasOwn(data, 'base_remote_url')) {
       throw new BadRequest('base_remote_url is immutable after branch creation.');
     }
+    if (Object.hasOwn(data, 'path')) {
+      throw new BadRequest('path is server-managed and cannot be changed through the Branch API.');
+    }
     // Get current branch to check type/board changes
     const currentBranch = await super.get(id, params);
     await this.validateCleanupProtectionWrite(currentBranch, data, params);
@@ -1513,6 +1532,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const boardIdProvided = Object.hasOwn(data, 'board_id');
     const newBoardId = data.board_id;
     const boardChanged = boardIdProvided && oldBoardId !== newBoardId;
+    if (boardIdProvided) markBranchBoardChanged(params, boardChanged);
 
     if (boardChanged) {
       if (!newBoardId && currentBranch.permission_binding === 'inherit') {
@@ -1956,6 +1976,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       const reason = getBranchCleanupBlockReason(policy, branch.cleanup_protected ?? false);
       if (reason) throw new Conflict(reason);
     }
+    // Refuse an uncontained row before the claim; a post-dispatch throw would strand it.
+    const cleanCwd =
+      filesystemAction === 'cleaned' ? this.managedBranchPath(branch, params) : undefined;
     const admission = retireTeammate
       ? await runWithTenantDatabaseTransaction(this.db, tenantId, async (db) => {
           // Retirement clears User preferences under reference/Branch locks.
@@ -2098,13 +2121,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
                     removal: {
                       branchPath: branch.path,
                       repoPath: repo.local_path!,
-                      branchesRoot: getBranchesDir(tenantId),
+                      branchesRoot: removalBranchesRoot(branch.path, tenantId),
                       storageMode: branch.storage_mode ?? 'worktree',
                     },
                   }
                 : {
                     filesystemAction: 'cleaned' as const,
-                    cwd: branch.path,
+                    cwd: cleanCwd!,
                     principalBranchAccess: 'write' as const,
                     ...context!.sandboxMounts,
                     cleanup: { command: policy!.command },
@@ -2229,7 +2252,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               generation: admission.claim.generation,
               executionId,
               branchPath: branch.path,
-              branchesRoot: getBranchesDir(tenantId),
+              // Delegated mounts are verified at the exact tenant root.
+              branchesRoot: externalExecutor
+                ? getBranchesDir(tenantId)
+                : removalBranchesRoot(branch.path, tenantId),
               repoPath: repo.local_path,
               branchHome: getBranchHomePath(branch.branch_id, tenantId),
               tenantDataRoot: getTenantDataRoot(tenantId),
@@ -2427,7 +2453,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           // Use the same lock order as board movement before reading placement.
           // A preflight comparison can race a move and silently ignore the
           // requested destination. Real moves still use patch's authorization,
-          // commit-deferred events and eviction; refused admission rolls it back.
+          // commit-deferred events and branch-scoped revocation; refused
+          // admission rolls it back.
           await lockTenantAuthorizationFence(db, params);
           await lockBranchReferenceMutation(db);
           // Committed placement under the locks, not the request's cached row.

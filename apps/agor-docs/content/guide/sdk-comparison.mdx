@@ -299,6 +299,7 @@ See [Gemini Beta](#gemini-beta) for the permission boundary and limitations.
 - OpenCode emits `permission.asked` events when tool execution requires approval
 - Agor routes decisions through the same task-scoped permission service used by other agents
 - Auto modes approve only their documented scope; `question` and nested `task` remain denied
+- A denied request does not fail the task: the agent is told which permission was refused and why, and continues its turn. An approval that times out still ends the task
 - Permissions include `external_directory` access when working outside the default project
 
 **Cursor (Beta):** ❌ **Autonomous only**

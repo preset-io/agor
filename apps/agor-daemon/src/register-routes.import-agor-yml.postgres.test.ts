@@ -11,6 +11,8 @@
  * cross-tenant read is filtered by the database rather than by the service.
  * Only the executor spawn and the branches service are stubbed.
  */
+
+import { getBranchPath } from '@agor/core/config';
 import {
   acquireTenantWriteGate,
   BoardRepository,
@@ -148,7 +150,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema).each(['HTTP', 'MCP'] as con
           environment_variant: 'dev',
           start_command: 'echo existing branch snapshot',
           branch_unique_id: Math.floor(Math.random() * 1_000_000),
-          path: `/tmp/${generateId()}`,
+          path: getBranchPath('agor-yml/fixture', generateId(), tenantId),
         });
         return { tenantId, admin, outsiderAdmin, member, repo, branch };
       });

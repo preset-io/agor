@@ -36,7 +36,7 @@ import {
 
 const JWT_SECRET = 'password-token-invalidation-test-secret';
 const ACCESS_TOKEN_TTL = '15m';
-const REFRESH_TOKEN_TTL = '30d';
+const REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60;
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -135,7 +135,7 @@ function createAuthApp(
   authentication.register('local', localStrategy);
   const apiKeysRepo = new UserApiKeysRepository(db);
   const apiKeyStrategy = new ApiKeyStrategy();
-  apiKeyStrategy.setDependencies(apiKeysRepo, usersService);
+  apiKeyStrategy.setDependencies(apiKeysRepo, usersService, db);
   authentication.register('api-key', apiKeyStrategy);
   app.use('authentication', authentication);
 
@@ -371,6 +371,41 @@ test('a refresh racing a password change can mint only an already-stale generati
 
   expect(decoded[AUTH_CREDENTIAL_GENERATION_CLAIM]).toBe(0);
   expect(() => assertUserTokenNotInvalidated(currentUser, decoded)).toThrow(/Session expired/);
+});
+
+test('refresh reissues a full pair using the configured refresh lifetime in seconds', async () => {
+  const user = {
+    user_id: 'ttl-refresh-user' as UserID,
+    email: 'ttl-refresh@example.test',
+    role: ROLES.MEMBER,
+    onboarding_completed: true,
+    must_change_password: false,
+    created_at: new Date(),
+    credential_generation: 0,
+  } as User & { credential_generation: number };
+  const refreshService = createRefreshTokenService({
+    jwtSecret: JWT_SECRET,
+    accessTokenTtl: ACCESS_TOKEN_TTL,
+    refreshTokenTtl: 604_800,
+    usersService: { get: async () => user },
+  });
+  // A token minted under the old 30-day lifetime is still honored until its
+  // own exp; the replacement it buys carries the configured lifetime.
+  const refreshToken = issueRuntimeToken(
+    { sub: user.user_id, type: 'refresh', [AUTH_CREDENTIAL_GENERATION_CLAIM]: 0 },
+    JWT_SECRET,
+    REFRESH_TOKEN_TTL
+  );
+
+  const result = await refreshService.create({ refreshToken });
+  const refresh = jwt.verify(result.refreshToken, JWT_SECRET) as jwt.JwtPayload;
+  const access = jwt.verify(result.accessToken, JWT_SECRET) as jwt.JwtPayload;
+
+  expect(refresh.type).toBe('refresh');
+  expect(Number(refresh.exp) - Number(refresh.iat)).toBe(604_800);
+  expect(access.type).toBe('access');
+  expect(Number(access.exp) - Number(access.iat)).toBe(15 * 60);
+  expect(result.refreshToken).not.toBe(refreshToken);
 });
 
 test('refresh token lookup is scoped to the tenant claim and reissues tenant-bearing tokens', async () => {

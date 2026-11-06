@@ -13,9 +13,11 @@ import {
 } from '@agor/core/gateway/discord-setup';
 import {
   buildSlackManifest,
+  normalizeAllowedChannelIds,
   requiredBotEvents,
   requiredBotScopes,
   SLACK_APPS_URL,
+  SLACK_SETUP_DEFAULTS,
   type SlackWizardOptions,
   slackAppManifestUrl,
 } from '@agor/core/gateway/slack-manifest';
@@ -68,6 +70,7 @@ import {
   EditOutlined,
   ExclamationCircleOutlined,
   GithubOutlined,
+  InboxOutlined,
   KeyOutlined,
   LoadingOutlined,
   LockOutlined,
@@ -451,7 +454,8 @@ function createStepFields(
   step: number,
   alignSlackUsers: boolean,
   alignDiscordUsers: boolean,
-  alignTeamsUsers = true
+  alignTeamsUsers = true,
+  limitSlackChannels = false
 ): string[] {
   if (step === 0) {
     const fields = ['name', 'target_branch_id', 'channel_type'];
@@ -480,6 +484,7 @@ function createStepFields(
   if (type === 'slack' && step === 1) {
     const fields = ['slack_app_name'];
     if (!alignSlackUsers) fields.push('agor_user_id');
+    if (limitSlackChannels) fields.push('allowed_channel_ids');
     return fields;
   }
   if (type === 'github' && step === 2) {
@@ -538,7 +543,7 @@ const CONNECTION_PROBE_FIELDS = new Set<string>([
   'agent_reactions',
   'agent_file_upload',
   'agent_file_download',
-  'slack_public_scope',
+  'slack_limit_channels',
   'allowed_channel_ids',
   // Shortcut probe inputs
   'shortcut_api_token',
@@ -656,6 +661,7 @@ const CompactAlert: React.FC<{
   style,
 }) => {
   const { token } = theme.useToken();
+  const headingLineHeight = Math.round(token.fontSizeSM * 1.4);
   const body =
     description == null ? undefined : expandable ? (
       <Typography.Paragraph
@@ -675,19 +681,25 @@ const CompactAlert: React.FC<{
       type={type}
       showIcon={showIcon}
       icon={icon}
-      title={
-        heading == null ? undefined : (
-          <span style={{ fontSize: token.fontSizeSM, fontWeight: 600, lineHeight: 1.4 }}>
-            {heading}
-          </span>
-        )
-      }
+      title={heading}
       description={body}
       style={style}
       styles={{
         root: { padding: '6px 10px', alignItems: heading == null ? 'center' : 'flex-start' },
-        icon: { fontSize: token.fontSizeSM, marginInlineEnd: 8 },
-        title: { marginBottom: body == null ? 0 : 2 },
+        // Center the icon on the first heading line instead of the alert's default line box.
+        icon: {
+          fontSize: token.fontSizeSM,
+          marginInlineEnd: 8,
+          ...(heading == null
+            ? {}
+            : { display: 'flex', alignItems: 'center', height: headingLineHeight }),
+        },
+        title: {
+          fontSize: token.fontSizeSM,
+          fontWeight: 600,
+          lineHeight: `${headingLineHeight}px`,
+          marginBottom: body == null ? 0 : 2,
+        },
       }}
     />
   );
@@ -1147,6 +1159,330 @@ const GatewayAgentConfigurationFields: React.FC<{
   );
 };
 
+// ============================================================================
+// Slack options (shared by the create wizard and the edit form)
+// ============================================================================
+
+/** Section titles shared by create and edit so the two screens can't drift apart. */
+const SLACK_SECTION_TITLES = {
+  listening: 'Where it listens',
+  inputs: 'What it receives',
+  agentActions: 'What agents can do',
+} as const;
+
+type SlackFormDefaults = Partial<Record<string, boolean>>;
+
+/** Create-only initial values; edit hydrates every Slack field from stored config in handleEdit. */
+const SLACK_CREATE_FORM_DEFAULTS: SlackFormDefaults = {
+  enable_channels: SLACK_SETUP_DEFAULTS.publicChannels,
+  enable_groups: SLACK_SETUP_DEFAULTS.privateChannels,
+  enable_mpim: SLACK_SETUP_DEFAULTS.groupDms,
+  slack_limit_channels: false,
+  ingest_files: SLACK_SETUP_DEFAULTS.ingestFiles,
+  inbound_reactions: SLACK_SETUP_DEFAULTS.inboundReactions,
+  agent_thread_history: SLACK_AGENT_TOOL_DEFAULTS.thread_history,
+  agent_channel_history: SLACK_AGENT_TOOL_DEFAULTS.channel_history,
+  agent_reactions: SLACK_AGENT_TOOL_DEFAULTS.reactions,
+  agent_file_upload: SLACK_AGENT_TOOL_DEFAULTS.file_upload,
+  agent_file_download: SLACK_AGENT_TOOL_DEFAULTS.file_download,
+  outbound_enabled: SLACK_SETUP_DEFAULTS.outbound,
+};
+
+/** The whitelist applies only while "Limit to specific channels" is checked. */
+function slackAllowedChannelIds(values: Record<string, unknown>): string[] {
+  if (values.slack_limit_channels === false) return [];
+  return (values.allowed_channel_ids as string[] | undefined) ?? [];
+}
+
+/** One-line summary of the Slack surfaces a channel listens on. */
+function slackListeningSummary(
+  surfaces: { publicChannels: boolean; privateChannels: boolean; groupDms: boolean },
+  limitedChannelCount: number
+): string {
+  const parts = ['DMs'];
+  if (surfaces.publicChannels) parts.push('public');
+  if (surfaces.privateChannels) parts.push('private');
+  if (surfaces.groupDms) parts.push('group DMs');
+  const summary = parts.join(', ');
+  if (limitedChannelCount === 0) return summary;
+  return `${summary} · ${limitedChannelCount} channel${limitedChannelCount === 1 ? '' : 's'} only`;
+}
+
+const SlackOptionGrid: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div
+    style={{
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+      gap: '10px 16px',
+    }}
+  >
+    {children}
+  </div>
+);
+
+const SlackOptionLabel: React.FC<{ label: string; caption: string }> = ({ label, caption }) => (
+  <span style={{ display: 'inline-flex', flexDirection: 'column' }}>
+    <span>{label}</span>
+    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+      {caption}
+    </Typography.Text>
+  </span>
+);
+
+const SlackOptionCheckbox: React.FC<{
+  name: string;
+  label: string;
+  caption: string;
+  defaults?: SlackFormDefaults;
+}> = ({ name, label, caption, defaults }) => (
+  <Form.Item
+    name={name}
+    valuePropName="checked"
+    initialValue={defaults?.[name]}
+    style={{ marginBottom: 0 }}
+  >
+    <Checkbox>
+      <SlackOptionLabel label={label} caption={caption} />
+    </Checkbox>
+  </Form.Item>
+);
+
+const SlackSectionCaption: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
+    {children}
+  </Typography.Text>
+);
+
+/** Where the bot listens, plus the channel whitelist that applies to every non-DM surface. */
+const SlackListeningFields: React.FC<{ defaults?: SlackFormDefaults }> = ({ defaults }) => {
+  const form = Form.useFormInstance();
+  const publicChannels = Boolean(
+    Form.useWatch('enable_channels', form) ?? defaults?.enable_channels
+  );
+  const privateChannels = Boolean(Form.useWatch('enable_groups', form) ?? defaults?.enable_groups);
+  const groupDms = Boolean(Form.useWatch('enable_mpim', form) ?? defaults?.enable_mpim);
+  const limitChannels = Boolean(
+    Form.useWatch('slack_limit_channels', form) ?? defaults?.slack_limit_channels
+  );
+
+  return (
+    <>
+      <SlackSectionCaption>
+        The bot only hears conversations it has been added to. In channels and group DMs, people
+        @mention it.
+      </SlackSectionCaption>
+      <SlackOptionGrid>
+        <Checkbox checked disabled>
+          <SlackOptionLabel label="Direct messages" caption="Always on" />
+        </Checkbox>
+        <SlackOptionCheckbox
+          name="enable_channels"
+          label="Public channels"
+          caption="Channels the bot is added to"
+          defaults={defaults}
+        />
+        <SlackOptionCheckbox
+          name="enable_groups"
+          label="Private channels"
+          caption="After someone invites the bot"
+          defaults={defaults}
+        />
+        <SlackOptionCheckbox
+          name="enable_mpim"
+          label="Group DMs"
+          caption="When someone adds the bot"
+          defaults={defaults}
+        />
+      </SlackOptionGrid>
+
+      <div style={{ marginTop: 16 }}>
+        <SlackOptionCheckbox
+          name="slack_limit_channels"
+          label="Limit to specific channels"
+          caption="Applies to channels, group DMs, outbound sends, agent posts, file downloads, and whole-conversation history reads. DMs are exempt everywhere except whole-conversation history reads."
+          defaults={defaults}
+        />
+        {limitChannels && (
+          <Form.Item
+            name="allowed_channel_ids"
+            style={{ margin: '8px 0 0 24px' }}
+            rules={[
+              {
+                required: true,
+                type: 'array',
+                min: 1,
+                message: 'Add at least one Slack channel ID, or turn off the limit.',
+              },
+            ]}
+            extra="Find a channel ID in Slack: channel details, then scroll to the bottom."
+          >
+            <Select
+              mode="tags"
+              placeholder="C01ABC123XY"
+              style={{ width: '100%' }}
+              tokenSeparators={[',', ' ']}
+            />
+          </Form.Item>
+        )}
+      </div>
+
+      {(publicChannels || privateChannels || groupDms) && (
+        <CompactAlert
+          type="info"
+          heading="Prompts and commands in channels need an @mention"
+          expandable
+          description="In channels, threads, and group DMs, mention the bot for prompts and commands such as !help. Direct messages need no mention. Earlier replies in the thread are read as context on the next mention."
+          style={{ marginTop: 16 }}
+        />
+      )}
+    </>
+  );
+};
+
+/** What arrives with an inbound message besides its text. */
+const SlackInputFields: React.FC<{ defaults?: SlackFormDefaults }> = ({ defaults }) => (
+  <SlackOptionGrid>
+    <SlackOptionCheckbox
+      name="ingest_files"
+      label="Attached files"
+      caption="Images and text files on incoming messages"
+      defaults={defaults}
+    />
+    <SlackOptionCheckbox
+      name="inbound_reactions"
+      label="Reactions in session threads"
+      caption="Emoji reactions become short prompts"
+      defaults={defaults}
+    />
+  </SlackOptionGrid>
+);
+
+/** Gateway MCP tools agents may call, plus proactive outbound sends. */
+const SlackAgentActionFields: React.FC<{ defaults?: SlackFormDefaults }> = ({ defaults }) => {
+  const form = Form.useFormInstance();
+  const outbound = Boolean(
+    (Form.useWatch('outbound_enabled', form) as boolean | undefined) ?? defaults?.outbound_enabled
+  );
+
+  return (
+    <>
+      <SlackOptionGrid>
+        <SlackOptionCheckbox
+          name="agent_thread_history"
+          label="Read thread history"
+          caption="The session's own Slack thread"
+          defaults={defaults}
+        />
+        <SlackOptionCheckbox
+          name="agent_channel_history"
+          label="Read channel history"
+          caption="Recent messages in the whole channel"
+          defaults={defaults}
+        />
+        <SlackOptionCheckbox
+          name="agent_reactions"
+          label="Add and remove reactions"
+          caption="Emoji on Slack messages"
+          defaults={defaults}
+        />
+        <SlackOptionCheckbox
+          name="agent_file_upload"
+          label="Upload files"
+          caption="Files and images into a channel or thread"
+          defaults={defaults}
+        />
+        <SlackOptionCheckbox
+          name="agent_file_download"
+          label="Download files"
+          caption="Files referenced in Slack history"
+          defaults={defaults}
+        />
+        <SlackOptionCheckbox
+          name="outbound_enabled"
+          label="Send proactive messages"
+          caption="Post to channels and DM people by email"
+          defaults={defaults}
+        />
+      </SlackOptionGrid>
+      {outbound && (
+        <Form.Item
+          label="Default outbound target"
+          name="default_outbound_target"
+          style={{ marginTop: 16, marginBottom: 0 }}
+          tooltip="Optional. Used when the agent omits a target. Examples: #project-updates, channel:C01ABC123, user@example.com."
+        >
+          <Input placeholder="#project-updates, channel:C01ABC123, or user@example.com" />
+        </Form.Item>
+      )}
+    </>
+  );
+};
+
+/** Derived bot scopes and events, folded so the option list stays short. */
+const SlackScopeSummary: React.FC<{
+  scopes: string[];
+  events: string[];
+  style?: React.CSSProperties;
+}> = ({ scopes, events, style }) => (
+  <CompactAlert
+    type="info"
+    heading={`Required Slack scopes and events (${scopes.length} scopes, ${events.length} events)`}
+    expandable
+    expandRows={1}
+    style={style}
+    description={
+      <div>
+        <Typography.Text type="secondary" style={{ fontSize: 'inherit' }}>
+          Derived from the options above. Channels and group DMs trigger on <code>app_mention</code>
+          , without subscribing to all channel messages.
+        </Typography.Text>
+        <div style={{ marginTop: 8 }}>
+          <Typography.Text strong style={{ fontSize: 'inherit' }}>
+            Bot scopes ({scopes.length})
+          </Typography.Text>
+          <div style={{ marginTop: 6 }}>
+            {scopes.map((s) => (
+              <Tag key={s} style={{ marginBottom: 4, fontFamily: 'monospace', fontSize: 11 }}>
+                {s}
+              </Tag>
+            ))}
+          </div>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <Typography.Text strong style={{ fontSize: 'inherit' }}>
+            Event subscriptions ({events.length})
+          </Typography.Text>
+          <div style={{ marginTop: 6 }}>
+            {events.map((e) => (
+              <Tag
+                key={e}
+                color="blue"
+                style={{ marginBottom: 4, fontFamily: 'monospace', fontSize: 11 }}
+              >
+                {e}
+              </Tag>
+            ))}
+          </div>
+        </div>
+      </div>
+    }
+  />
+);
+
+/** Plain section heading for the create wizard; edit uses collapsible panels instead. */
+const SlackOptionSection: React.FC<{
+  icon: React.ReactNode;
+  title: string;
+  children: React.ReactNode;
+}> = ({ icon, title, children }) => (
+  <div style={{ marginBottom: 24 }}>
+    <div style={{ marginBottom: 8 }}>
+      <SectionLabel icon={icon} title={title} />
+    </div>
+    {children}
+  </div>
+);
+
 /**
  * Guided Slack setup wizard shown on create. Step state is lifted to the parent
  * and navigation lives in the unified modal footer. Selections drive the derived
@@ -1189,13 +1525,15 @@ const SlackSetupWizard: React.FC<{
   const [copied, setCopied] = useState(false);
 
   const appName = (Form.useWatch('slack_app_name', form) as string) ?? '';
-  const enableChannels = Form.useWatch('enable_channels', form) ?? false;
-  const enableGroups = Form.useWatch('enable_groups', form) ?? false;
-  const enableMpim = Form.useWatch('enable_mpim', form) ?? false;
-  const alignUsers = Form.useWatch('align_slack_users', form) ?? true;
-  const outbound = Form.useWatch('outbound_enabled', form) ?? false;
-  const ingestFiles = Form.useWatch('ingest_files', form) ?? false;
-  const inboundReactions = Form.useWatch('inbound_reactions', form) ?? false;
+  const enableChannels =
+    Form.useWatch('enable_channels', form) ?? SLACK_SETUP_DEFAULTS.publicChannels;
+  const enableGroups = Form.useWatch('enable_groups', form) ?? SLACK_SETUP_DEFAULTS.privateChannels;
+  const enableMpim = Form.useWatch('enable_mpim', form) ?? SLACK_SETUP_DEFAULTS.groupDms;
+  const alignUsers = Form.useWatch('align_slack_users', form) ?? SLACK_SETUP_DEFAULTS.alignUsers;
+  const outbound = Form.useWatch('outbound_enabled', form) ?? SLACK_SETUP_DEFAULTS.outbound;
+  const ingestFiles = Form.useWatch('ingest_files', form) ?? SLACK_SETUP_DEFAULTS.ingestFiles;
+  const inboundReactions =
+    Form.useWatch('inbound_reactions', form) ?? SLACK_SETUP_DEFAULTS.inboundReactions;
   const agentThreadHistory =
     Form.useWatch('agent_thread_history', form) ?? SLACK_AGENT_TOOL_DEFAULTS.thread_history;
   const agentChannelHistory =
@@ -1206,7 +1544,6 @@ const SlackSetupWizard: React.FC<{
     Form.useWatch('agent_file_upload', form) ?? SLACK_AGENT_TOOL_DEFAULTS.file_upload;
   const agentFileDownload =
     Form.useWatch('agent_file_download', form) ?? SLACK_AGENT_TOOL_DEFAULTS.file_download;
-  const publicScope = (Form.useWatch('slack_public_scope', form) as string) ?? 'all';
 
   const wizardOptions: SlackWizardOptions = useMemo(
     () => ({
@@ -1277,35 +1614,6 @@ const SlackSetupWizard: React.FC<{
     </pre>
   );
 
-  const scopeList = (
-    <div style={{ marginBottom: 16 }}>
-      <Typography.Text strong style={{ fontSize: 12 }}>
-        Bot scopes ({scopes.length})
-      </Typography.Text>
-      <div style={{ marginTop: 6 }}>
-        {scopes.map((s) => (
-          <Tag key={s} style={{ marginBottom: 4, fontFamily: 'monospace', fontSize: 11 }}>
-            {s}
-          </Tag>
-        ))}
-      </div>
-      <Typography.Text strong style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
-        Event subscriptions ({events.length})
-      </Typography.Text>
-      <div style={{ marginTop: 6 }}>
-        {events.map((e) => (
-          <Tag
-            key={e}
-            color="blue"
-            style={{ marginBottom: 4, fontFamily: 'monospace', fontSize: 11 }}
-          >
-            {e}
-          </Tag>
-        ))}
-      </div>
-    </div>
-  );
-
   const handleCopy = async () => {
     const operation = authorityGuard.begin();
     if (!operation.isCurrent()) return;
@@ -1349,192 +1657,37 @@ const SlackSetupWizard: React.FC<{
           <Input placeholder="Agor" />
         </Form.Item>
 
-        <div style={{ marginBottom: 16 }}>
-          <Typography.Text strong style={{ fontSize: 13 }}>
-            Surfaces
-          </Typography.Text>
-          <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '4px 0 12px' }}>
-            Where the bot listens for messages.
-          </Typography.Paragraph>
+        <SlackOptionSection icon={<MessageOutlined />} title={SLACK_SECTION_TITLES.listening}>
+          <SlackListeningFields defaults={SLACK_CREATE_FORM_DEFAULTS} />
+        </SlackOptionSection>
 
-          <div style={{ marginBottom: 8 }}>
-            <Checkbox checked disabled>
-              Direct messages
-            </Checkbox>
-            <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
-              always on
-            </Typography.Text>
-          </div>
-
-          <div style={{ marginBottom: 8 }}>
-            <Form.Item name="enable_channels" valuePropName="checked" initialValue={false} noStyle>
-              <Checkbox>Public channels</Checkbox>
-            </Form.Item>
-          </div>
-          {enableChannels && (
-            <div style={{ margin: '0 0 8px 24px' }}>
-              <Form.Item name="slack_public_scope" initialValue="all" noStyle>
-                <Radio.Group>
-                  <Space orientation="vertical" size={4}>
-                    <Radio value="all">All public channels the bot is added to</Radio>
-                    <Radio value="specific">Specific channels only</Radio>
-                  </Space>
-                </Radio.Group>
-              </Form.Item>
-              {publicScope === 'specific' && (
-                <Form.Item
-                  name="allowed_channel_ids"
-                  style={{ marginTop: 8, marginBottom: 0 }}
-                  tooltip="Slack channel IDs (e.g., C01ABC123XY). Press Enter to add each ID."
-                >
-                  <Select
-                    mode="tags"
-                    placeholder="C01ABC123XY"
-                    style={{ width: '100%' }}
-                    tokenSeparators={[',', ' ']}
-                  />
-                </Form.Item>
-              )}
-            </div>
-          )}
-
-          <div style={{ marginBottom: 8 }}>
-            <Form.Item name="enable_groups" valuePropName="checked" initialValue={false} noStyle>
-              <Checkbox>Private channels</Checkbox>
-            </Form.Item>
-          </div>
-          <div>
-            <Form.Item name="enable_mpim" valuePropName="checked" initialValue={false} noStyle>
-              <Checkbox>Group DMs</Checkbox>
-            </Form.Item>
-          </div>
-        </div>
-
-        <Form.Item
-          label="Align Slack users"
-          name="align_slack_users"
-          valuePropName="checked"
-          initialValue={true}
-          tooltip="Match each Slack profile email to an Agor user. Unmatched users are rejected."
-        >
-          <Switch />
-        </Form.Item>
-        {alignUsers ? (
-          <CompactAlert
-            type="info"
-            heading="Requires users:read.email scope"
-            description="Added to the manifest automatically so Agor can match Slack profiles by email."
-            style={{ marginBottom: 16 }}
+        <SlackOptionSection icon={<TeamOutlined />} title="Identity">
+          <PlatformIdentityFields
+            alignFieldName="align_slack_users"
+            alignLabel="Align Slack users"
+            alignDescription="Match each Slack profile email to an Agor user. Unmatched users are rejected."
+            alignUsers={alignUsers}
+            userById={userById}
+            defaultAligned={SLACK_SETUP_DEFAULTS.alignUsers}
+            alignedContent={
+              <CompactAlert
+                type="info"
+                heading="Requires users:read.email scope"
+                description="Added to the manifest automatically so Agor can match Slack profiles by email."
+              />
+            }
           />
-        ) : (
-          <Form.Item
-            label="Run as"
-            name="agor_user_id"
-            rules={[{ required: true, message: 'Please select a user' }]}
-            tooltip="All sessions from this channel run as this Agor user"
-          >
-            <UserSelect userById={userById} />
-          </Form.Item>
-        )}
+        </SlackOptionSection>
 
-        <Form.Item
-          label="Ingest attached files"
-          name="ingest_files"
-          valuePropName="checked"
-          initialValue={false}
-          tooltip="Download images and text files (screenshots, logs, CSV, JSON) attached to inbound messages so session agents can read them. Adds the files:read scope."
-        >
-          <Switch />
-        </Form.Item>
+        <SlackOptionSection icon={<InboxOutlined />} title={SLACK_SECTION_TITLES.inputs}>
+          <SlackInputFields defaults={SLACK_CREATE_FORM_DEFAULTS} />
+        </SlackOptionSection>
 
-        <Form.Item
-          label="Agents can read thread history"
-          name="agent_thread_history"
-          valuePropName="checked"
-          initialValue={SLACK_AGENT_TOOL_DEFAULTS.thread_history}
-          tooltip="Let session agents fetch their own Slack thread's history through the gateway MCP tool. No extra scopes."
-        >
-          <Switch />
-        </Form.Item>
+        <SlackOptionSection icon={<ToolOutlined />} title={SLACK_SECTION_TITLES.agentActions}>
+          <SlackAgentActionFields defaults={SLACK_CREATE_FORM_DEFAULTS} />
+        </SlackOptionSection>
 
-        <Form.Item
-          label="Agents can read channel history"
-          name="agent_channel_history"
-          valuePropName="checked"
-          initialValue={SLACK_AGENT_TOOL_DEFAULTS.channel_history}
-          tooltip="Let session agents fetch recent whole-channel history through the gateway MCP tool. Adds the channels:history, groups:history, and mpim:history scopes."
-        >
-          <Switch />
-        </Form.Item>
-
-        <Form.Item
-          label="Agents can add/remove reactions"
-          name="agent_reactions"
-          valuePropName="checked"
-          initialValue={false}
-          tooltip="Let session agents add/remove emoji reactions on Slack messages through the gateway MCP tools. Adds the reactions:write scope."
-        >
-          <Switch />
-        </Form.Item>
-
-        <Form.Item
-          label="Deliver reactions to sessions"
-          name="inbound_reactions"
-          valuePropName="checked"
-          initialValue={false}
-          tooltip="When someone reacts to a message in a thread that already has a session (for example ✅ on the bot's reply), send the reaction to that session as a short prompt. Never starts a new session and is rate limited per thread. Adds the reactions:read scope and the reaction_added/reaction_removed events."
-        >
-          <Switch />
-        </Form.Item>
-
-        <Form.Item
-          label="Agents can upload files"
-          name="agent_file_upload"
-          valuePropName="checked"
-          initialValue={false}
-          tooltip="Let session agents upload files/images to a channel or thread through the gateway MCP tool. Adds the files:write scope."
-        >
-          <Switch />
-        </Form.Item>
-
-        <Form.Item
-          label="Agents can download files"
-          name="agent_file_download"
-          valuePropName="checked"
-          initialValue={false}
-          tooltip="Let session agents download image/text files referenced in Slack history through the gateway MCP tool. Adds the files:read scope."
-        >
-          <Switch />
-        </Form.Item>
-
-        <Form.Item
-          label="Enable outbound sends"
-          name="outbound_enabled"
-          valuePropName="checked"
-          initialValue={false}
-          tooltip="Allow authorized agents to send proactive Slack messages through this gateway."
-        >
-          <Switch />
-        </Form.Item>
-        {outbound && (
-          <Form.Item
-            label="Default outbound target"
-            name="default_outbound_target"
-            tooltip="Optional. Used when the agent omits a target. Examples: #project-updates, channel:C01ABC123, user@example.com."
-          >
-            <Input placeholder="#project-updates, channel:C01ABC123, or user@example.com" />
-          </Form.Item>
-        )}
-
-        <Typography.Text strong style={{ fontSize: 13 }}>
-          {`Required Slack Scopes & Events (${scopes.length} scopes, ${events.length} events)`}
-        </Typography.Text>
-        <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '4px 0 12px' }}>
-          Derived from the selected surfaces; channel-like surfaces trigger on{' '}
-          <code>app_mention</code> for prompts and <code>message.*</code> events for bare thread
-          commands. You copy the full manifest on the next step.
-        </Typography.Paragraph>
-        {scopeList}
+        <SlackScopeSummary scopes={scopes} events={events} />
       </div>
 
       {/* Step 1: Create app from manifest */}
@@ -2337,7 +2490,7 @@ const ChannelFormFields: React.FC<{
   // watched value is `undefined` while its (lazily-rendered) Collapse panel is
   // still collapsed, so on edit fall back to the channel's stored config —
   // otherwise the manifest/scope sections would render as if every surface were
-  // off until the user first expands Message Sources.
+  // off until the user first expands Where it listens.
   const slackConfig = editingChannel?.config as Record<string, unknown> | undefined;
   const enableChannels = Boolean(
     Form.useWatch('enable_channels', form) ?? slackConfig?.enable_channels
@@ -2384,7 +2537,27 @@ const ChannelFormFields: React.FC<{
   // falling back to the stored channel name.
   const channelName = (Form.useWatch('name', form) as string | undefined) ?? editingChannel?.name;
 
-  const sourcesEnabled = enableChannels || enableGroups || enableMpim;
+  const storedAllowedChannelIds = normalizeAllowedChannelIds(slackConfig?.allowed_channel_ids);
+  const limitSlackChannels = Boolean(
+    Form.useWatch('slack_limit_channels', form) ?? storedAllowedChannelIds.length > 0
+  );
+  const slackAllowedIds =
+    (Form.useWatch('allowed_channel_ids', form) as string[] | undefined) ?? storedAllowedChannelIds;
+  const slackListeningSubtitle = slackListeningSummary(
+    { publicChannels: enableChannels, privateChannels: enableGroups, groupDms: enableMpim },
+    limitSlackChannels ? slackAllowedIds.length : 0
+  );
+  const slackInputsSubtitle =
+    [ingestFiles && 'files', inboundReactions && 'reactions'].filter(Boolean).join(', ') ||
+    'message text only';
+  const slackAgentActionCount = [
+    agentThreadHistory,
+    agentChannelHistory,
+    agentReactions,
+    agentFileUpload,
+    agentFileDownload,
+    outboundEnabled,
+  ].filter(Boolean).length;
 
   // Derive the recommended manifest + required scopes/events from the channel's
   // live toggles so the edit form is a single source of truth that can never
@@ -3620,9 +3793,21 @@ const ChannelFormFields: React.FC<{
           <Collapse
             ghost
             destroyOnHidden={false}
-            defaultActiveKey={[]}
+            defaultActiveKey={['listening']}
             style={{ marginLeft: -16, marginRight: -16 }}
             items={[
+              // ── Where it listens ──
+              {
+                key: 'listening',
+                label: (
+                  <SectionLabel
+                    icon={<MessageOutlined />}
+                    title={SLACK_SECTION_TITLES.listening}
+                    subtitle={slackListeningSubtitle}
+                  />
+                ),
+                children: <SlackListeningFields />,
+              },
               // ── Identity ──
               {
                 key: 'identity',
@@ -3656,6 +3841,30 @@ const ChannelFormFields: React.FC<{
                     />
                   </>
                 ),
+              },
+              // ── What it receives ──
+              {
+                key: 'inputs',
+                label: (
+                  <SectionLabel
+                    icon={<InboxOutlined />}
+                    title={SLACK_SECTION_TITLES.inputs}
+                    subtitle={slackInputsSubtitle}
+                  />
+                ),
+                children: <SlackInputFields />,
+              },
+              // ── What agents can do ──
+              {
+                key: 'agent-actions',
+                label: (
+                  <SectionLabel
+                    icon={<ToolOutlined />}
+                    title={SLACK_SECTION_TITLES.agentActions}
+                    subtitle={`${slackAgentActionCount} of 6 on`}
+                  />
+                ),
+                children: <SlackAgentActionFields />,
               },
               // ── Credentials ──
               {
@@ -3740,279 +3949,17 @@ const ChannelFormFields: React.FC<{
                   />
                 ),
                 children: (
-                  <SlackManifestPanel
-                    options={slackOptions}
-                    appInfo={slackAppInfo}
-                    authorityGuard={authorityGuard}
-                  />
-                ),
-              },
-
-              // ── Message Sources ──
-              {
-                key: 'message-sources',
-                label: (
-                  <SectionLabel
-                    icon={<MessageOutlined />}
-                    title="Message Sources"
-                    subtitle="DMs always enabled"
-                  />
-                ),
-                children: (
                   <>
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: 12, display: 'block', marginBottom: 16 }}
-                    >
-                      Choose where the bot listens for messages. Direct messages are always enabled.
-                    </Typography.Text>
-
-                    <Form.Item
-                      label="Public Channels"
-                      name="enable_channels"
-                      valuePropName="checked"
-                      initialValue={false}
-                      tooltip="Bot will respond to messages in public channels it's added to"
-                    >
-                      <Switch />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Private Channels"
-                      name="enable_groups"
-                      valuePropName="checked"
-                      initialValue={false}
-                      tooltip="Bot will respond to messages in private channels it's added to"
-                    >
-                      <Switch />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Group DMs"
-                      name="enable_mpim"
-                      valuePropName="checked"
-                      initialValue={false}
-                      tooltip="Bot will respond to messages in multi-person direct messages"
-                    >
-                      <Switch />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Ingest attached files"
-                      name="ingest_files"
-                      valuePropName="checked"
-                      initialValue={false}
-                      tooltip="Download images and text files (screenshots, logs, CSV, JSON) attached to inbound messages so session agents can read them. Requires the files:read scope."
-                    >
-                      <Switch />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Agents can read thread history"
-                      name="agent_thread_history"
-                      valuePropName="checked"
-                      initialValue={SLACK_AGENT_TOOL_DEFAULTS.thread_history}
-                      tooltip="Let session agents fetch their own Slack thread's history through the gateway MCP tool. No extra scopes."
-                    >
-                      <Switch />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Agents can read channel history"
-                      name="agent_channel_history"
-                      valuePropName="checked"
-                      initialValue={SLACK_AGENT_TOOL_DEFAULTS.channel_history}
-                      tooltip="Let session agents fetch recent whole-channel history through the gateway MCP tool. Requires the channels:history, groups:history, and mpim:history scopes."
-                    >
-                      <Switch />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Agents can add/remove reactions"
-                      name="agent_reactions"
-                      valuePropName="checked"
-                      initialValue={false}
-                      tooltip="Let session agents add/remove emoji reactions on Slack messages through the gateway MCP tools. Requires the reactions:write scope."
-                    >
-                      <Switch />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Deliver reactions to sessions"
-                      name="inbound_reactions"
-                      valuePropName="checked"
-                      initialValue={false}
-                      tooltip="When someone reacts to a message in a thread that already has a session (for example ✅ on the bot's reply), send the reaction to that session as a short prompt. Never starts a new session and is rate limited per thread. Requires the reactions:read scope and the reaction_added/reaction_removed events."
-                    >
-                      <Switch />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Agents can upload files"
-                      name="agent_file_upload"
-                      valuePropName="checked"
-                      initialValue={false}
-                      tooltip="Let session agents upload files/images to a channel or thread through the gateway MCP tool. Requires the files:write scope."
-                    >
-                      <Switch />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Agents can download files"
-                      name="agent_file_download"
-                      valuePropName="checked"
-                      initialValue={false}
-                      tooltip="Let session agents download image/text files referenced in Slack history through the gateway MCP tool. Requires the files:read scope."
-                    >
-                      <Switch />
-                    </Form.Item>
-
-                    {sourcesEnabled && (
-                      <CompactAlert
-                        type="info"
-                        heading="Slack prompts and commands require mentions"
-                        expandable
-                        description="In channels, threads, and group DMs, mention the bot for prompts and commands such as !help. Direct messages need no mention. Missed thread replies are included as catch-up context on the next mention."
-                        style={{ marginBottom: 12 }}
-                      />
-                    )}
-
-                    <CompactAlert
-                      type="info"
-                      heading={`Required Slack Scopes & Events (${slackScopes.length} scopes, ${slackEvents.length} events)`}
-                      expandable
-                      expandRows={1}
-                      description={
-                        <div>
-                          <Typography.Text type="secondary" style={{ fontSize: 'inherit' }}>
-                            Derived from the selected surfaces; channel-like surfaces trigger on{' '}
-                            <code>app_mention</code> for prompts and commands, without subscribing
-                            to all channel messages. Copy the full manifest from the App Manifest
-                            section.
-                          </Typography.Text>
-                          <div style={{ marginTop: 8 }}>
-                            <Typography.Text strong style={{ fontSize: 'inherit' }}>
-                              Bot scopes ({slackScopes.length})
-                            </Typography.Text>
-                            <div style={{ marginTop: 6 }}>
-                              {slackScopes.map((s) => (
-                                <Tag
-                                  key={s}
-                                  style={{ marginBottom: 4, fontFamily: 'monospace', fontSize: 11 }}
-                                >
-                                  {s}
-                                </Tag>
-                              ))}
-                            </div>
-                          </div>
-                          <div style={{ marginTop: 8 }}>
-                            <Typography.Text strong style={{ fontSize: 'inherit' }}>
-                              Event subscriptions ({slackEvents.length})
-                            </Typography.Text>
-                            <div style={{ marginTop: 6 }}>
-                              {slackEvents.map((e) => (
-                                <Tag
-                                  key={e}
-                                  color="blue"
-                                  style={{ marginBottom: 4, fontFamily: 'monospace', fontSize: 11 }}
-                                >
-                                  {e}
-                                </Tag>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      }
+                    <SlackManifestPanel
+                      options={slackOptions}
+                      appInfo={slackAppInfo}
+                      authorityGuard={authorityGuard}
                     />
-                  </>
-                ),
-              },
-
-              // ── Outbound ──
-              {
-                key: 'outbound',
-                label: (
-                  <SectionLabel
-                    icon={<MessageOutlined />}
-                    title="Outbound"
-                    subtitle="proactive sends"
-                  />
-                ),
-                children: (
-                  <>
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
-                    >
-                      Allow authorized agents to send proactive Slack messages through this gateway.
-                      Targets can be Slack channel IDs, channel names, or Slack user emails.
-                    </Typography.Text>
-
-                    <Form.Item
-                      label="Enable outbound sends"
-                      name="outbound_enabled"
-                      valuePropName="checked"
-                      initialValue={false}
-                      tooltip="When enabled, branch admins/owners with full branch access can send proactive Slack messages through this gateway."
-                    >
-                      <Switch />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Default outbound target"
-                      name="default_outbound_target"
-                      tooltip="Optional. Used when the agent omits a target. Examples: #project-updates, channel:C01ABC123, user@example.com."
-                    >
-                      <Input placeholder="#project-updates, channel:C01ABC123, or user@example.com" />
-                    </Form.Item>
-
-                    <CompactAlert
-                      type="info"
-                      heading="Slack scopes"
-                      expandable
-                      description={
-                        <span>
-                          Channel-name targets require <code>channels:read</code> and, for private
-                          channels, <code>groups:read</code>. Email targets require{' '}
-                          <code>users:read.email</code> and open a DM with that Slack user.
-                        </span>
-                      }
+                    <SlackScopeSummary
+                      scopes={slackScopes}
+                      events={slackEvents}
+                      style={{ marginTop: 12 }}
                     />
-                  </>
-                ),
-              },
-
-              // ── Advanced ──
-              {
-                key: 'advanced',
-                label: (
-                  <SectionLabel
-                    icon={<ToolOutlined />}
-                    title="Advanced"
-                    subtitle="channel whitelist"
-                  />
-                ),
-                children: (
-                  <>
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
-                    >
-                      Restrict the bot to specific Slack channels by ID. Leave empty to allow all
-                      channels. Find channel IDs: right-click channel &rarr; View channel details
-                      &rarr; scroll to bottom.
-                    </Typography.Text>
-                    <Form.Item
-                      name="allowed_channel_ids"
-                      tooltip="Slack channel IDs (e.g., C01ABC123XY). Press Enter to add each ID."
-                    >
-                      <Select
-                        mode="tags"
-                        placeholder="Add channel IDs... (e.g., C01ABC123XY)"
-                        style={{ width: '100%' }}
-                        tokenSeparators={[',', ' ']}
-                      />
-                    </Form.Item>
                   </>
                 ),
               },
@@ -4319,7 +4266,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       enable_groups: values.enable_groups ?? false,
       enable_mpim: values.enable_mpim ?? false,
       align_slack_users: values.align_slack_users ?? false,
-      allowed_channel_ids: values.allowed_channel_ids ?? [],
+      allowed_channel_ids: slackAllowedChannelIds(values),
       outbound_enabled: values.outbound_enabled ?? false,
       ingest_files: values.ingest_files ?? false,
       inbound_reactions: values.inbound_reactions ?? false,
@@ -4561,7 +4508,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       config.enable_mpim = values.enable_mpim ?? false;
       config.require_mention = true;
       config.align_slack_users = values.align_slack_users ?? false;
-      config.allowed_channel_ids = values.allowed_channel_ids ?? [];
+      config.allowed_channel_ids = slackAllowedChannelIds(values);
       config.outbound_enabled = values.outbound_enabled ?? false;
       config.default_outbound_target = values.default_outbound_target || null;
       config.ingest_files = values.ingest_files ?? false;
@@ -4724,14 +4671,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         resetCreateFlow();
         return;
       }
-      // The whitelist only applies when the wizard limits public channels to a
-      // specific set; "all public channels" (or no public channels) must clear it.
-      if (
-        values.channel_type === 'slack' &&
-        (values.slack_public_scope !== 'specific' || !values.enable_channels)
-      ) {
-        values.allowed_channel_ids = [];
-      }
       const data = extractFormData(values, undefined, selectedAgent);
 
       if (!client) {
@@ -4781,7 +4720,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       createStep,
       createForm.getFieldValue('align_slack_users') ?? false,
       createForm.getFieldValue('discord_align_users') ?? false,
-      createForm.getFieldValue('teams_align_users') ?? true
+      createForm.getFieldValue('teams_align_users') ?? true,
+      createForm.getFieldValue('slack_limit_channels') ?? false
     );
     if (fields.length > 0) {
       try {
@@ -4870,7 +4810,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       formValues.enable_mpim = config?.enable_mpim ?? false;
       formValues.require_mention = true;
       formValues.align_slack_users = config?.align_slack_users ?? false;
-      formValues.allowed_channel_ids = (config?.allowed_channel_ids as string[]) ?? [];
+      formValues.allowed_channel_ids = normalizeAllowedChannelIds(config?.allowed_channel_ids);
+      formValues.slack_limit_channels = (formValues.allowed_channel_ids as string[]).length > 0;
       formValues.outbound_enabled = config?.outbound_enabled ?? false;
       formValues.default_outbound_target = config?.default_outbound_target;
       formValues.ingest_files = config?.ingest_files ?? false;

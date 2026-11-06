@@ -6,6 +6,7 @@ export type RouteSurfaceId =
   | 'knowledge'
   | 'mcp-recovery'
   | 'mcp-connect'
+  | 'mcp-oauth-return'
   | 'cli-login'
   | 'artifact-fullscreen'
   | 'demo';
@@ -98,6 +99,19 @@ export const MCP_CONNECT_SURFACE = defineSurface({
   branding: surfaceTitle('Connect MCP'),
 });
 
+export const MCP_OAUTH_RETURN_ROUTE_PATHS = ['/connect/mcp/return'] as const;
+
+/** Where a provider sign-in returns; the signed-in initiator finishes it here. */
+export const MCP_OAUTH_RETURN_SURFACE = defineSurface({
+  id: 'mcp-oauth-return',
+  label: 'MCP sign-in return',
+  routePaths: MCP_OAUTH_RETURN_ROUTE_PATHS,
+  startsWorkspaceRuntime: false,
+  usesDeviceRouter: false,
+  usesSharedUserSettings: true,
+  branding: surfaceTitle('Connect MCP'),
+});
+
 /** Browser step of `agor login`: mints a per-machine CLI key after an explicit click. */
 export const CLI_LOGIN_ROUTE_PATHS = ['/cli-login'] as const;
 
@@ -163,6 +177,7 @@ export const SURFACE_REGISTRY = [
   KNOWLEDGE_SURFACE,
   MCP_RECOVERY_SURFACE,
   MCP_CONNECT_SURFACE,
+  MCP_OAUTH_RETURN_SURFACE,
   CLI_LOGIN_SURFACE,
   ARTIFACT_FULLSCREEN_SURFACE,
   DEMO_SURFACE,

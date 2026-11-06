@@ -155,7 +155,19 @@ export function resolveMcpOAuthCallbackOrigin(
   config: AgorConfig,
   env: DeploymentEnv = process.env
 ): ResolvedMcpOAuthCallbackOrigin {
-  const raw = env.AGOR_BASE_URL ?? config.daemon?.base_url ?? config.ui?.base_url;
+  return resolveMcpOAuthCallbackUrlsForOrigin(
+    env.AGOR_BASE_URL ?? config.daemon?.base_url ?? config.ui?.base_url
+  );
+}
+
+/**
+ * Derive the direct MCP OAuth callback URLs from one trusted origin: the
+ * startup base URL, or a hosted tenant's launch-observed public base URL.
+ * Never pass a request Host or other caller-supplied value.
+ */
+export function resolveMcpOAuthCallbackUrlsForOrigin(
+  raw: string | undefined | null
+): ResolvedMcpOAuthCallbackOrigin {
   if (!raw) return { standaloneCallbackUrl: null, haCallbackUrl: null };
 
   let configured: URL;

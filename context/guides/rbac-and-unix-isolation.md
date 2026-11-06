@@ -96,7 +96,8 @@ switches are enabled. Execution-home Sessions are never shareable. Filesystem
 access is a separate `none | read | write` dimension. Terminal access is
 derived: Collaborator or Manager plus non-`none` filesystem access. Sandbox
 mounts and `{branch_fs_access}` for delegated executors use the actual prompt
-actor's effective filesystem access, never the Session owner's.
+actor's effective filesystem access, never the Session owner's. Under either,
+the daemon refuses a prompt whose actor has `none` before launching.
 
 ### Principal resolution
 
@@ -180,7 +181,12 @@ SQL predicate. A permissive `Others` role is never represented as a tenant-wide
 broadcast because a direct `No access` entry or a matched non-view group can
 suppress it for one user. ACL and group mutations invalidate daemon-local
 caches and evict affected sockets across HA; hard-delete paths snapshot the
-audience before policy rows cascade.
+audience before policy rows cascade. A write that can change only one branch's
+ACL (a board move of an `inherit` branch, or a `permission_binding` change) is
+a branch-scoped revocation instead: caches clear, that branch's terminal
+attachments retire, and user sockets stay connected because every
+branch-derived publication re-checks current visibility. No-op moves and moves
+of `override` branches only clear caches or do nothing.
 
 Internal runtime callers do not rely on provider-only Feathers hooks. Gateway
 inbound traffic checks Collaborator access before Session creation, binds a

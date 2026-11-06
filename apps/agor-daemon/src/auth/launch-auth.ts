@@ -114,9 +114,9 @@ export interface LaunchAuthServiceOptions {
   provider: ResolvedExternalLaunchProvider;
   jwtSecret: string;
   accessTokenTtl: SignOptions['expiresIn'];
-  refreshTokenTtl: SignOptions['expiresIn'];
+  refreshTokenTtl: number;
   usersService: { get(id: UserID, params?: Params): Promise<User> };
-  onAuthorizationInvalidated?: (tenantId: string) => void;
+  onAuthorizationInvalidated?: (tenantId: string, userId: UserID) => void;
 }
 
 export function resolvePublicLaunchAuthSettings(
@@ -741,7 +741,7 @@ function issueRuntimeTokens(
   user: User,
   jwtSecret: string,
   accessTokenTtl: SignOptions['expiresIn'],
-  refreshTokenTtl: SignOptions['expiresIn'],
+  refreshTokenTtl: number,
   tenantClaim = 'tenant_id',
   tenantId?: string
 ): LaunchAuthResult {
@@ -849,8 +849,9 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
           );
           if (projected.authorizationChanged) {
             // The role write and any first-run Board claim have committed.
-            // Evict every socket that may still carry the previous role.
-            options.onAuthorizationInvalidated?.(tenant.tenant_id);
+            // Evict every socket that may still carry the previous role,
+            // including this user's running agent executors.
+            options.onAuthorizationInvalidated?.(tenant.tenant_id, projected.userId);
           }
           return projected;
         });

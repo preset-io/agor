@@ -14,6 +14,7 @@ import { boards, branches } from '../schema';
 import { ownedDbTest as dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
 import { BoardObjectRepository } from './board-objects';
+import { BranchWorkspaceOverlapError } from './branch-path-overlap';
 import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
 import { ScheduleRepository } from './schedules';
@@ -353,6 +354,107 @@ describe('BranchRepository.create', () => {
     const fetched = await wtRepo.findById(created.branch_id);
     expect(fetched?.storage_mode).toBe('clone');
     expect(fetched?.clone_depth).toBe(100);
+  });
+
+  // A renamed repo slug can derive another repo's workspace path, so the
+  // fence spans every repo and lifecycle state, not just the creating repo.
+  dbTest.for([
+    ['the same workspace', '/w/org/v/feature'],
+    ['a workspace nested inside it', '/w/org/v/feature/x'],
+    ['a workspace containing it', '/w/org/v'],
+  ] as const)('refuses %s across repos', async ([, path], { db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const victim = await repoRepo.create(createRepoData({ slug: 'org/v' }));
+    const renamed = await repoRepo.create(createRepoData({ slug: 'org/r1' }));
+    await branchRepo.create(
+      createBranchData({
+        repo_id: victim.repo_id,
+        name: 'feature',
+        path: '/w/org/v/feature',
+        archived: true,
+      })
+    );
+
+    await expect(
+      branchRepo.create(createBranchData({ repo_id: renamed.repo_id, name: 'attacker', path }))
+    ).rejects.toBeInstanceOf(BranchWorkspaceOverlapError);
+    expect(await branchRepo.findAllByRepoId(renamed.repo_id as UUID)).toEqual([]);
+  });
+
+  // After the documented data_home migration, older rows name the legacy
+  // `<agor home>/worktrees` alias for the same directories new rows derive.
+  dbTest.for([
+    ['the same workspace', 'org/v/feature'],
+    ['a workspace nested inside it', 'org/v/feature/x'],
+    ['a workspace containing it', 'org/v'],
+  ] as const)('refuses %s spelled through the legacy alias', async ([, relative], { db }) => {
+    vi.stubEnv('AGOR_HOME', '/fictional/home/.agor');
+    vi.stubEnv('AGOR_DATA_HOME', '/fictional/data');
+    try {
+      const repoRepo = new RepoRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const victim = await repoRepo.create(createRepoData({ slug: 'org/v' }));
+      const renamed = await repoRepo.create(createRepoData({ slug: 'org/r1' }));
+      await branchRepo.create(
+        createBranchData({
+          repo_id: victim.repo_id,
+          name: 'feature',
+          path: '/fictional/home/.agor/worktrees/org/v/feature',
+        })
+      );
+
+      await expect(
+        branchRepo.create(
+          createBranchData({
+            repo_id: renamed.repo_id,
+            name: 'attacker',
+            path: `/fictional/data/worktrees/${relative}`,
+          })
+        )
+      ).rejects.toBeInstanceOf(BranchWorkspaceOverlapError);
+      await expect(
+        branchRepo.create(
+          createBranchData({
+            repo_id: renamed.repo_id,
+            name: 'unrelated',
+            path: '/fictional/data/worktrees/org/v/other',
+          })
+        )
+      ).resolves.toBeDefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  dbTest('names no other branch in the overlap error', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData({ slug: 'org/repo' }));
+    const hidden = await branchRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'hidden-name', path: '/w/org/repo/a' })
+    );
+    const attempt = branchRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'probe', path: '/w/org/repo/a/b' })
+    );
+    await expect(attempt).rejects.toMatchObject({
+      overlappingBranchId: hidden.branch_id,
+      message: expect.not.stringContaining('hidden-name'),
+    });
+  });
+
+  dbTest('treats LIKE metacharacters in paths literally', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData({ slug: 'org/repo' }));
+    await branchRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'a_b', path: '/w/org/repo/a_b' })
+    );
+    await expect(
+      branchRepo.create(
+        createBranchData({ repo_id: repo.repo_id, name: 'axb', path: '/w/org/repo/axb/c' })
+      )
+    ).resolves.toBeDefined();
   });
 
   // Note: storage_mode enum validation is enforced at the application
@@ -843,6 +945,7 @@ describe('BranchRepository.findByRepoAndName', () => {
       repo_id: repo2.repo_id,
       name: 'feature',
       branch_unique_id: 2,
+      path: '/home/user/.agor/repos/repo-2/feature',
     });
 
     await wtRepo.create(data1);
@@ -900,6 +1003,19 @@ describe('BranchRepository.update', () => {
     );
     await expect(branchRepo.findById(branch.branch_id)).resolves.toMatchObject({
       sdk_home: undefined,
+    });
+  });
+
+  dbTest('never changes the server-derived workspace path', async ({ db }) => {
+    const repo = await new RepoRepository(db).create(createRepoData());
+    const branchRepo = new BranchRepository(db);
+    const branch = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
+
+    await expect(
+      branchRepo.update(branch.branch_id, { path: '/data/tenants/globex/worktrees/victim' })
+    ).resolves.toMatchObject({ path: branch.path });
+    await expect(branchRepo.findById(branch.branch_id)).resolves.toMatchObject({
+      path: branch.path,
     });
   });
 

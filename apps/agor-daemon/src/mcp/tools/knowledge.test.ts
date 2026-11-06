@@ -5,6 +5,11 @@ const branchCommandMocks = vi.hoisted(() => ({
   findBranch: vi.fn(),
   ensureAccess: vi.fn(async () => 'read'),
   resolveSandboxMounts: vi.fn(async () => ({})),
+  assertManagedBranchPath: vi.fn((branchPath: unknown) => branchPath as string),
+}));
+
+vi.mock('../../utils/managed-branch-path.js', () => ({
+  assertManagedBranchPath: branchCommandMocks.assertManagedBranchPath,
 }));
 
 vi.mock('@agor/core/db', () => ({
@@ -1112,6 +1117,31 @@ describe('Knowledge MCP branch executor commands', () => {
       }),
       expect.any(Object)
     );
+    expect(branchCommandMocks.assertManagedBranchPath).toHaveBeenCalledWith(branch.path, undefined);
+  });
+
+  it('refuses to dispatch when the stored branch path fails containment', async () => {
+    branchCommandMocks.findBranch.mockResolvedValue({
+      branch_id: 'branch-1',
+      repo_id: 'repo-1',
+      path: '/data/tenants/globex/worktrees/victim-private',
+    });
+    branchCommandMocks.assertManagedBranchPath.mockImplementationOnce(() => {
+      throw new Error("Branch workspace path is outside this tenant's managed branch directory");
+    });
+    const { resolveBranchId } = await import('../resolve-ids.js');
+    vi.mocked(resolveBranchId).mockResolvedValue('branch-1' as never);
+    const { requestExecutor } = await import('../../utils/spawn-executor.js');
+    vi.mocked(requestExecutor).mockClear();
+    const tools = await captureKnowledgeTools(
+      {},
+      { app: { services: {}, service: () => ({}), get: () => ({}) } }
+    );
+
+    await expect(
+      tools.agor_kb_publish_from_worktree.handler?.({ branchId: 'branch-1', subpath: 'doc.md' })
+    ).rejects.toThrow('outside this tenant');
+    expect(requestExecutor).not.toHaveBeenCalled();
   });
 });
 

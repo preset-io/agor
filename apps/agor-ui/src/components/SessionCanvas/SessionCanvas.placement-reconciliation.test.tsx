@@ -76,6 +76,7 @@ vi.mock('reactflow', async () => {
           getZoom: () => 1,
           getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
           screenToFlowPosition: (position: { x: number; y: number }) => position,
+          flowToScreenPosition: (position: { x: number; y: number }) => position,
         });
       }, []);
       return <div data-testid="react-flow">{props.children}</div>;

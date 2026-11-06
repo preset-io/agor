@@ -1,7 +1,7 @@
 import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { DelegatedBranchWorkspaceStorage } from '@agor/core/types';
-import { resolveManagedBranchDeletionPath } from '@agor/git';
+import { resolveManagedBranchDeletionPath, resolveManagedBranchWorkspacePath } from '@agor/git';
 
 /** Cloud's checkout operations need the tenant worktrees/repos mounts, not the
  * branch-home mount required by permanent deletion. Never accept image-local
@@ -34,7 +34,7 @@ export async function verifyDelegatedWorkspaceStorage(
 
   // The shared path owner rejects root deletion, foreign-tenant targets and
   // symlinked descendants (even links to a neighboring branch in this tenant).
-  await resolveManagedBranchDeletionPath(branchPath, branchesRoot);
+  await resolveManagedBranchWorkspacePath(branchPath, branchesRoot);
   await resolveManagedBranchDeletionPath(repoPath, reposRoot);
   try {
     if ((await stat(branchPath)).dev !== worktrees.dev)

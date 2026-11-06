@@ -3,6 +3,11 @@ import {
   projectBranchWorkspaceOperation,
 } from '../../types/branch-cleanup';
 import { assertNotPrimaryTeammate } from '../primary-teammate-protection';
+import {
+  BranchWorkspaceOverlapError,
+  findOverlappingBranchPath,
+  lockBranchWorkspacePaths,
+} from './branch-path-overlap';
 import { TaskRepository } from './tasks';
 /**
  * Branch Repository
@@ -305,6 +310,13 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       const row = await runDatabaseTransaction(
         this.db,
         async (tx) => {
+          // Check and insert under one lock: two creates must not both pass and
+          // produce a nested pair, even across repos after a slug rename.
+          await lockBranchWorkspacePaths(tx);
+          if (insertData.data.path) {
+            const overlap = await findOverlappingBranchPath(tx, insertData.data.path);
+            if (overlap) throw new BranchWorkspaceOverlapError(insertData.name, overlap.branch_id);
+          }
           await admitTeammateKnowledgeReferences(tx, branch.custom_context);
           const owner = await select(tx, { user_id: users.user_id })
             .from(users)
@@ -334,6 +346,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       const baseUrl = await getBaseUrl(this.db);
       return this.rowToBranch(row, baseUrl);
     } catch (error) {
+      if (error instanceof BranchWorkspaceOverlapError) throw error;
       const msg = error instanceof Error ? error.message : String(error);
       // Surface helpful messages for common constraint violations
       if (msg.includes('FOREIGN KEY constraint failed')) {
@@ -858,6 +871,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         ...updates,
         branch_id: current.branch_id, // Never change ID
         repo_id: current.repo_id, // Never change repo
+        path: current.path, // Server-derived at creation; filesystem sinks trust it
         created_at: current.created_at, // Never change created timestamp
         updated_at: options?.preserveUpdatedAt ? current.updated_at : new Date().toISOString(),
       });

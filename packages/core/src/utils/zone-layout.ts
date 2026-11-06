@@ -8,7 +8,7 @@
  * layouts is a single write of the zone.
  */
 import type { BoardPosition, ZoneBoardObject, ZoneLayout } from '../types/board.js';
-import { BRANCH_CARD_WIDTH } from './board-placement.js';
+import { BRANCH_CARD_HEIGHT, BRANCH_CARD_WIDTH } from './board-placement.js';
 
 export const ZONE_LAYOUTS: readonly ZoneLayout[] = ['free', 'row', 'column', 'grid'];
 
@@ -23,6 +23,9 @@ export const ZONE_GRID_GAP = 20;
 export const ZONE_GRID_PADDING = 20;
 /** Space kept clear for the zone label and status above the first row. */
 export const ZONE_GRID_HEADER = 80;
+/** Smallest zone that holds one branch card under its header: the floor for resizing and fitting. */
+export const ZONE_MIN_WIDTH = BRANCH_CARD_WIDTH + 2 * ZONE_GRID_PADDING;
+export const ZONE_MIN_HEIGHT = ZONE_GRID_HEADER + BRANCH_CARD_HEIGHT + ZONE_GRID_PADDING;
 
 export type AutoZoneLayout = Exclude<ZoneLayout, 'free'>;
 
@@ -110,7 +113,7 @@ export interface ZoneGridPlan {
   positions: Map<string, BoardPosition>;
   /** Column of each item, keyed by id. */
   columns: Map<string, number>;
-  /** Zone height that fits every item, header and bottom padding included. */
+  /** Zone height that fits every item, header and bottom padding included, and at least one card. */
   contentHeight: number;
   /** Zone width that fits every column, padding included. */
   contentWidth: number;
@@ -154,7 +157,7 @@ export function planZoneGrid(
   return {
     positions,
     columns,
-    contentHeight: snapUp(bottom + ZONE_GRID_PADDING),
+    contentHeight: Math.max(ZONE_MIN_HEIGHT, snapUp(bottom + ZONE_GRID_PADDING)),
     contentWidth: zoneWidthFor(columnCount, columnWidth),
     columnWidth,
   };

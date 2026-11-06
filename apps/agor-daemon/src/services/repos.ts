@@ -28,6 +28,7 @@ import {
 import {
   BranchMaintenanceRepository,
   BranchRepository,
+  BranchWorkspaceOverlapError,
   enqueueAfterTenantDatabaseCommit,
   generateId,
   getCurrentTenantId,
@@ -83,6 +84,7 @@ import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
+import { assertManagedBranchPath, managedBranchesRoot } from '../utils/managed-branch-path.js';
 import {
   getDaemonUrl,
   requestExecutor,
@@ -841,8 +843,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     }
 
     const tenantId = (params as AuthenticatedParams | undefined)?.tenant?.tenant_id;
-    const branchPath = getBranchPath(repo.slug, data.name, tenantId);
-
+    let branchPath: string;
+    try {
+      branchPath = getBranchPath(repo.slug, data.name, tenantId);
+    } catch (error) {
+      throw new BadRequest(error instanceof Error ? error.message : String(error));
+    }
     // Path existence + branch-in-use checks have moved to the executor /
     // core git helpers — see the "filesystem preflights" note above. Both
     // `createBranch()` and `createBranchAsClone()` refuse to clobber an
@@ -872,43 +878,53 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // 1. Create git branch on filesystem
     // 2. Render environment templates with the materialized branch context
     // 3. Patch branch to 'ready' with rendered templates
-    const branchCreateParams: BranchParams | undefined = localHome
-      ? { ...params, [BRANCH_MATERIALIZATION_INTENT]: true }
-      : params;
-    let branch = (await branchesService.create(
-      {
-        repo_id: repo.repo_id,
-        name: data.name,
-        path: branchPath,
-        ref: data.ref,
-        ref_type: data.refType,
-        base_ref: data.sourceBranch,
-        base_remote_url: baseRemoteUrl,
-        new_branch: data.createBranch ?? false,
-        branch_unique_id: branchUniqueId,
-        filesystem_status: 'creating', // Will be set to 'ready' by executor
-        // Generation owning this first attempt. Fences its acknowledgements
-        // against any later retry that supersedes it.
-        provisioning_attempt_id: generateId(),
-        provisioning_operation: 'create',
-        // Environment templates are rendered after filesystem materialization.
-        // RBAC fields are intentionally omitted at creation: new branches
-        // always align with their board defaults. Overrides are a deliberate
-        // post-create action from the Branch permissions tab.
-        ...(data.environment_variant ? { environment_variant: data.environment_variant } : {}),
-        storage_mode: storageMode,
-        ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
-        sessions: [],
-        last_used: new Date().toISOString(),
-        issue_url: data.issue_url,
-        pull_request_url: data.pull_request_url,
-        notes: data.notes,
-        custom_context: data.custom_context,
-        board_id: data.boardId,
-        created_by: userId,
-      },
-      branchCreateParams
-    )) as Branch;
+    const branchCreateParams: BranchParams = { ...params, [BRANCH_MATERIALIZATION_INTENT]: true };
+    // The repository fences workspace overlap (nested in, or containing,
+    // another branch's workspace) under a lock, tenant-wide.
+    let branch = (await branchesService
+      .create(
+        {
+          repo_id: repo.repo_id,
+          name: data.name,
+          path: branchPath,
+          ref: data.ref,
+          ref_type: data.refType,
+          base_ref: data.sourceBranch,
+          base_remote_url: baseRemoteUrl,
+          new_branch: data.createBranch ?? false,
+          branch_unique_id: branchUniqueId,
+          filesystem_status: 'creating', // Will be set to 'ready' by executor
+          // Generation owning this first attempt. Fences its acknowledgements
+          // against any later retry that supersedes it.
+          provisioning_attempt_id: generateId(),
+          provisioning_operation: 'create',
+          // Environment templates are rendered after filesystem materialization.
+          // RBAC fields are intentionally omitted at creation: new branches
+          // always align with their board defaults. Overrides are a deliberate
+          // post-create action from the Branch permissions tab.
+          ...(data.environment_variant ? { environment_variant: data.environment_variant } : {}),
+          storage_mode: storageMode,
+          ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
+          sessions: [],
+          last_used: new Date().toISOString(),
+          issue_url: data.issue_url,
+          pull_request_url: data.pull_request_url,
+          notes: data.notes,
+          custom_context: data.custom_context,
+          board_id: data.boardId,
+          created_by: userId,
+        },
+        branchCreateParams
+      )
+      .catch((error: unknown) => {
+        if (error instanceof BranchWorkspaceOverlapError) {
+          console.warn(
+            `[repos.createBranch] ${repo.repo_id} branch '${error.branchName}' overlaps branch ${error.overlappingBranchId}`
+          );
+          throw new Conflict(error.message);
+        }
+        throw error;
+      })) as Branch;
 
     if (data.boardId) {
       const boardObjectsService = this.app.service('board-objects');
@@ -1071,6 +1087,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // late terminal patch may write over the newer attempt.
     const attemptId = branch.provisioning_attempt_id;
     try {
+      // Historical rows may predate server-derived paths; never materialize them.
+      const branchesTenantId = tenantId ?? params?.tenant?.tenant_id;
+      // A legacy alias row walks from its alias root, as the daemon checked it.
+      const branchesRoot = managedBranchesRoot(branch.path, branchesTenantId);
       const sessionToken = await issueExecutorCommandToken(
         this.app,
         'git.branch.add',
@@ -1099,6 +1119,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             params: {
               branchId: branch.branch_id,
               repoId: repo.repo_id,
+              branchesRoot,
               userId: userId as string | undefined,
               principalBranchAccess: 'write',
               // Echoed back on the executor's terminal patch so a superseded
@@ -1554,7 +1575,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         repoId: repo.repo_id,
         branchId: branch.branch_id,
         ...params,
-        cwd: branch.path,
+        cwd: assertManagedBranchPath(branch.path, tenantId),
         principalBranchAccess: branchFsAccess,
         ...sandboxMounts,
       },

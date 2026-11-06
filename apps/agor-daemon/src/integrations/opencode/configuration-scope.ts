@@ -7,6 +7,7 @@ import {
 import { BadRequest, Forbidden } from '@agor/core/feathers';
 import type { AuthenticatedParams, UUID } from '@agor/core/types';
 import { hasBranchPermission } from '../../utils/branch-authorization.js';
+import { assertManagedBranchPath } from '../../utils/managed-branch-path.js';
 import type { AuthenticatedOpenCodeSubjectContext } from './credential-namespace.js';
 
 type ConfigurationQuery = { branch_id?: unknown };
@@ -54,6 +55,6 @@ export async function resolveOpenCodeConfigurationDirectory(input: {
     ) {
       throw new Forbidden('OpenCode configuration branch is not authorized.');
     }
-    return branch.path;
+    return assertManagedBranchPath(branch.path, input.context.tenantId);
   });
 }

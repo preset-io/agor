@@ -1,3 +1,4 @@
+import { getBranchPath } from '@agor/core/config';
 import { BranchRepository, CapabilityPolicyRepository } from '@agor/core/db';
 import { Forbidden, feathers } from '@agor/core/feathers';
 import type { Branch, BranchPermissionLevel } from '@agor/core/types';
@@ -10,6 +11,7 @@ import {
   type McpPromptProvenanceStamp,
   resolvePromptProvenance,
 } from '../../utils/prompt-provenance.js';
+import { requestExecutor } from '../../utils/spawn-executor.js';
 import { registerBranchTools } from './branches.js';
 
 vi.mock('../../utils/executor-delegated-home.js', () => ({
@@ -2262,7 +2264,9 @@ describe('agor_branches_cleanup_candidates', () => {
       last_used: '2026-05-19T00:00:00.000Z',
       filesystem_status: overrides.filesystem_status,
       storage_mode: overrides.storage_mode ?? 'worktree',
-      path: overrides.path ?? process.cwd(),
+      path:
+        overrides.path ??
+        getBranchPath('preset-io/agor', String(overrides.branch_id ?? 'branch-1')),
       pull_request_url: overrides.pull_request_url,
       issue_url: overrides.issue_url,
       notes: overrides.notes,
@@ -2372,6 +2376,54 @@ describe('agor_branches_cleanup_candidates', () => {
     });
   });
 
+  it('never probes a stored path outside the tenant branch root', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-03T00:00:00.000Z'));
+    vi.mocked(requestExecutor).mockClear();
+    const { app } = makeCleanupApp([
+      makeBranch({ branch_id: 'managed', filesystem_status: 'cleaned' }),
+      makeBranch({
+        branch_id: 'foreign',
+        filesystem_status: 'cleaned',
+        path: '/home/agor/.agor/tenants/globex/worktrees/victim-private',
+      }),
+    ]);
+    const cleanupCandidates = registerAndCaptureHandler('agor_branches_cleanup_candidates', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const parsed = JSON.parse(
+      (await cleanupCandidates({ archivedOlderThanDays: 1, filesystemStatuses: ['cleaned'] }))
+        .content[0].text
+    );
+
+    expect(vi.mocked(requestExecutor)).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { branchIds: ['managed'] } }),
+      expect.anything()
+    );
+    expect(parsed.candidates).toContainEqual(
+      expect.objectContaining({
+        branch_id: 'foreign',
+        path_exists: null,
+        path_error: 'outside_managed_branch_root',
+      })
+    );
+    const deletable = JSON.parse(
+      (
+        await cleanupCandidates({
+          archivedOlderThanDays: 1,
+          filesystemStatuses: ['cleaned'],
+          pathExists: false,
+        })
+      ).content[0].text
+    );
+    expect(deletable.candidates.map((c: { branch_id: string }) => c.branch_id)).not.toContain(
+      'foreign'
+    );
+  });
+
   it('supports explicit filters and pagination after safety filtering', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-03T00:00:00.000Z'));
@@ -2381,25 +2433,21 @@ describe('agor_branches_cleanup_candidates', () => {
         branch_id: 'missing-clone-a',
         storage_mode: 'clone',
         filesystem_status: 'cleaned',
-        path: '/tmp/agor-definitely-missing-a',
       }),
       makeBranch({
         branch_id: 'missing-clone-b',
         storage_mode: 'clone',
         filesystem_status: 'cleaned',
-        path: '/tmp/agor-definitely-missing-b',
       }),
       makeBranch({
         branch_id: 'existing-clone',
         storage_mode: 'clone',
         filesystem_status: 'cleaned',
-        path: process.cwd(),
       }),
       makeBranch({
         branch_id: 'missing-worktree',
         storage_mode: 'worktree',
         filesystem_status: 'cleaned',
-        path: '/tmp/agor-definitely-missing-c',
       }),
     ]);
 

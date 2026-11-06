@@ -74,6 +74,7 @@ import { AGOR_RUNTIME_SOURCE } from '../utils/agor-runtime-source.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
+import { assertManagedBranchPath } from '../utils/managed-branch-path.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
 import {
   detectLegacyFormat,
@@ -327,6 +328,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * same mount family. Keep this caller-specific resolver local until a shared
    * helper can preserve each path's DB/tenant contract with integration tests.
    */
+  /** Revalidate the stored branch path against the active tenant's branch root. */
+  private branchWorkspacePath(branch: Branch, params: ArtifactParams): string {
+    const tenantId = params.tenant?.tenant_id ?? getCurrentTenantId();
+    return assertManagedBranchPath(branch.path, tenantId ? String(tenantId) : undefined);
+  }
+
   private async resolveExecutorSandboxMounts(
     branch: Branch,
     userId: UserID,
@@ -621,7 +628,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           branchId: branch.branch_id,
           subpath: data.subpath,
           publishData: data,
-          cwd: branch.path,
+          cwd: this.branchWorkspacePath(branch, params),
           principalBranchAccess: branchFsAccess,
           ...sandboxMounts,
         },
@@ -1109,7 +1116,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           artifactId,
           subpath: options.subpath,
           overwrite: options.overwrite,
-          cwd: branch.path,
+          cwd: this.branchWorkspacePath(branch, params),
           principalBranchAccess: branchFsAccess,
           ...sandboxMounts,
         },
@@ -1420,7 +1427,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const { grants, artifact, userId } = input;
 
     if (grants.agor_api_url) {
-      out[GRANT_ENV_VAR_NAMES.agor_api_url] = await getDaemonBaseUrl();
+      // Tenant-scoped in hosted mode: the viewer's API key only authenticates
+      // against their own workspace's host. A hosted tenant with no routing
+      // yet resolves to '' — the key is emitted empty, never the cell origin.
+      out[GRANT_ENV_VAR_NAMES.agor_api_url] = await getDaemonBaseUrl(this.dbRef);
     }
     if (grants.agor_user_email && userId) {
       try {
@@ -1847,7 +1857,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         params: {
           branchId: branch.branch_id,
           subpath: input.subpath,
-          cwd: branch.path,
+          cwd: this.branchWorkspacePath(branch, params),
           principalBranchAccess: branchFsAccess,
           ...sandboxMounts,
         },

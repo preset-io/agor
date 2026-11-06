@@ -60,7 +60,7 @@ beforeEach(async () => {
     archived: false,
     needs_attention: false,
     repo_id: repo.repo_id,
-    path: join(root, 'teammate'),
+    path: join(root, 'org', 'repo', 'teammate'),
     name: 'teammate' as Branch['name'],
     ref: 'teammate',
     new_branch: true,
@@ -77,6 +77,7 @@ beforeEach(async () => {
     params: {
       branchId: branch.branch_id,
       repoId: repo.repo_id,
+      branchesRoot: root,
       provisioningAttemptId: 'attempt',
       allowExistingCheckout: false,
       useReference: false,
@@ -238,7 +239,7 @@ it.each(['missing remote', 'missing branch'])(
 it('retains selected remote provenance on retry after resolution but before materialization', async () => {
   const git = simpleGit(repo.local_path);
   // Worktree creation fails after the provenance report, without touching local work.
-  await mkdir(branch.path);
+  await mkdir(branch.path, { recursive: true });
   await writeFile(join(branch.path, 'keep'), 'unrelated files');
   expect((await handleGitBranchAdd(payload, {})).success).toBe(false);
   expect(branch.base_sha).toBe(remoteSha);

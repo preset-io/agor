@@ -136,13 +136,15 @@ export async function exerciseDeletionRecovery(raw: Database, dialect: 'sqlite' 
       'workspace_unsettled',
       'sdk_home_unsettled',
     ] as const) {
-      const { branch, user } = await scoped(seedEnvironmentCommandBranch);
-      const workspace = join(root, 'worktrees', branch.branch_id);
+      const workspaceId = generateId();
+      const workspace = join(root, 'worktrees', 'org', 'repo', workspaceId);
+      const { branch, user } = await scoped((tx) =>
+        seedEnvironmentCommandBranch(tx, { path: workspace })
+      );
       const home = join(root, 'branch-homes', branch.branch_id);
       await mkdir(workspace, { recursive: true });
       await mkdir(home, { recursive: true });
       await writeFile(join(workspace, 'owned.txt'), 'fixture');
-      await scoped((tx) => new BranchRepository(tx).update(branch.branch_id, { path: workspace }));
       let removedSessionId: SessionID | undefined;
       if (scenario === 'lost_data_response') {
         removedSessionId = (

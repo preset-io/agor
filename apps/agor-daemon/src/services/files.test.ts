@@ -1,3 +1,4 @@
+import { getBranchPath } from '@agor/core/config';
 import {
   BranchRepository,
   getCurrentTenantDatabaseScope,
@@ -8,6 +9,8 @@ import {
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { requestExecutor } from '../utils/spawn-executor.js';
 import { FilesService } from './files.js';
+
+const BRANCH_PATH = getBranchPath('org/repo', 'branch-1');
 
 vi.mock('../utils/executor-delegated-home.js', () => ({
   resolveDelegatedExecutionHomeKey: vi.fn(async () => undefined),
@@ -63,7 +66,7 @@ describe('FilesService tenant scope', () => {
         session: { session_id: 'session-1', branch_id: 'branch-1' },
         branch: {
           branch_id: 'branch-1',
-          path: '/tenant-a/branch-1',
+          path: BRANCH_PATH,
           repo_id: 'repo-1',
           storage_mode: 'worktree',
           primary_owner_user_id: 'owner-2',
@@ -129,7 +132,7 @@ describe('FilesService tenant scope', () => {
         session: { session_id: 'session-1', branch_id: 'branch-1' },
         branch: {
           branch_id: 'branch-1',
-          path: '/tenant-a/branch-1',
+          path: BRANCH_PATH,
           repo_id: 'repo-1',
           storage_mode: 'worktree',
         },
@@ -141,7 +144,7 @@ describe('FilesService tenant scope', () => {
       expect.objectContaining({
         command: 'branch.files.list',
         params: expect.objectContaining({
-          cwd: '/tenant-a/branch-1',
+          cwd: BRANCH_PATH,
           principalBranchAccess: 'read',
         }),
       }),
@@ -186,7 +189,7 @@ describe('FilesService tenant scope', () => {
         service.find({
           query: { sessionId: 'session-1' as never, search: 'readme' },
           session: { session_id: 'session-1', branch_id: 'branch-1' },
-          branch: { branch_id: 'branch-1', path: '/tenant-a/branch-1' },
+          branch: { branch_id: 'branch-1', path: BRANCH_PATH },
           user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
         } as never)
       )

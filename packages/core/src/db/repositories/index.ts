@@ -13,6 +13,7 @@ export * from './board-objects';
 export * from './boards';
 export * from './branch-access';
 export * from './branch-maintenance';
+export { BranchWorkspaceOverlapError } from './branch-path-overlap';
 export * from './branch-workspace-operations';
 export * from './branches';
 export * from './capability-policies';

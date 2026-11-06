@@ -129,7 +129,7 @@ describe('concrete deletion command with disposable storage', () => {
       const { handleBranchDelete } = await import('./branch-deletion');
       const root = await mkdtemp(join(tmpdir(), 'agor-delete-fixture-'));
       const id = '01900000-0000-7000-8000-000000000001';
-      const workspace = join(root, 'branches', 'victim');
+      const workspace = join(root, 'branches', 'org', 'repo', 'victim');
       const home = join(root, unsafeHome === 'shared_home' ? 'home' : 'branch-homes', id);
       const neighbor = join(root, 'branches', 'neighbor');
       const log = vi.spyOn(console, 'error').mockImplementation(() => {});

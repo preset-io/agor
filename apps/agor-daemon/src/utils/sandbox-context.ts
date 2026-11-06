@@ -8,7 +8,7 @@
  * See `context/guides/rbac-and-unix-isolation.md`.
  */
 
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import {
   type AgorConfig,
@@ -26,17 +26,37 @@ export interface SandboxStoragePaths {
   ownerHomesRoot: string;
 }
 
-/** Canonicalize the deepest existing ancestor while retaining an uncreated suffix. */
-function canonicalizeProspectivePath(path: string): string {
+/**
+ * Canonicalize the deepest existing ancestor while retaining an uncreated
+ * suffix. A dangling symlink is an existing entry, not an uncreated one, so it
+ * fails closed instead of being trusted as the path its name spells.
+ */
+export function canonicalizeProspectivePath(path: string): string {
   let ancestor = resolve(path);
   const suffix: string[] = [];
-  while (!existsSync(ancestor)) {
+  while (!pathEntryExists(ancestor)) {
     const parent = dirname(ancestor);
     if (parent === ancestor) return resolve(path);
     suffix.unshift(basename(ancestor));
     ancestor = parent;
   }
-  return join(realpathSync(ancestor), ...suffix);
+  try {
+    return join(realpathSync(ancestor), ...suffix);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    throw new Error(`Path traverses a dangling symlink: ${ancestor}`);
+  }
+}
+
+function pathEntryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+    throw error;
+  }
 }
 
 /** Resolve tenant-aware sandbox storage paths from the immutable config snapshot. */

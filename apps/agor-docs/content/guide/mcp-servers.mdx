@@ -125,7 +125,7 @@ Catalog's pre-connect readiness is advisory from catalog and saved-connection da
 - **Bearer token:** Catalog accepts this only when the checked-in catalog explicitly prescribes the reviewed bearer scheme. The token is verified against the catalog endpoint before storage. A generic `401` or `403` is not proof that a bearer token will work. A provider may advertise OAuth and separately document bearer tokens; that route is allowed only through the entry's explicit `oauth_challenge_compatible: true` review flag (GitHub is the current example), never inferred from the challenge. Some entries send the token the way the vendor documents it, such as PagerDuty's `Authorization: Token token=…`, and some ask for extra values next to it, such as an environment ID. The drawer shows those fields; they are stored with the token and hidden on every read.
 - **Unknown:** Agor checks the endpoint at connect time. If it has changed to OAuth or open access, the drawer updates. An unreviewed custom-header, Basic, multi-key, or signed scheme is refused.
 
-For unsupported schemes, or a server that is not in the Catalog, use **My Servers → Add custom server** to enter its URL and authentication manually. **My Servers** lists your own servers plus the **Shared** (workspace) servers you may manage: admins always, and members when the workspace MCP policy lets them add shared servers. Custom headers still support alternatives such as Datadog API/application-key pairs; Catalog's Datadog entry uses Datadog's recommended browser OAuth flow instead of asking users to manage a long-lived PAT or SAT. That card targets Datadog's US1 MCP endpoint. Other Datadog sites need their regional endpoint configured manually, and an organisation may need to allow-list the Agor callback under **MCP OAuth Redirect URLs** before sign-in completes.
+For unsupported schemes, or a server that is not in the Catalog, use **Add custom server** (beside the MCP Catalog's tabs, or in the Catalog's no-match state) to enter its URL and authentication manually; afterward, **My Servers → Settings → Edit configuration** changes its name, URL, transport, or authentication. **My Servers** tags each server **Private** or **Shared** and lists your own servers plus the **Shared** (workspace) servers you may manage: admins always, and members when the workspace MCP policy lets them add shared servers. Custom headers still support alternatives such as Datadog API/application-key pairs; Catalog's Datadog entry uses Datadog's recommended browser OAuth flow instead of asking users to manage a long-lived PAT or SAT. That card targets Datadog's US1 MCP endpoint. Other Datadog sites need their regional endpoint configured manually, and an organisation may need to allow-list the Agor callback under **MCP OAuth Redirect URLs** before sign-in completes.
 
 Datadog now uses its [documented US1 endpoint](https://github.com/datadog-labs/mcp-server),
 `https://mcp.datadoghq.com/v1/mcp`, without additional toolsets or permissions.
@@ -395,10 +395,24 @@ Agor authenticates your app at the provider's token endpoint with HTTP Basic,
 or with form-body credentials for providers that accept only those (Slack,
 HubSpot), and refreshes the same way.
 
+### Finishing sign-in
+
+After you approve access at the provider, the browser returns to the daemon's
+OAuth callback, which hands it to your Agor workspace (`/ui/connect/mcp/return`)
+to finish connecting. Only the Agor user who started the connection can finish
+it, signed in to that workspace. If you are signed out when you return, sign in
+in the same browser tab and the connection finishes afterwards. Self-hosted installs use the same workspace
+address as other Agor links (`AGOR_BASE_URL`, then `ui.base_url`, then
+`daemon.base_url`); if the UI runs on its own origin, such as a separate dev
+server, point `ui.base_url` at it.
+
 ### Stable hosted callback
 
-By default the redirect URI is this daemon's own OAuth callback. An operator can
-instead route customer-owned app callbacks through a stable Agor Cloud origin.
+By default the redirect URI is this daemon's own OAuth callback. On a hosted
+multi-tenant deployment it is the workspace's own origin
+(`https://<workspace host>/mcp-servers/oauth-callback`), so allowlist that URL
+for providers that require one. An operator can instead route customer-owned app
+callbacks through a stable Agor Cloud origin.
 Providers that only accept pre-approved callback URLs for Dynamic Client
 Registration also use it once they have approved Agor's. All other OAuth servers
 (including other DCR and pre-registered ones) keep the daemon's own callback:
