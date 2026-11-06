@@ -34,7 +34,7 @@ export const SessionHistoryPicker: React.FC<SessionHistoryPickerProps> = ({
           : 0),
       0
     );
-    return `${sessions.toLocaleString()} ${PACK_COPY.cntSessions}, ${megabytes(bytes)} MB`;
+    return `${sessions.toLocaleString()} ${sessions === 1 ? 'session' : PACK_COPY.cntSessions}, ${megabytes(bytes)} MB`;
   };
   const option = (mode: AgorPackSessionMode, label: string) => ({
     value: mode,

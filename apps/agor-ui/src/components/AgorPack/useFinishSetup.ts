@@ -24,7 +24,7 @@ import {
 } from '../../store/selectors';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { hasConfiguredCredentialFor } from '../OnboardingBanners/bannerLogic';
-import { toolAccountLabel } from './packCheck';
+import { reconnectItems } from './packCheck';
 import { fill, PACK_COPY } from './packCopy';
 
 export interface FinishSetupItem {
@@ -76,58 +76,58 @@ export function finishSetupItems(input: {
   channels: GatewayChannel[];
 }): FinishSetupItem[] {
   const { requirements, name, user, servers, authedIds, channels } = input;
-  const out: FinishSetupItem[] = [];
-  for (const tool of requirements.agentic_tools) {
-    out.push({
-      key: `account:${tool}`,
-      kind: 'account',
-      tool,
-      label: toolAccountLabel(tool),
-      usedBy: [fill(PACK_COPY.fsClaudeUse, { name })],
-      done: input.credentialFor(tool),
-    });
-  }
-  for (const required of requirements.mcp_servers) {
-    const server =
-      servers.find(
-        (s) => required.catalog_entry_name && s.catalog_entry_name === required.catalog_entry_name
-      ) ?? servers.find((s) => s.name === required.name);
-    out.push({
-      key: `mcp:${required.name}`,
-      kind: 'mcp',
-      label: required.display_name ?? required.name,
-      catalogEntryName: required.catalog_entry_name,
-      usedBy: required.used_by.map(usedByLine).filter((line): line is string => !!line),
-      done: Boolean(server && server.enabled !== false && !mcpServerNeedsAuth(server, authedIds)),
-    });
-  }
   const userEnv = (user?.env_vars ?? {}) as Record<string, { set?: boolean }>;
-  for (const env of requirements.env_vars) {
-    // The exporter's personal variables travel too; only the used ones count here.
-    if (env.used_by.every((use) => use === 'user')) continue;
-    out.push({
-      key: `env:${env.name}`,
-      kind: 'env',
-      label: env.name,
-      envName: env.name,
-      envScope: env.scope,
-      usedBy: env.used_by.map(usedByLine).filter((line): line is string => !!line),
-      done: Boolean(userEnv[env.name]?.set),
-    });
-  }
-  for (const required of requirements.gateway_channels) {
-    out.push({
-      key: `channel:${required.channel_type}:${required.name}`,
-      kind: 'channel',
-      label: capitalize(required.channel_type),
-      usedBy: [required.name],
-      done: channels.some(
-        (channel) =>
-          channel.target_branch_id === input.branchId &&
-          channel.channel_type === required.channel_type &&
-          channel.enabled
-      ),
-    });
+  // The same items, in the same order, as the Check report's reconnect chips.
+  const out: FinishSetupItem[] = [];
+  for (const item of reconnectItems([requirements])) {
+    if (item.kind === 'account') {
+      out.push({
+        key: item.key,
+        kind: 'account',
+        tool: item.tool,
+        label: item.label,
+        usedBy: [fill(PACK_COPY.fsClaudeUse, { name })],
+        done: input.credentialFor(item.tool),
+      });
+    } else if (item.kind === 'mcp') {
+      const required = item.server;
+      const server =
+        servers.find(
+          (s) => required.catalog_entry_name && s.catalog_entry_name === required.catalog_entry_name
+        ) ?? servers.find((s) => s.name === required.name);
+      out.push({
+        key: item.key,
+        kind: 'mcp',
+        label: item.label,
+        catalogEntryName: required.catalog_entry_name,
+        usedBy: required.used_by.map(usedByLine).filter((line): line is string => !!line),
+        done: Boolean(server && server.enabled !== false && !mcpServerNeedsAuth(server, authedIds)),
+      });
+    } else if (item.kind === 'channel') {
+      const required = item.channel;
+      out.push({
+        key: item.key,
+        kind: 'channel',
+        label: item.label,
+        usedBy: [required.name],
+        done: channels.some(
+          (channel) =>
+            channel.target_branch_id === input.branchId &&
+            channel.channel_type === required.channel_type &&
+            channel.enabled
+        ),
+      });
+    } else {
+      out.push({
+        key: item.key,
+        kind: 'env',
+        label: item.label,
+        envName: item.env.name,
+        envScope: item.env.scope,
+        usedBy: item.env.used_by.map(usedByLine).filter((line): line is string => !!line),
+        done: Boolean(userEnv[item.env.name]?.set),
+      });
+    }
   }
   return out;
 }

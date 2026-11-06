@@ -508,27 +508,28 @@ export class AgorPackExporter {
       const large: AgorPackPreflightTeammate['large_attachments'] = [];
       for (const session of all) {
         const { file, lines, redacted } = await this.serializeSession(session, new Set());
-        const bytes =
-          Buffer.byteLength(JSON.stringify(file)) +
-          lines.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0);
         const isOwn = session.created_by === this.ctx.user.user_id;
         const isRecent = Date.parse(session.last_updated) >= since;
-        sessionBytes[isOwn ? 'own' : 'others'] += bytes;
-        if (isRecent) sessionBytes[isOwn ? 'recent_own' : 'recent_others'] += bytes;
-        for (const line of lines) {
-          for (const match of line.matchAll(UPLOAD_LINK)) {
-            const row = await this.unit(() =>
-              new UploadRepository(this.ctx.db).findOwned(this.ctx.tenantId, match[1] as UploadRef)
-            );
-            if (
-              row?.status === 'active' &&
-              row.sessionId === session.session_id &&
-              row.size > AGOR_PACK.maxEntryBytes
-            ) {
-              large.push({ name: row.displayName, size: row.size, own: isOwn, recent: isRecent });
-            }
+        // The transcript plus the attachments it carries (the bulk of most packs).
+        let bytes =
+          Buffer.byteLength(JSON.stringify(file)) +
+          lines.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0);
+        const refs = new Set(
+          lines.flatMap((line) => [...line.matchAll(UPLOAD_LINK)].map((m) => m[1]))
+        );
+        for (const ref of refs) {
+          const row = await this.unit(() =>
+            new UploadRepository(this.ctx.db).findOwned(this.ctx.tenantId, ref as UploadRef)
+          );
+          if (row?.status !== 'active' || row.sessionId !== session.session_id) continue;
+          if (row.size > AGOR_PACK.maxEntryBytes) {
+            large.push({ name: row.displayName, size: row.size, own: isOwn, recent: isRecent });
+          } else {
+            bytes += row.size;
           }
         }
+        sessionBytes[isOwn ? 'own' : 'others'] += bytes;
+        if (isRecent) sessionBytes[isOwn ? 'recent_own' : 'recent_others'] += bytes;
         if (redacted > 0) {
           flagged.push({
             session_id: session.session_id,

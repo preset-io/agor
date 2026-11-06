@@ -13,11 +13,12 @@ import {
 import { RowActionsShownContext } from '../SessionRow';
 import { ExportPackModal } from './ExportPackModal';
 import { ExportPackPanel } from './ExportPackPanel';
-import { scheduleStateLine } from './FinishSetup';
+import { finishSetupLead, scheduleStateLine } from './FinishSetup';
 import { ImportedSessionLine } from './ImportedSessionBar';
 import { ImportedSessionTag } from './ImportedSessionTag';
 import { ImportPackSection } from './ImportPackSection';
 import { checkFromPreflight, checkFromReceipt } from './packCheck';
+import { SessionHistoryPicker } from './SessionHistoryPicker';
 import { finishSetupItems } from './useFinishSetup';
 
 const MB = 1024 * 1024;
@@ -217,7 +218,10 @@ const receipt: AgorPackImport = {
       display_name: 'Ada',
       repo_status: 'framework',
       already_imported_branch_id: null,
-      warnings: ['Environment "dev" uses docker; it won\'t run in Agor Cloud.'],
+      warnings: [
+        'Environment "dev" uses docker; it won\'t run in Agor Cloud.',
+        "Some environment variants won't run in Agor Cloud as configured.",
+      ],
     },
   ],
   manifest: {
@@ -288,6 +292,8 @@ describe('ImportPackSection', () => {
       screen.getByText('Passwords, API keys and sign-ins aren’t in the file.')
     ).toBeInTheDocument();
     expect(screen.getByText('Ada: 1 archived artifact skipped')).toBeInTheDocument();
+    // Docker shows once, as the structured "Won't work" item.
+    expect(screen.queryByText(/variants won't run in Agor Cloud as configured/)).toBeNull();
     expect(
       screen.getByText('After you switch over, pause Ada’s schedules on Community Edition.')
     ).toBeInTheDocument();
@@ -299,7 +305,9 @@ describe('ImportPackSection', () => {
         skip_flagged_sessions: true,
       })
     );
-    expect(await screen.findByText('Importing')).toBeInTheDocument();
+    // The file and its teammate row both say Importing (not Moving).
+    expect((await screen.findAllByText('Importing')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('Moving')).toBeNull();
     expect(
       screen.getByText('You can close this window. The import keeps going.')
     ).toBeInTheDocument();
@@ -345,9 +353,15 @@ describe('Finish setup', () => {
       ['Claude account', false],
       ['Notion', true],
       ['jenkins', false],
-      ['SHORTCUT_API_TOKEN', true],
       ['Slack', false],
+      ['SHORTCUT_API_TOKEN', true],
+      // A user-level variable the importer must set is listed too.
+      ['PERSONAL_ONLY', false],
     ]);
+    // The same list as the Check report's reconnect chips.
+    expect(list.map((item) => item.label)).toEqual(
+      checkFromPreflight([ada], 'last_90_days', false, true).reconnect
+    );
     expect(list[0]?.usedBy).toEqual([
       'Ada can’t reply without it. Set up in your Agor Cloud account.',
     ]);
@@ -394,5 +408,25 @@ describe('Imported sessions', () => {
       </RowActionsShownContext.Provider>
     );
     expect(screen.getByText('Imported')).toHaveStyle({ opacity: '0' });
+  });
+});
+
+describe('copy details', () => {
+  it('says "1 session" and names schedules in the Finish setup lead only when there are some', () => {
+    mount(
+      <SessionHistoryPicker
+        value="last_90_days"
+        onChange={vi.fn()}
+        preflight={[{ ...ada, sessions: { ...ada.sessions, recent_own: 1 } }]}
+        includeOthers={false}
+      />
+    );
+    expect(screen.getByText('1 session, 12 MB')).toBeInTheDocument();
+    expect(finishSetupLead({ name: 'Wendy', schedules: [] })).toBe(
+      'Reconnect your accounts so Wendy can work.'
+    );
+    expect(finishSetupLead({ name: 'Ada', schedules: [{} as Schedule] })).toBe(
+      'Reconnect your accounts so Ada’s schedules can run.'
+    );
   });
 });

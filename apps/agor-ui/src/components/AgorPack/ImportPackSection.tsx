@@ -262,7 +262,9 @@ export const ImportPackSection: React.FC<ImportPackSectionProps> = ({ selfHosted
               [
                 ...(receipt.dry_run.find((d) => d.key === teammate.key)?.warnings ?? []).filter(
                   // Environment problems are in "Won't work in Agor Cloud yet".
-                  (warning) => !warning.startsWith('Environment "')
+                  (warning) =>
+                    !warning.startsWith('Environment "') &&
+                    !/won't run in Agor Cloud as configured/.test(warning)
                 ),
                 ...agorPackArchivedNotes(teammate.sections.archived_skipped),
                 agorPackOutsideLinksNote(teammate.sections.knowledge?.outside_links),
@@ -367,10 +369,10 @@ function ImportProgress({
           const running = !result && !failed && index === receipt.results.length;
           const state = result
             ? result.filesystem === 'pending'
-              ? PACK_COPY.progMoving
+              ? PACK_COPY.impProgress
               : PACK_COPY.progDone
             : running && receipt.status === 'applying'
-              ? PACK_COPY.progMoving
+              ? PACK_COPY.impProgress
               : PACK_COPY.progWaiting;
           return (
             <Flex key={teammate.key} align="center" gap={8}>
@@ -378,7 +380,7 @@ function ImportProgress({
                 <CloseCircleFilled style={{ color: token.colorError }} />
               ) : state === PACK_COPY.progDone ? (
                 <CheckCircleFilled style={{ color: token.colorSuccess }} />
-              ) : state === PACK_COPY.progMoving ? (
+              ) : state === PACK_COPY.impProgress ? (
                 <LoadingOutlined />
               ) : (
                 <ClockCircleOutlined style={{ color: token.colorTextTertiary }} />

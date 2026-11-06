@@ -675,9 +675,12 @@ export async function importKnowledgeRepository(input: {
     const steps = [
       ...(historyByPath.get(entry.path) ?? []).map((version) => ({
         content: localize(version.content, doc.file),
-        summary: `Imported version ${version.version_number}${
-          version.originally_by.name ? ` (originally by ${version.originally_by.name})` : ''
-        }`,
+        // The original change summary when the source had one.
+        summary:
+          version.change_summary ??
+          `Imported version ${version.version_number}${
+            version.originally_by.name ? ` (originally by ${version.originally_by.name})` : ''
+          }`,
       })),
       { content: doc.content, summary: 'Imported current Knowledge document' },
     ];
