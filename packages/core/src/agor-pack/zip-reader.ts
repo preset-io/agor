@@ -1,5 +1,5 @@
 /**
- * Random-access `.agorpack` reader over `yauzl`. Opening a pack reads only
+ * Random-access `.agor` reader over `yauzl`. Opening a pack reads only
  * the central directory and `manifest.json`, and validates — before any other
  * entry is touched — the entry count, every entry name, per-entry and total
  * uncompressed size (zip-bomb guard), and that the zip's entry set equals the

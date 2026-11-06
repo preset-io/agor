@@ -27,6 +27,7 @@ import {
   CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE,
   capabilityPolicyPresetsGrantingCapability,
 } from '../../types/capability-policy';
+import { hasMinimumRole, ROLES } from '../../types/user';
 import type { Database } from '../client';
 import { isPostgresDatabase, select } from '../database-wrapper';
 import {
@@ -112,6 +113,10 @@ export interface SessionRuntimeBranchAccess {
   branch_id: string;
   principal_available: boolean;
   can_prompt_session: boolean;
+  /** Branch Manager or primary owner; the bar for writing and launching schedules. */
+  can_manage_branch: boolean;
+  /** Workspace role, read in the same statement so it matches the policy revision. */
+  principal_role: string | null;
   fs_access: CapabilityPolicyFsAccess;
   /** Database time in PostgreSQL; callers may override it in deterministic tests. */
   observed_at: Date;
@@ -211,6 +216,7 @@ export async function resolveSessionRuntimeBranchAccess(
     session_owner_user_id: sessions.created_by,
     session_sdk_home_scope: sessions.sdk_home_scope,
     principal_user_id: users.user_id,
+    principal_role: users.role,
     branch_primary_owner_user_id: branches.primary_owner_user_id,
     sharing_mode: branchPermissionConfigs.sharing_mode,
     others_role: branchPermissionConfigs.others_role,
@@ -251,13 +257,16 @@ export async function resolveSessionRuntimeBranchAccess(
   const groupFsRank = numericValue(row.active_group_fs_rank);
 
   let canPromptOwn = false;
+  let canManage = false;
   let fsAccess: CapabilityPolicyFsAccess = 'none';
   if (principalUserId && isPrimaryOwner) {
     canPromptOwn = true;
+    canManage = true;
     fsAccess = 'write';
   } else if (principalUserId && row.sharing_mode === 'shared') {
     if (directMatched) {
       canPromptOwn = roleGrantsSessionPrompt(row.direct_role);
+      canManage = row.direct_role === 'manager';
       fsAccess =
         row.direct_fs_access === 'write'
           ? 'write'
@@ -266,9 +275,11 @@ export async function resolveSessionRuntimeBranchAccess(
             : 'none';
     } else if (groupRoleRank >= 0) {
       canPromptOwn = groupRoleRank >= 2;
+      canManage = groupRoleRank >= 3;
       fsAccess = fsAccessFromRank(groupFsRank);
     } else {
       canPromptOwn = roleGrantsSessionPrompt(row.others_role);
+      canManage = row.others_role === 'manager';
       fsAccess =
         row.others_fs_access === 'write'
           ? 'write'
@@ -291,9 +302,60 @@ export async function resolveSessionRuntimeBranchAccess(
     can_prompt_session: Boolean(
       principalUserId && canPromptOwn && (ownsSession || sharedSessionAllowed)
     ),
+    can_manage_branch: Boolean(principalUserId && canManage),
+    principal_role:
+      principalUserId && typeof row.principal_role === 'string' ? row.principal_role : null,
     fs_access: principalUserId ? fsAccess : 'none',
     observed_at: observedAt,
   };
+}
+
+/**
+ * Whether a schedule's initial Task has lost the authority needed to start.
+ *
+ * That Task runs unattended as the schedule's creator, so it needs the bar for
+ * writing the schedule (branch Manager and workspace member), not ordinary
+ * own-session prompt authority. Authority comes from the single-statement
+ * runtime projection, so it reflects one policy revision. Every other Task
+ * returns false.
+ */
+export async function isScheduledInitialTaskRevoked(
+  db: Database,
+  input: { sessionId: SessionID | string; taskId: string; principalUserId: UserID | string },
+  // Pass the caller's own projection so one policy revision decides everything it binds.
+  resolvedAccess?: SessionRuntimeBranchAccess | null
+): Promise<boolean> {
+  const session = await select(db, {
+    scheduled_from_branch: sessions.scheduled_from_branch,
+    data: sessions.data,
+  })
+    .from(sessions)
+    .where(eq(sessions.session_id, input.sessionId))
+    .one();
+  if (!session?.scheduled_from_branch) return false;
+  // Same resolution order as the scheduler: snapshot, then the first Task, then the Session ID.
+  let initialTaskId: string | undefined =
+    session.data?.custom_context?.scheduled_run?.initial_task_id;
+  if (!initialTaskId) {
+    const first = await select(db, { task_id: tasks.task_id })
+      .from(tasks)
+      .where(eq(tasks.session_id, input.sessionId))
+      .orderBy(tasks.created_at, tasks.task_id)
+      .limit(1)
+      .one();
+    initialTaskId = first?.task_id ?? String(input.sessionId);
+  }
+  if (input.taskId !== initialTaskId) return false;
+  const access =
+    resolvedAccess !== undefined
+      ? resolvedAccess
+      : await resolveSessionRuntimeBranchAccess(db, {
+          sessionId: input.sessionId,
+          principalUserId: input.principalUserId,
+        });
+  return (
+    !access?.can_manage_branch || !hasMinimumRole(access.principal_role ?? undefined, ROLES.MEMBER)
+  );
 }
 
 function directBranchEntryExists(db: Database, userId: UserIdExpression, capability?: string): SQL {

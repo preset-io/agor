@@ -15,7 +15,7 @@ const MACHINE_TOKEN_TYPES = new Set(['executor-session', 'service']);
 export interface IssueBrowserTokensHookOptions {
   jwtSecret: string;
   accessTokenTtl: SignOptions['expiresIn'];
-  refreshTokenTtl: SignOptions['expiresIn'];
+  refreshTokenTtl: number;
   tenantClaim: string;
   /** Only set for a configured static-tenant deployment. Never a Cloud fallback. */
   staticTenantId?: string;

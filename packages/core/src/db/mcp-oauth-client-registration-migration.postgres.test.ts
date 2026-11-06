@@ -424,7 +424,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         db,
         sql`ALTER TABLE thread_session_map DROP COLUMN teams_last_admitted_activity_id`
       );
-      // Rewind 0120/0121 (.agorpack import receipts and staged blobs) as well.
+      // Rewind 0120/0121 (.agor import receipts and staged blobs) as well.
       await executeRaw(db, sql`DROP TABLE staged_blobs`);
       await executeRaw(db, sql`DROP TABLE agor_pack_imports`);
       await withPostgresTestTransaction(db, recreateHistoricalClaudeAuthority);

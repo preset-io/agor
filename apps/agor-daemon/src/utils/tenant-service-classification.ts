@@ -244,7 +244,7 @@ export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassif
   },
 
   // --------------------------------------------------------------------------
-  // `.agorpack` transfer (routes/agor-pack.ts). Long routes: tenant identity
+  // `.agor` transfer (routes/agor-pack.ts). Long routes: tenant identity
   // and write admission only; the pack services open a short unit per read or
   // write, and apply hands its claimed run to deferWithTenantContext.
   // --------------------------------------------------------------------------

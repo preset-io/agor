@@ -393,7 +393,7 @@ export class KnowledgeTransfersService {
 }
 
 // ---------------------------------------------------------------------------
-// In-process repository export/import for `.agorpack`
+// In-process repository export/import for `.agor`
 // ---------------------------------------------------------------------------
 
 /** Older versions kept per document when "+version history" is exported. */
@@ -482,6 +482,8 @@ export async function previewKnowledgeExport(
   user: User
 ): Promise<{
   documents: number;
+  /** Markdown body size, for the export size estimate. */
+  bytes: number;
   archived: number;
   privateSkipped: number;
   outsideLinks: AgorPackOutsideLinks;
@@ -490,6 +492,7 @@ export async function previewKnowledgeExport(
   if (!ns || ns.archived) {
     return {
       documents: 0,
+      bytes: 0,
       archived: 0,
       privateSkipped: 0,
       outsideLinks: { count: 0, namespaces: [] },
@@ -506,6 +509,7 @@ export async function previewKnowledgeExport(
   }
   return {
     documents: rows.length,
+    bytes: bodies.reduce((sum, body) => sum + Buffer.byteLength(body), 0),
     archived: await transfers.archivedCount(ns.namespace_id),
     privateSkipped,
     outsideLinks: await summarizeOutsideLinks(

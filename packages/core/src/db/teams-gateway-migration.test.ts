@@ -4,7 +4,7 @@ import { migrate } from 'drizzle-orm/libsql/migrator';
 import { expect, it } from 'vitest';
 import { createDatabase } from './client';
 import { executeRaw, isSQLiteDatabase, rawRows } from './database-wrapper';
-import { checkMigrationStatus, runMigrations } from './migrate';
+import { checkMigrationStatus, pendingOfflineCutoverMigrations, runMigrations } from './migrate';
 import {
   beforeTeamsMigrations,
   insertLegacyInbound,
@@ -29,7 +29,11 @@ it('upgrades current-main SQLite online, disables Teams only and preserves old i
         await executeRaw(db, sql`SELECT enabled FROM gateway_channels WHERE channel_type='teams'`)
       )
     ).toEqual([{ enabled: 1 }, { enabled: 1 }]);
-    await runMigrations(db);
+    // Teams itself needs no offline cutover; later pending migrations may.
+    expect(pendingOfflineCutoverMigrations('sqlite', await checkMigrationStatus(db))).not.toContain(
+      teamsMigration('sqlite')
+    );
+    await runMigrations(db, { allowOfflineCutover: true });
     expect((await checkMigrationStatus(db)).pending).toEqual([]);
     expect(
       rawRows(

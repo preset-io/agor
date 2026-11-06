@@ -1,5 +1,5 @@
 /**
- * Streaming `.agorpack` writer over `yazl`. Entries are hashed while they are
+ * Streaming `.agor` writer over `yazl`. Entries are hashed while they are
  * written; `finish` appends `manifest.json` (the entry list plus the canonical
  * content hash) as the last entry, so nothing is buffered beyond one entry.
  *

@@ -64,13 +64,13 @@ A branch either inherits that entire package or uses one override copied from th
 
 Board roles are **Viewer**, **Editor**, and **Manager**. Branch roles are:
 
-| Role         | Meaning                                                                                    |
-| ------------ | ------------------------------------------------------------------------------------------ |
-| Viewer       | View the branch and its conversations                                                      |
-| Collaborator | View, create Sessions, and prompt branch-home Sessions                                     |
-| Manager      | Collaborator access plus branch, environment, session-lifecycle, and permission management |
+| Role         | Meaning                                                                                              |
+| ------------ | ---------------------------------------------------------------------------------------------------- |
+| Viewer       | View the branch and its conversations                                                                |
+| Collaborator | View, create Sessions, and prompt branch-home Sessions                                               |
+| Manager      | Collaborator access plus branch, environment, session-lifecycle, schedule, and permission management |
 
-Branch file access is selected separately as `none`, `read`, or `read/write`. Collaborator and Manager can open a terminal only when file access is not `none`.
+Branch file access is selected separately as `none`, `read`, or `read/write`. Collaborator and Manager can open a terminal only when file access is not `none`. Under the filesystem sandbox or delegated execution, a prompt from someone with `none` file access is refused, because the agent would have no branch files to work on.
 
 Each entry names exactly one person or group. A person's direct entry overrides their group memberships; otherwise group permissions combine and the highest file access wins. **Others** is a fallback only for active members of the same workspace who match no person or group entry.
 

@@ -24,6 +24,7 @@
     "@agor/core": "workspace:*",
     "@ant-design/icons": "^6.3.4",
     "@ant-design/x": "^2.9.0",
+    "@noble/hashes": "^1.8.0",
     "@codemirror/lang-json": "^6.0.2",
     "@codemirror/lang-markdown": "^6.5.2",
     "@codemirror/lang-yaml": "^6.1.3",

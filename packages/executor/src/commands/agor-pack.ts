@@ -1,5 +1,5 @@
 /**
- * Teammate pack (.agorpack) filesystem legs. The daemon never touches branch
+ * Teammate pack (.agor) filesystem legs. The daemon never touches branch
  * or branch-home files, so it asks the executor to:
  *
  * - `branch.pack.collect`: zip the branch's unpushed git history (a bundle),
@@ -277,7 +277,7 @@ export async function handleBranchPackMaterialize(
     if (branch.filesystem_status !== 'ready') {
       throw new Error('Branch checkout is not ready yet');
     }
-    const packPath = join(work, 'pack.agorpack');
+    const packPath = join(work, 'pack.agor');
     const response = await fetch(
       `${daemonUrl}/executor/agor-pack/imports/${p.importId}/content?key=${p.teammateKey}&claim=${p.claimToken}`,
       {

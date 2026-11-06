@@ -73,6 +73,7 @@ import { getShellSurfacePath, hasExplicitEntityRouteTarget } from '../../utils/r
 import { clearOpenedSessionFlags } from '../../utils/sessionAttention';
 import { isTeammatesRoute } from '../../utils/uiRoutes';
 import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
+import { FinishSetupCard } from '../AgorPack/FinishSetup';
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
 import { BoardTeammatePanel, TeammatePanelRail } from '../BoardTeammatePanel';
@@ -1350,6 +1351,7 @@ export const App: React.FC<AppProps> = ({
                   primaryTeammateInaccessible={primaryTeammateInaccessible}
                   boardReady={boardReady}
                   currentUserId={user?.user_id}
+                  authenticatedUser={user}
                   selectedSessionId={effectiveSelectedSessionId}
                   onSessionClick={handleSessionClick}
                   onCreateSession={handleQuickStartSession}
@@ -1494,6 +1496,14 @@ export const App: React.FC<AppProps> = ({
                         onOpenCommentsPanel={handleOpenCommentsPanel}
                         onCommentHover={setHoveredCommentId}
                         onCommentSelect={handleCommentSelect}
+                      />
+                    )}
+                    {!isTeammatesPath && !isHomeSurface && primaryTeammateBranch && (
+                      <FinishSetupCard
+                        branch={primaryTeammateBranch}
+                        client={client}
+                        currentUser={user}
+                        style={{ position: 'absolute', top: 12, right: 12, width: 280, zIndex: 5 }}
                       />
                     )}
                   </div>

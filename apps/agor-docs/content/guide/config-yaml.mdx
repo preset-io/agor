@@ -204,7 +204,7 @@ the operating-system home, not the Agor home.
 Supported environment overrides still win over YAML. Important examples are `AGOR_HOME`,
 `AGOR_DATA_HOME`, `PORT`,
 `DAEMON_HOST`, `DAEMON_URL`, `AGOR_JWT_SECRET`, `AGOR_MASTER_SECRET`, `AGOR_TELEMETRY`,
-`AGOR_WEBSOCKET_COMPRESSION`,
+`AGOR_WEBSOCKET_COMPRESSION`, `AGOR_REFRESH_TOKEN_TTL_SECONDS`,
 `AGOR_UNIX_USER_MODE`, `AGOR_SANDBOX_HOME_MODE`, and
 `AGOR_SANDBOX_SDK_HOME_MODE`. They are
 resolved in memory and never written back.
@@ -270,6 +270,34 @@ that it passes through: in the browser DevTools Network tab, the `/socket.io/` W
 response headers should include `Sec-WebSocket-Extensions: permessage-deflate` when compression
 is on, and no such header when it is off. REST responses use HTTP compression and are not
 affected by this setting.
+
+## Browser sign-in lifetime
+
+A browser that signs in (password, API key, or launch code) gets a 15-minute access token and a
+refresh token. The UI uses the refresh token to get a new pair before the access token expires,
+and every refresh issues a new refresh token with a full lifetime. The refresh-token lifetime is
+therefore how long a browser can stay idle and still be signed in. To shorten it, for example to
+7 days:
+
+```yaml
+daemon:
+  refresh_token_ttl_seconds: 604800 # default: 2592000 (30 days)
+```
+
+`AGOR_REFRESH_TOKEN_TTL_SECONDS` overrides the file. The value is whole seconds, from `3600`
+(1 hour) to `7776000` (90 days). A value outside that range, a decimal, or a duration string such
+as `7d` stops the daemon at startup with a `Config error`. The daemon never falls back to the
+default.
+
+- Sign-in stays sliding: someone who opens the UI at least once per lifetime stays signed in.
+  There is no absolute limit since the first sign-in.
+- The access token always lasts 15 minutes. This setting doesn't change it.
+- A change applies to tokens issued after the restart. Refresh tokens already issued keep their
+  own expiry, so active browsers move to the new lifetime at their next refresh, and an idle
+  browser's old token still works until it expires.
+- Signing out of the UI only discards that browser's copy of the tokens. A refresh token copied
+  elsewhere stays usable until it expires. Changing a user's password is what invalidates all of
+  that user's tokens at once.
 
 ## Local password policy
 

@@ -110,14 +110,14 @@ describe('board get authorization prefetch', () => {
       board_id: '00000000-0000-7000-8000-000000000010',
       name: 'Authorized board',
     };
-    const findBySlugOrId = vi.fn(async () => board);
-    const canViewResolved = vi.fn(async () => true);
+    const findBySlug = vi.fn(async () => null);
+    const findVisibleById = vi.fn(async () => board);
     const canView = vi.fn(() => {
       throw new Error('must not reload the authorized board');
     });
     const boardRepository = {
-      findBySlugOrId,
-      canViewResolved,
+      findBySlug,
+      findVisibleById,
       canView,
     } as unknown as NonNullable<RegisterHooksContext['boardRepository']>;
     const hooks = captureRegisteredHooks(undefined, boardRepository).get('boards')?.before;
@@ -138,8 +138,13 @@ describe('board get authorization prefetch', () => {
 
     for (const hook of [...(hooks.all ?? []), ...(hooks.get ?? [])]) await hook(context);
 
-    expect(findBySlugOrId).toHaveBeenCalledOnce();
-    expect(canViewResolved).toHaveBeenCalledWith(board, '00000000-0000-7000-8000-0000000000ff');
+    expect(findBySlug).toHaveBeenCalledWith('00000000');
+    // A short ID resolves only among boards this caller can view.
+    expect(findVisibleById).toHaveBeenCalledOnce();
+    expect(findVisibleById).toHaveBeenCalledWith(
+      '00000000-0000-7000-8000-0000000000ff',
+      '00000000'
+    );
     expect(canView).not.toHaveBeenCalled();
     expect(context.id).toBe(board.board_id);
     expect(context.params).toMatchObject({

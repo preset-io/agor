@@ -357,7 +357,7 @@ export interface Branch {
   custom_context?: Record<string, unknown>;
 
   /**
-   * `.agorpack` provenance ("imported from") and "Switch over" state. Kept out
+   * `.agor` provenance ("imported from") and "Switch over" state. Kept out
    * of custom_context so it never reaches prompt templates. Server-managed.
    */
   agor_pack?: AgorPackBranchState;

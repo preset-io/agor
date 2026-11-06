@@ -1,4 +1,4 @@
-/** File-backed `.agorpack` byte source for the CLI and executor (not the daemon). */
+/** File-backed `.agor` byte source for the CLI and executor (not the daemon). */
 
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';

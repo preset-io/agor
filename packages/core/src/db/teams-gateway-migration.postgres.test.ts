@@ -5,7 +5,7 @@ import { expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
 import { createDatabase } from './client';
 import { executeRaw, isPostgresDatabase, rawRows } from './database-wrapper';
-import { checkMigrationStatus, runMigrations } from './migrate';
+import { checkMigrationStatus, pendingOfflineCutoverMigrations, runMigrations } from './migrate';
 import { proveTeamsDiscoveryPlans } from './teams-discovery-plans.test-support';
 import {
   beforeTeamsMigrations,
@@ -57,8 +57,11 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           )
         )
       ).toEqual([]);
-      // No offline cutover: the default runner applies it while other daemons keep serving.
-      await runMigrations(db);
+      // Teams itself needs no offline cutover; later pending migrations may.
+      expect(
+        pendingOfflineCutoverMigrations('postgresql', await checkMigrationStatus(db))
+      ).not.toContain(teamsMigration('postgres'));
+      await runMigrations(db, { allowOfflineCutover: true });
       expect((await checkMigrationStatus(db)).pending).toEqual([]);
       for (const [tenant, fixture] of [
         ['teams-a', a],

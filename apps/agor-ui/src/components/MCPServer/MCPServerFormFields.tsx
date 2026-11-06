@@ -31,6 +31,7 @@ import { MCPOAuthRecoveryAlert } from './MCPOAuthRecoveryAlert';
 import { describeMissingForOAuth, missingMCPFieldLabels } from './mcp-form-requirements';
 import {
   extractOAuthConfigForTesting,
+  isTemplateValue,
   validateEnvJSON,
   validateHeadersJSON,
 } from './mcp-oauth-utils';
@@ -212,6 +213,19 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     isRemoteTransportValue(transport) &&
     typeof watchedHeaders === 'string' &&
     watchedHeaders.trim().length > 0;
+  // Only per-user OAuth with no literal client secret is user-specific. A secret
+  // (saved ones hydrate masked) is what a client-credentials grant mints machine
+  // tokens with; the form always carries that grant type, so the secret decides.
+  const hasLiteralClientSecret =
+    typeof watchedClientSecret === 'string' &&
+    watchedClientSecret.trim().length > 0 &&
+    !isTemplateValue(watchedClientSecret);
+  const configSharesCredential =
+    authType !== 'oauth' ||
+    watchedOauthMode === 'shared' ||
+    hasLiteralClientSecret ||
+    hasEnvConfigured ||
+    hasHeadersConfigured;
   const hasCustomizedAdvanced =
     [
       watchedAuthorizationUrl,
@@ -479,7 +493,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           />
         </Form.Item>
       )}
-      {(isCreate ? ownership : savedOwnership) === 'shared' && (
+      {(isCreate ? ownership : savedOwnership) === 'shared' && configSharesCredential && (
         <Alert
           type="warning"
           showIcon

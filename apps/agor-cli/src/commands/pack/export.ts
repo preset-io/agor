@@ -1,5 +1,5 @@
 /**
- * `agor pack export` — export AI teammates to a portable `.agorpack` file.
+ * `agor pack export` — export AI teammates to a portable `.agor` file.
  */
 
 import { createWriteStream } from 'node:fs';
@@ -13,15 +13,16 @@ import { packFetch, packJson } from '../../lib/pack/http';
 import { exportRequest, packContentFlags } from '../../lib/pack/options';
 
 export default class PackExport extends BaseCommand {
-  static override summary = 'Export AI teammates to a .agorpack file';
+  static override summary = 'Export AI teammates to a .agor file';
   static override description =
-    'Writes one secret-free .agorpack with the selected teammates: board, Knowledge, artifacts, ' +
-    'schedules, Claude memory, attachments, git history and uncommitted files, and optionally ' +
-    'session history. Credentials never leave this install; the import shows what to reconnect.';
+    'Writes one secret-free .agor file with the selected teammates: board, Knowledge, artifacts, ' +
+    'schedules, Claude memory, attachments, git history and uncommitted files, and session ' +
+    'history (last 90 days by default). Credentials never leave this install; the import shows ' +
+    'what to reconnect.';
 
   static override examples = [
-    '<%= config.bin %> <%= command.id %> 01933e4a -o ada.agorpack',
-    '<%= config.bin %> <%= command.id %> 01933e4a 01933e4b --sections board,knowledge --sessions 30d -o team.agorpack',
+    '<%= config.bin %> <%= command.id %> 01933e4a -o ada.agor',
+    '<%= config.bin %> <%= command.id %> 01933e4a 01933e4b --sessions all -o team.agor',
   ];
 
   static override strict = false;

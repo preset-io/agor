@@ -12,6 +12,7 @@ import type {
   KnowledgeGraphEdgeType,
   KnowledgeGraphNodeType,
   KnowledgeNamespace,
+  KnowledgeNamespaceOthersCan,
   KnowledgeVisibility,
   KnowledgeWriteAttribution,
   TeammateKnowledgeGrantAccess,
@@ -30,6 +31,7 @@ import {
   KNOWLEDGE_EDIT_POLICIES,
   KNOWLEDGE_GRAPH_EDGE_TYPES,
   KNOWLEDGE_GRAPH_NODE_TYPES,
+  KNOWLEDGE_NAMESPACE_OTHERS_CAN,
   KNOWLEDGE_VISIBILITIES,
   normalizeKnowledgeDocumentIconEmoji,
   normalizeKnowledgeFolderPath,
@@ -84,6 +86,7 @@ import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
 const KnowledgeDocumentKindSchema = z.enum(KNOWLEDGE_DOCUMENT_KINDS);
 const KnowledgeDocumentStatusSchema = z.enum(KNOWLEDGE_DOCUMENT_STATUSES);
 const KnowledgeVisibilitySchema = z.enum(KNOWLEDGE_VISIBILITIES);
+const KnowledgeNamespaceOthersCanSchema = z.enum(KNOWLEDGE_NAMESPACE_OTHERS_CAN);
 const KnowledgeEditPolicySchema = z.enum(KNOWLEDGE_EDIT_POLICIES);
 const KnowledgeGraphNodeTypeSchema = z.enum(KNOWLEDGE_GRAPH_NODE_TYPES);
 const KnowledgeGraphEdgeTypeSchema = z.enum(KNOWLEDGE_GRAPH_EDGE_TYPES);
@@ -1241,6 +1244,9 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         visibilityDefault: KnowledgeVisibilitySchema.optional().describe(
           'Default document visibility'
         ),
+        othersCan: KnowledgeNamespaceOthersCanSchema.optional().describe(
+          'Access for workspace members without a specific grant. New namespaces default to "read" ("none" when visibilityDefault is "private"); only namespace owners and admins can change it.'
+        ),
         metadata: z.record(z.string(), z.unknown()).optional().describe('Namespace metadata'),
       }),
     },
@@ -1257,6 +1263,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         description: coerceString(args.description),
         kind: args.kind,
         visibility_default: args.visibilityDefault as KnowledgeVisibility | undefined,
+        others_can: args.othersCan as KnowledgeNamespaceOthersCan | undefined,
         metadata: coerceJsonRecord(args.metadata),
       };
 

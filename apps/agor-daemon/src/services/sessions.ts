@@ -1500,18 +1500,32 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     ancestors: Session[];
     children: Session[];
   }> {
-    const session = await this.get(id, params);
-
-    // Get ancestors
-    const ancestors = await this.sessionRepo.findAncestors(id);
-
-    // Get children
-    const children = await this.sessionRepo.findChildren(id);
-
+    // `this.get` on the raw instance skips the Session view hooks; go through the hooked service.
+    const sessions = this.app.service('sessions') as unknown as SessionsService;
+    const session = await sessions.get(id, params);
+    const { query: _query, ...readParams } = params ?? {};
+    const [ancestors, children] = await Promise.all([
+      this.sessionRepo.findAncestors(session.session_id),
+      this.sessionRepo.findChildren(session.session_id),
+    ]);
+    const visibleIds = new Set<string>();
+    const relativeIds = [
+      ...new Set([...ancestors, ...children].map((relative) => relative.session_id)),
+    ];
+    for (let offset = 0; offset < relativeIds.length; offset += PAGINATION.MAX_ID_LIST) {
+      const ids = relativeIds.slice(offset, offset + PAGINATION.MAX_ID_LIST);
+      const page = await sessions.find({
+        ...readParams,
+        query: { session_id: { $in: ids }, $limit: ids.length, $count: false, lean: true },
+      });
+      for (const visible of Array.isArray(page) ? page : page.data) {
+        visibleIds.add(visible.session_id);
+      }
+    }
     return {
       session,
-      ancestors,
-      children,
+      ancestors: ancestors.filter((relative) => visibleIds.has(relative.session_id)),
+      children: children.filter((relative) => visibleIds.has(relative.session_id)),
     };
   }
 

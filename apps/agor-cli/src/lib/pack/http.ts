@@ -1,4 +1,4 @@
-/** Small HTTP client for the daemon's raw `.agorpack` routes. */
+/** Small HTTP client for the daemon's raw `.agor` routes. */
 
 export class PackHttpError extends Error {
   constructor(

@@ -1,48 +1,64 @@
 import {
   AGOR_PACK_DEFAULT_SESSION_MODE,
-  AGOR_PACK_SECTIONS,
   type AgorPackPreflightTeammate,
-  type AgorPackSection,
   type AgorPackSessionMode,
   agorPackArchivedNotes,
   agorPackOutsideLinksNote,
-  pluralize,
 } from '@agor/core/types';
 import type { Branch } from '@agor-live/client';
 import { getTeammateConfig } from '@agor-live/client';
-import { DownloadOutlined } from '@ant-design/icons';
-import {
-  Alert,
-  Button,
-  Checkbox,
-  Flex,
-  Form,
-  Radio,
-  Select,
-  Skeleton,
-  Space,
-  Typography,
-} from 'antd';
+import { DownloadOutlined, InfoCircleOutlined } from '@ant-design/icons';
+import { Alert, Button, Checkbox, Flex, Form, Select, Skeleton, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { type AgorPackExportResult, exportPack, fetchPackPreflight } from '../../utils/agorPack';
 import { useThemedMessage } from '../../utils/message';
-import { Tag } from '../Tag';
+import { CheckReport } from './CheckReport';
+import { checkFromPreflight, exportEstimate } from './packCheck';
+import { countLabel, fill, megabytes, PACK_COPY } from './packCopy';
+import { SessionHistoryPicker } from './SessionHistoryPicker';
 
-const SECTION_LABELS: Record<AgorPackSection, string> = {
-  board: 'Board',
-  knowledge: 'Knowledge',
-  knowledge_history: '+ version history',
-  artifacts: 'Artifacts',
-  schedules: 'Schedules',
-  claude_memory: 'Claude memory',
-  uploads: 'Attachments',
-};
+/** Preflight of the chosen teammates (null while loading). */
+export function usePackPreflight(branchIds: string[]): {
+  preflight: AgorPackPreflightTeammate[] | null;
+  error: string | null;
+} {
+  const [preflight, setPreflight] = useState<AgorPackPreflightTeammate[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const key = branchIds.join(',');
+  useEffect(() => {
+    const ids = key ? key.split(',') : [];
+    if (ids.length === 0) {
+      setPreflight([]);
+      return;
+    }
+    let cancelled = false;
+    setPreflight(null);
+    setError(null);
+    fetchPackPreflight(ids)
+      .then((result) => !cancelled && setPreflight(result))
+      .catch((reason: unknown) => {
+        if (cancelled) return;
+        setPreflight([]);
+        setError(reason instanceof Error ? reason.message : String(reason));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [key]);
+  return { preflight, error };
+}
 
-const ENVIRONMENT_TAG: Record<string, { color: string; label: string }> = {
-  ok: { color: 'success', label: 'ok' },
-  needs_webhook: { color: 'warning', label: 'needs webhook' },
-  wont_run_in_cloud: { color: 'error', label: "won't run in Cloud" },
-};
+/** Archived/private rows left behind and Knowledge links kept as-is, per teammate. */
+export function preflightNotes(teammate: AgorPackPreflightTeammate, mode: AgorPackSessionMode) {
+  return [
+    ...teammate.warnings.filter((warning) => /board/i.test(warning)),
+    ...agorPackArchivedNotes({
+      ...teammate.archived,
+      sessions: mode === 'none' ? 0 : teammate.archived.sessions,
+    }),
+    agorPackOutsideLinksNote(teammate.knowledge_outside_links),
+  ].filter((note): note is string => Boolean(note));
+}
 
 export interface ExportPackPanelProps {
   teammates: Branch[];
@@ -55,43 +71,27 @@ export interface ExportPackPanelProps {
   exportIcon?: React.ReactNode;
 }
 
-/** Teammate picker, contents checkboxes, preflight, and the export action. */
+/**
+ * Choose and check: teammates, session history, then the Check report.
+ * Everything else (board, artifacts, Knowledge, schedules, memory, skills,
+ * attachments) always moves.
+ */
 export const ExportPackPanel: React.FC<ExportPackPanelProps> = ({
   teammates,
   initialBranchIds,
   onExported,
-  exportLabel = 'Export .agorpack',
+  exportLabel = PACK_COPY.expBtn,
   download = true,
   exportIcon = <DownloadOutlined />,
 }) => {
   const { showError, showSuccess } = useThemedMessage();
   const [branchIds, setBranchIds] = useState<string[]>(initialBranchIds);
-  const [sections, setSections] = useState<AgorPackSection[]>([...AGOR_PACK_SECTIONS]);
   const [sessions, setSessions] = useState<AgorPackSessionMode>(AGOR_PACK_DEFAULT_SESSION_MODE);
   const [includeOthers, setIncludeOthers] = useState(false);
-  const [preflight, setPreflight] = useState<AgorPackPreflightTeammate[] | null>(null);
-  const [preflightError, setPreflightError] = useState<string | null>(null);
+  const [leaveOut, setLeaveOut] = useState(true);
   const [exporting, setExporting] = useState(false);
-
-  useEffect(() => {
-    if (branchIds.length === 0) {
-      setPreflight([]);
-      return;
-    }
-    let cancelled = false;
-    setPreflight(null);
-    setPreflightError(null);
-    fetchPackPreflight(branchIds)
-      .then((result) => !cancelled && setPreflight(result))
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setPreflight([]);
-        setPreflightError(error instanceof Error ? error.message : String(error));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [branchIds]);
+  const { preflight, error } = usePackPreflight(branchIds);
+  const others = sessions !== 'none' && includeOthers;
 
   const options = useMemo(
     () =>
@@ -104,7 +104,8 @@ export const ExportPackPanel: React.FC<ExportPackPanelProps> = ({
       }),
     [teammates]
   );
-
+  const check = preflight ? checkFromPreflight(preflight, sessions, others, leaveOut) : null;
+  const estimate = preflight ? exportEstimate(preflight, sessions, others) : null;
   const othersCount = (preflight ?? []).reduce(
     (sum, t) => sum + (sessions === 'all' ? t.sessions.others : t.sessions.recent_others),
     0
@@ -116,16 +117,16 @@ export const ExportPackPanel: React.FC<ExportPackPanelProps> = ({
       const result = await exportPack(
         {
           branch_ids: branchIds,
-          sections,
           sessions,
-          include_others_sessions: sessions !== 'none' && includeOthers,
+          include_others_sessions: others,
+          exclude_session_ids: leaveOut ? (check?.flagged ?? []).map((s) => s.session_id) : [],
         },
         { download }
       );
-      if (download) showSuccess(`Exported ${result.filename}`);
+      if (download) showSuccess(fill(PACK_COPY.expToast, { file: result.filename }));
       await onExported?.(result);
-    } catch (error) {
-      showError(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+    } catch (reason) {
+      showError(`Export failed: ${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
       setExporting(false);
     }
@@ -134,140 +135,71 @@ export const ExportPackPanel: React.FC<ExportPackPanelProps> = ({
   return (
     <Flex vertical gap="middle">
       <Form layout="vertical" requiredMark={false}>
-        <Form.Item label="Teammates" style={{ marginBottom: 12 }}>
+        <Form.Item label={PACK_COPY.tmLabel}>
           <Select
             mode="multiple"
             value={branchIds}
             onChange={setBranchIds}
             options={options}
-            placeholder="Choose teammates"
             aria-label="Teammates to export"
           />
         </Form.Item>
-        <Form.Item label="Include" style={{ marginBottom: 12 }}>
-          <Checkbox.Group
-            value={sections}
-            onChange={(value) => {
-              const next = value as AgorPackSection[];
-              setSections(
-                next.includes('knowledge') ? next : next.filter((s) => s !== 'knowledge_history')
-              );
-            }}
-            options={AGOR_PACK_SECTIONS.map((section) => ({
-              value: section,
-              label: SECTION_LABELS[section],
-              disabled: section === 'knowledge_history' && !sections.includes('knowledge'),
-            }))}
-          />
-        </Form.Item>
-        <Form.Item label="Session history" style={{ marginBottom: 4 }}>
-          <Radio.Group
-            value={sessions}
-            onChange={(event) => setSessions(event.target.value)}
-            options={[
-              { value: 'none', label: 'None' },
-              { value: 'last_30_days', label: 'Last 30 days' },
-              { value: 'all', label: 'All' },
-            ]}
-          />
-        </Form.Item>
-        <Form.Item style={{ marginBottom: 0 }}>
-          <Checkbox
-            checked={sessions !== 'none' && includeOthers}
-            disabled={sessions === 'none'}
-            onChange={(event) => setIncludeOthers(event.target.checked)}
-          >
-            Include other people's sessions{othersCount > 0 ? ` (${othersCount})` : ''}
-          </Checkbox>
-        </Form.Item>
+        <SessionHistoryPicker
+          value={sessions}
+          onChange={setSessions}
+          preflight={preflight}
+          includeOthers={others}
+        />
+        <Checkbox
+          style={{ marginTop: 8 }}
+          checked={others}
+          disabled={sessions === 'none'}
+          onChange={(event) => setIncludeOthers(event.target.checked)}
+        >
+          Include other people's sessions{othersCount > 0 ? ` (${othersCount})` : ''}
+        </Checkbox>
       </Form>
 
-      <div>
-        <Typography.Title level={5} style={{ marginTop: 0 }}>
-          Before you export
+      <Flex vertical gap={8}>
+        <Typography.Title level={5} style={{ margin: 0 }}>
+          {PACK_COPY.checkTitle}
         </Typography.Title>
-        {preflightError && <Alert type="error" showIcon message={preflightError} />}
-        {preflight === null ? (
-          <Skeleton active paragraph={{ rows: 2 }} />
+        {error && <Alert type="error" showIcon message={error} />}
+        {check ? (
+          <CheckReport
+            check={check}
+            mode="move"
+            leaveOut={leaveOut}
+            onLeaveOutChange={setLeaveOut}
+          />
         ) : (
-          <Flex vertical gap="small">
-            {preflight.map((teammate) => (
-              <Alert
-                key={teammate.branch_id}
-                type={teammate.warnings.length ? 'warning' : 'info'}
-                showIcon
-                message={
-                  <Space wrap size={4}>
-                    <Typography.Text strong>{teammate.display_name}</Typography.Text>
-                    {teammate.local_home && <Tag>full tree</Tag>}
-                    <Typography.Text type="secondary">
-                      {pluralize(teammate.knowledge_documents, 'doc')} ·{' '}
-                      {pluralize(teammate.artifacts, 'artifact')} ·{' '}
-                      {pluralize(teammate.schedules, 'schedule')} · {teammate.sessions.own} of your
-                      sessions
-                    </Typography.Text>
-                  </Space>
-                }
-                description={
-                  <Flex vertical gap={4}>
-                    {teammate.warnings.map((warning) => (
-                      <span key={warning}>{warning}</span>
-                    ))}
-                    {[
-                      ...agorPackArchivedNotes({
-                        sessions: sessions === 'none' ? 0 : teammate.archived.sessions,
-                        knowledge_documents: sections.includes('knowledge')
-                          ? teammate.archived.knowledge_documents
-                          : 0,
-                        private_knowledge_documents: sections.includes('knowledge')
-                          ? teammate.archived.private_knowledge_documents
-                          : 0,
-                        artifacts:
-                          sections.includes('board') || sections.includes('artifacts')
-                            ? teammate.archived.artifacts
-                            : 0,
-                      }),
-                      sections.includes('knowledge')
-                        ? agorPackOutsideLinksNote(teammate.knowledge_outside_links)
-                        : null,
-                    ]
-                      .filter((note): note is string => Boolean(note))
-                      .map((note) => (
-                        <Typography.Text key={note} type="secondary">
-                          {note}
-                        </Typography.Text>
-                      ))}
-                    {teammate.requirements.env_vars.length > 0 && (
-                      <span>
-                        Names only:{' '}
-                        {teammate.requirements.env_vars.map((v) => (
-                          <Tag key={v.name}>{v.name}</Tag>
-                        ))}
-                      </span>
-                    )}
-                    {teammate.environment.variants.length > 0 && (
-                      <span>
-                        Environment:{' '}
-                        {teammate.environment.variants.map((variant) => (
-                          <Tag key={variant.name} color={ENVIRONMENT_TAG[variant.status]?.color}>
-                            {variant.name}: {ENVIRONMENT_TAG[variant.status]?.label}
-                          </Tag>
-                        ))}
-                      </span>
-                    )}
-                  </Flex>
-                }
-              />
-            ))}
-            <Typography.Text type="secondary">
-              Secrets never leave this install: credentials travel by name and you reconnect them
-              after import.
-            </Typography.Text>
-          </Flex>
+          <Skeleton active paragraph={{ rows: 3 }} />
         )}
-      </div>
+        {(preflight ?? []).flatMap((teammate) =>
+          preflightNotes(teammate, sessions).map((note) => (
+            <Typography.Text key={`${teammate.branch_id}:${note}`} type="secondary">
+              {teammate.display_name}: {note}
+            </Typography.Text>
+          ))
+        )}
+        <Typography.Text type="secondary">
+          <InfoCircleOutlined /> {PACK_COPY.checkFoot}
+        </Typography.Text>
+      </Flex>
 
-      <Flex justify="flex-end">
+      <Flex justify="space-between" align="center" gap={8} wrap>
+        <Typography.Text type="secondary">
+          {estimate &&
+            fill(PACK_COPY.chooseTotal, {
+              n: branchIds.length,
+              teammates: countLabel(
+                branchIds.length,
+                PACK_COPY.cntTeammate,
+                PACK_COPY.cntTeammates
+              ),
+              mb: megabytes(estimate.bytes),
+            })}
+        </Typography.Text>
         <Button
           type="primary"
           icon={exportIcon}

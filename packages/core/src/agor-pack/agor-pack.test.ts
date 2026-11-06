@@ -3,7 +3,7 @@ import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { ZipFile } from 'yazl';
 import { generateId } from '../lib/ids';
-import { AGOR_PACK, type AgorPackManifest } from '../types/agor-pack';
+import { AGOR_PACK, type AgorPackManifest, agorPackPrivateHost } from '../types/agor-pack';
 import { classifyEnvironmentVariants } from './environment-classification';
 import {
   AgorPackFormatError,
@@ -322,5 +322,30 @@ describe('environment classification', () => {
       { name: 'hook', status: 'ok', match: null },
       { name: 'local', status: 'needs_webhook', match: 'localhost' },
     ]);
+  });
+});
+
+describe('agorPackPrivateHost', () => {
+  it.each([
+    ['https://jenkins.internal/job/x', 'jenkins.internal'],
+    ['curl http://10.0.0.12:8080/health', '10.0.0.12'],
+    ['http://172.20.1.1', '172.20.1.1'],
+    ['http://192.168.1.5/', '192.168.1.5'],
+    ['http://localhost:3000', 'localhost'],
+    ['ssh build.lan', 'build.lan'],
+    ['http://printer.local.', 'printer.local'],
+  ])('finds the host in %s', (text, host) => {
+    expect(agorPackPrivateHost(text)).toBe(host);
+  });
+
+  it.each([
+    'https://mcp.notion.com/mcp',
+    'cp .env.local .env',
+    'cat config.local.json',
+    'http://172.32.0.1',
+    'http://8.8.8.8',
+    'node server.internal.js',
+  ])('ignores %s', (text) => {
+    expect(agorPackPrivateHost(text)).toBeNull();
   });
 });

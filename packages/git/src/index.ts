@@ -3056,7 +3056,7 @@ export async function deleteBranch(repoPath: string, branchName: string): Promis
   }
 }
 
-// ===== Teammate pack (.agorpack) =====
+// ===== Teammate pack (.agor) =====
 
 /** Working-tree facts a teammate pack records about its branch checkout. */
 export interface PackWorkingTreeState {

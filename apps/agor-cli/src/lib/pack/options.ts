@@ -1,20 +1,23 @@
 /** Flags and helpers shared by `agor pack export`, `import`, and `send`. */
 
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { open, stat } from 'node:fs/promises';
+import { pipeline } from 'node:stream/promises';
+import { uploadPackChunked } from '@agor/core/agor-pack/upload-client';
 import { shortId } from '@agor/core/db';
 import {
   AGOR_PACK_DEFAULT_SESSION_MODE,
-  AGOR_PACK_SECTIONS,
   type AgorPackExportRequest,
   type AgorPackImport,
-  type AgorPackSection,
 } from '@agor/core/types';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { packJson } from './http';
 
-const SESSION_MODES: Record<string, AgorPackExportRequest['sessions']> = {
+const SESSION_MODES: Record<string, NonNullable<AgorPackExportRequest['sessions']>> = {
   none: 'none',
-  '30d': 'last_30_days',
+  '90d': 'last_90_days',
   all: 'all',
 };
 const DEFAULT_SESSIONS_FLAG = Object.keys(SESSION_MODES).find(
@@ -22,9 +25,6 @@ const DEFAULT_SESSIONS_FLAG = Object.keys(SESSION_MODES).find(
 ) as string;
 
 export const packContentFlags = {
-  sections: Flags.string({
-    description: `Comma-separated sections (${AGOR_PACK_SECTIONS.join(', ')}); default: all`,
-  }),
   sessions: Flags.string({
     description: 'Session history to include',
     options: Object.keys(SESSION_MODES),
@@ -36,30 +36,63 @@ export const packContentFlags = {
   }),
 };
 
-/** The export request body for these flags; throws on an unknown section. */
+/** The export request body for these flags. */
 export function exportRequest(
   branchIds: string[],
-  flags: { sections?: string; sessions: string; 'include-others-sessions': boolean }
+  flags: { sessions: string; 'include-others-sessions': boolean }
 ): AgorPackExportRequest {
-  const sections = flags.sections
-    ? flags.sections.split(',').map((value) => value.trim())
-    : [...AGOR_PACK_SECTIONS];
-  for (const section of sections) {
-    if (!(AGOR_PACK_SECTIONS as readonly string[]).includes(section)) {
-      throw new Error(
-        `Unknown section "${section}". Choose from: ${AGOR_PACK_SECTIONS.join(', ')}`
-      );
-    }
-  }
   return {
     branch_ids: branchIds,
-    sections: sections as AgorPackSection[],
     sessions: SESSION_MODES[flags.sessions] ?? AGOR_PACK_DEFAULT_SESSION_MODE,
     include_others_sessions: flags['include-others-sessions'],
   };
 }
 
 type Log = (line: string) => void;
+
+/**
+ * Upload (or resume) a pack file to `baseUrl` with the resumable chunked
+ * upload and return its dry-run receipt.
+ */
+export async function uploadPackFile(input: {
+  baseUrl: string;
+  bearer: string;
+  file: string;
+  log: Log;
+}): Promise<AgorPackImport> {
+  const { size } = await stat(input.file);
+  const hash = createHash('sha256');
+  await pipeline(createReadStream(input.file), hash);
+  const file = await open(input.file, 'r');
+  try {
+    let reported = -1;
+    return await uploadPackChunked({
+      size,
+      sha256: hash.digest('hex'),
+      readChunk: async (start, end) => {
+        const buffer = Buffer.alloc(end - start);
+        await file.read(buffer, 0, buffer.byteLength, start);
+        return buffer;
+      },
+      send: (path, init) =>
+        fetch(`${input.baseUrl.replace(/\/$/, '')}${path}`, {
+          ...init,
+          body: init.body as RequestInit['body'],
+          headers: { Authorization: `Bearer ${input.bearer}`, ...(init.headers ?? {}) },
+          redirect: 'error',
+        }),
+      onProgress: (sent, total) => {
+        const percent = Math.floor((sent / total) * 100);
+        if (percent >= reported + 10 || sent === total) {
+          reported = percent;
+          input.log(chalk.dim(`  ${percent}%`));
+        }
+      },
+    });
+  } finally {
+    await file.close();
+  }
+}
 
 export function printDryRun(log: Log, receipt: AgorPackImport): void {
   for (const teammate of receipt.dry_run) {

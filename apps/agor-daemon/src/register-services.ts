@@ -1489,14 +1489,13 @@ export function createExecuteHandler(
       cwd = branchMounts.path;
       sandboxBaseRepoPath = branchMounts.baseRepoPath;
       branchSdkHomeIntent = branchMounts.sdkHome;
-      // Under the sandbox, 'none' means the branch would not be mounted at all,
-      // so the task cannot operate on it. Fail fast with a clear message rather
-      // than letting bwrap abort on a missing chdir target.
-      if (sandboxCfg?.enabled === true && principalBranchAccess === 'none') {
+      // The sandbox mounts no branch for 'none' and delegated launchers must not either, so fail fast with a clear message.
+      const mountsByBranchAccess =
+        sandboxCfg?.enabled === true || config.execution?.unix_user_mode === 'delegated';
+      if (mountsByBranchAccess && principalBranchAccess === 'none') {
         throw new Error(
           `The prompt actor has no filesystem access to branch ${session.branch_id}. ` +
-            'Grant at least Read file access in the branch policy to run sessions under ' +
-            'the filesystem sandbox.'
+            'Grant at least Read file access in the branch policy to run sessions on this branch.'
         );
       }
     }

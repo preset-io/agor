@@ -21,7 +21,11 @@ import {
 } from '@agor/core/db';
 import type { BranchID, SessionID, TenantID, UploadRef } from '@agor/core/types';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createPackFixture, expectPackRoutesIsolated } from '../../test/agor-pack-fixture';
+import {
+  createPackFixture,
+  expectChunkedUploadWorks,
+  expectPackRoutesIsolated,
+} from '../../test/agor-pack-fixture';
 import type { RegisterHooksContext } from '../register-hooks';
 import {
   getBlobStagingStore,
@@ -48,7 +52,7 @@ const CONFIG = {
 } as RegisterHooksContext['config'];
 
 describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
-  '.agorpack import (PostgreSQL/RLS)',
+  '.agor import (PostgreSQL/RLS)',
   () => {
     let raw: Database;
     let uploadsRoot = '';
@@ -219,6 +223,18 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       try {
         const cy = await fx.createUser('cy@example.test', other);
         await expectPackRoutesIsolated(fx, expect, [{ user: cy, tenantId: other }]);
+      } finally {
+        await fx.close();
+      }
+    }, 60_000);
+
+    it('a chunked upload resumes, checks its sha256, and never crosses users or tenants', async () => {
+      const tenant = 'pack-pg-chunks-a' as TenantID;
+      const other = 'pack-pg-chunks-b' as TenantID;
+      const fx = await createPackFixture({ raw, tenant, config: CONFIG, uploadsRoot });
+      try {
+        const cy = await fx.createUser('cy@example.test', other);
+        await expectChunkedUploadWorks(fx, expect, [{ user: cy, tenantId: other }]);
       } finally {
         await fx.close();
       }

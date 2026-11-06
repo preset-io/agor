@@ -3,6 +3,7 @@ import {
   KnowledgeNamespaceRepository,
   shortId,
   type TenantScopeAwareDatabase,
+  UsersRepository,
 } from '@agor/core/db';
 import type {
   Branch,
@@ -11,7 +12,7 @@ import type {
   TeammateKnowledgeConfig,
   UserID,
 } from '@agor/core/types';
-import { getTeammateConfig, isTeammate } from '@agor/core/types';
+import { getTeammateConfig, hasMinimumRole, isTeammate, ROLES } from '@agor/core/types';
 
 export const TEAMMATE_MEMORY_PATH_TEMPLATE = 'memory/{{YYYY-MM-DD}}.md' as const;
 export const TEAMMATE_NAMESPACE_MISSING_MESSAGE = 'namespace for this agent is not set up';
@@ -82,9 +83,25 @@ export async function ensureTeammateKnowledgeNamespace(
     return { namespace: configuredNamespace, branch };
   }
 
-  const existing = (await namespaces.findAll({ branch_id: branch.branch_id, kind: 'branch' })).find(
-    (namespace) => !namespace.archived && isPrimaryTeammateNamespace(namespace, branch.branch_id)
-  );
+  // Older rows may claim this branch without its owner's consent, so only adopt one its owner, creator or an admin made.
+  const users = new UsersRepository(db);
+  let existing: KnowledgeNamespace | undefined;
+  for (const namespace of await namespaces.findAll({
+    branch_id: branch.branch_id,
+    kind: 'branch',
+  })) {
+    if (namespace.archived || !isPrimaryTeammateNamespace(namespace, branch.branch_id)) continue;
+    const creator = namespace.created_by ? await users.findById(namespace.created_by) : null;
+    if (
+      creator &&
+      (creator.user_id === branch.primary_owner_user_id ||
+        creator.user_id === branch.created_by ||
+        hasMinimumRole(creator.role, ROLES.ADMIN))
+    ) {
+      existing = namespace;
+      break;
+    }
+  }
 
   const createdBy = (userId ??
     branch.primary_owner_user_id ??
@@ -103,7 +120,8 @@ export async function ensureTeammateKnowledgeNamespace(
           owner_user_id: createdBy,
           created_by: createdBy,
           visibility_default: 'public',
-          others_can: 'write',
+          // Teammate sessions boot from this namespace, so only owners, grantees and admins may write.
+          others_can: 'read',
           metadata: teammateNamespaceMetadata(branch.branch_id),
         },
         createdBy

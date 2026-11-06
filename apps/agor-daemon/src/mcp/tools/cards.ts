@@ -109,7 +109,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       // not a Feathers transport method, so enter the tenant DB scope here (the
       // other cards custom-method calls in this file do the same).
       const cardWithType = await runWithMcpTenantDatabaseScope(ctx, () =>
-        cardsService.getWithType(args.cardId)
+        cardsService.getWithType(args.cardId, ctx.baseServiceParams)
       );
       if (!cardWithType) throw new Error(`Card ${args.cardId} not found`);
       return textResult(cardWithType);
@@ -233,7 +233,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
       const archivedCard = await runWithMcpTenantDatabaseScope(ctx, () =>
-        cardsService.archive(args.cardId)
+        cardsService.archive(args.cardId, ctx.baseServiceParams)
       );
       emitServiceEvent(ctx.app, {
         path: 'cards',
@@ -257,7 +257,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
       const unarchivedCard = await runWithMcpTenantDatabaseScope(ctx, () =>
-        cardsService.unarchive(args.cardId)
+        cardsService.unarchive(args.cardId, ctx.baseServiceParams)
       );
       emitServiceEvent(ctx.app, {
         path: 'cards',
@@ -298,7 +298,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       }
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
       const boardObject = await runWithMcpTenantDatabaseScope(ctx, () =>
-        cardsService.moveToZone(cardId as never, zoneId, zoneData)
+        cardsService.moveToZone(cardId as never, zoneId, zoneData, ctx.baseServiceParams)
       );
       emitServiceEvent(ctx.app, {
         path: 'board-objects',
@@ -323,18 +323,14 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const cardId = await resolveCardId(ctx, args.cardId);
-      const updatedBoardObject = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
-        const boardObjectRepo = new BoardObjectRepository(db);
-        const boardObj = await boardObjectRepo.findByCardId(cardId as never);
-        if (!boardObj) throw new Error(`Card ${cardId} has no board placement`);
-        const boardObjectsService = ctx.app.service(
-          'board-objects'
-        ) as unknown as import('../../services/board-objects.js').BoardObjectsService;
-        return boardObjectsService.updatePosition(boardObj.object_id, {
-          x: args.x,
-          y: args.y,
-        });
-      });
+      const boardObj = await runWithMcpTenantDatabaseScope(ctx, (db) =>
+        new BoardObjectRepository(db).findByCardId(cardId as never)
+      );
+      if (!boardObj) throw new Error(`Card ${cardId} has no board placement`);
+      // The transport patch carries the board-object Board Editor check and publishes the move.
+      const updatedBoardObject = await ctx.app
+        .service('board-objects')
+        .patch(boardObj.object_id, { position: { x: args.x, y: args.y } }, ctx.baseServiceParams);
       return textResult(updatedBoardObject);
     }
   );
@@ -520,7 +516,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
           if (zone?.type === 'zone') zoneData = zone;
         }
         const boardObject = await runWithMcpTenantDatabaseScope(ctx, () =>
-          cardsService.moveToZone(cardId as never, zoneId, zoneData)
+          cardsService.moveToZone(cardId as never, zoneId, zoneData, ctx.baseServiceParams)
         );
         emitServiceEvent(ctx.app, {
           path: 'board-objects',

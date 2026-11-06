@@ -11,19 +11,19 @@ import {
   AimOutlined,
   DownloadOutlined,
   EditOutlined,
-  ImportOutlined,
   PlusOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import { Button, Empty, Input, Space, Spin, Tooltip, Typography, theme } from 'antd';
-import { useCallback, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Button, Empty, Input, Spin, Tooltip, Typography, theme } from 'antd';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useAgorStore } from '../../store/agorStore';
 import { selectTeammatesLoaded } from '../../store/userScope';
 import { ExportPackModal } from '../AgorPack/ExportPackModal';
-import { ImportPackWizard } from '../AgorPack/ImportPackWizard';
+import { canExportTeammate } from '../AgorPack/packCheck';
+import { PACK_COPY } from '../AgorPack/packCopy';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
@@ -86,13 +86,19 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
 
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
-  const [exportBranchIds, setExportBranchIds] = useState<string[] | null>(null);
-  // `?import=1` (the "Open Agor Cloud" deep link) opens the import wizard;
-  // `?import=<import id>` (sent from a self-hosted install) opens its reconnect checklist.
+  const [exportTeammate, setExportTeammate] = useState<Branch | null>(null);
+  // Import moved to Settings → Import; keep old `?import=…` links working.
   const [searchParams] = useSearchParams();
-  const importParam = searchParams.get('import');
-  const [importOpen, setImportOpen] = useState(() => Boolean(importParam));
-  const deepLinkedImportId = importParam && importParam !== '1' ? importParam : undefined;
+  const importLink = searchParams.get('import');
+  const navigate = useNavigate();
+  const location = useLocation();
+  useEffect(() => {
+    if (!importLink) return;
+    navigate(`/settings/import/?import=${encodeURIComponent(importLink)}`, {
+      replace: true,
+      state: location.state,
+    });
+  }, [importLink, navigate, location.state]);
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
   const teammatesLoaded = useAgorStore(selectTeammatesLoaded);
   const sessionCounts = useSessionCounts(client ?? null, 'branch_id', !!selectedBranch);
@@ -187,18 +193,20 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
       width: 136,
       render: (_: unknown, record: Branch) => (
         <SettingsActionGroup>
-          <Tooltip title="Export .agorpack">
-            <Button
-              type="text"
-              size="small"
-              icon={<DownloadOutlined />}
-              aria-label="Export teammate"
-              onClick={(e) => {
-                e.stopPropagation();
-                setExportBranchIds([record.branch_id]);
-              }}
-            />
-          </Tooltip>
+          {canExportTeammate(currentUser, record) && (
+            <Tooltip title={PACK_COPY.menuExport}>
+              <Button
+                type="text"
+                size="small"
+                icon={<DownloadOutlined />}
+                aria-label={PACK_COPY.menuExport}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setExportTeammate(record);
+                }}
+              />
+            </Tooltip>
+          )}
           {record.board_id && (
             <Tooltip title="Center map on teammate">
               <Button
@@ -252,26 +260,14 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
         }
         count={`${teammates.length} ${teammates.length === 1 ? 'teammate' : 'teammates'}`}
         primaryActions={
-          <Space wrap>
-            <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>
-              Import .agorpack
-            </Button>
-            <Button
-              icon={<DownloadOutlined />}
-              disabled={teammates.length === 0}
-              onClick={() => setExportBranchIds(teammates.map((t) => t.branch_id))}
-            >
-              Export…
-            </Button>
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={onCreateTeammate}
-              disabled={!onCreateTeammate}
-            >
-              Create AI teammate
-            </Button>
-          </Space>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={onCreateTeammate}
+            disabled={!onCreateTeammate}
+          >
+            Create AI teammate
+          </Button>
         }
       />
 
@@ -316,23 +312,8 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
         />
       )}
 
-      {exportBranchIds && (
-        <ExportPackModal
-          open
-          teammates={Array.from(branchById.values()).filter((w) => !w.archived && isTeammate(w))}
-          initialBranchIds={exportBranchIds}
-          onClose={() => setExportBranchIds(null)}
-        />
-      )}
-      {importOpen && (
-        <ImportPackWizard
-          open
-          client={client}
-          currentUser={currentUser}
-          boardById={boardById}
-          importId={deepLinkedImportId}
-          onClose={() => setImportOpen(false)}
-        />
+      {exportTeammate && (
+        <ExportPackModal open teammate={exportTeammate} onClose={() => setExportTeammate(null)} />
       )}
 
       {/* Archive/Delete Modal */}

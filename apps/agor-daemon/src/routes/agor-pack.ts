@@ -1,5 +1,5 @@
 /**
- * HTTP routes for `.agorpack` teammate export/import ("Move to Agor Cloud").
+ * HTTP routes for `.agor` teammate export/import ("Move to Agor Cloud").
  *
  * JSON routes are long authenticated routes (standard auth, MEMBER, tenant
  * identity and write gate, no request-long transaction; services open short
@@ -12,6 +12,10 @@
  *   POST /agor-pack/exports                       build a pack → { export_id, ref, … }
  *   GET  /agor-pack/downloads/:exportId/:ref      download it (creator only)
  *   POST /agor-pack/uploads                       upload a pack (raw body) → dry-run receipt
+ *   POST /agor-pack/uploads/chunked               resumable upload: { size, sha256 } → state
+ *   GET  /agor-pack/uploads/chunked/:id           which chunks the daemon has
+ *   PUT  /agor-pack/uploads/chunked/:id/:index    one chunk (raw body, ≤ AGOR_PACK.chunkBytes)
+ *   POST /agor-pack/uploads/chunked/:id/complete  assemble, check sha256 → dry-run receipt
  *   GET  /agor-pack/imports/:importId             receipt, results, filesystem state
  *   POST /agor-pack/imports/:importId/apply       { teammates, board_id } → receipt (applying)
  *   POST /agor-pack/switch-over/:branchId         { undo } pause/resume the source copy
@@ -34,6 +38,7 @@ import {
   AGOR_PACK,
   type AuthenticatedParams,
   agorPackApplyRequestSchema,
+  agorPackChunkedUploadInitSchema,
   agorPackExportRequestSchema,
   type DeepReadonly,
   type HookContext,
@@ -46,6 +51,10 @@ import {
 import type { NextFunction, Request, Response } from 'express';
 import { matchesExecutorCommandRuntimeScope } from '../auth/executor-runtime-scope.js';
 import { authenticateBearerHttpRequest } from '../register-routes.js';
+import {
+  AgorPackChunkedUploads,
+  agorPackChunkBytes,
+} from '../services/agor-pack-chunked-upload.js';
 import {
   agorPackCollectExecutorCommandId,
   agorPackMaterializeExecutorCommandId,
@@ -328,6 +337,73 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
       sendPackError(res, error);
     }
   });
+
+  // Resumable upload: same auth as the raw upload (browser JWT or personal
+  // API key), each piece owned by the caller in their tenant.
+  const chunkedRoute =
+    (
+      work: (input: {
+        req: PackRequest & { params: Record<string, string> };
+        uploads: AgorPackChunkedUploads;
+        importer: AgorPackImporter;
+      }) => Promise<unknown>
+    ) =>
+    async (req: PackRequest & { params: Record<string, string> }, res: Response) => {
+      try {
+        const params = caller(req);
+        const context = serviceContext(params);
+        const result = await runWithTenantContext(context.tenantId, () =>
+          work({
+            req,
+            uploads: new AgorPackChunkedUploads(context),
+            importer: new AgorPackImporter(context, params),
+          })
+        );
+        res.json(result);
+      } catch (error) {
+        req.resume();
+        sendPackError(res, error);
+      }
+    };
+
+  express.post(
+    '/agor-pack/uploads/chunked',
+    streamAuth,
+    chunkedRoute(async ({ req, uploads, importer }) => {
+      const parsed = agorPackChunkedUploadInitSchema.safeParse(
+        (req as PackRequest & { body?: unknown }).body
+      );
+      if (!parsed.success) throw new BadRequest('size and sha256 are required');
+      return uploads.init(parsed.data, importer);
+    })
+  );
+  express.get(
+    '/agor-pack/uploads/chunked/:uploadId',
+    streamAuth,
+    chunkedRoute(({ req, uploads }) => uploads.status(String(req.params.uploadId)))
+  );
+  express.put(
+    '/agor-pack/uploads/chunked/:uploadId/:index',
+    streamAuth,
+    chunkedRoute(({ req, uploads }) => {
+      const size = Number.parseInt(String(req.headers['content-length'] ?? ''), 10);
+      if (!Number.isSafeInteger(size) || size <= 0) {
+        throw Object.assign(new Error('Content-Length is required'), { code: 411 });
+      }
+      if (size > agorPackChunkBytes()) {
+        throw Object.assign(new Error('Chunk exceeds the maximum size'), { code: 413 });
+      }
+      const index = /^\d{1,6}$/.test(String(req.params.index)) ? Number(req.params.index) : -1;
+      return uploads.putChunk(String(req.params.uploadId), index, req, size);
+    })
+  );
+  express.post(
+    '/agor-pack/uploads/chunked/:uploadId/complete',
+    streamAuth,
+    chunkedRoute(({ req, uploads, importer }) =>
+      uploads.complete(String(req.params.uploadId), importer)
+    )
+  );
 
   // Executor → daemon: the git/Claude-home fragment of one teammate export.
   express.post(

@@ -4,7 +4,14 @@
  * signs in through the browser instead; this is the scripted fallback.
  */
 
+import { createWriteStream } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import {
+  AGOR_PACK,
   type AgorPackImport,
   type AgorPackManifest,
   agorCloudReconnectUrl,
@@ -13,15 +20,22 @@ import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
 import { packFetch, packJson } from '../../lib/pack/http';
-import { applyPack, exportRequest, packContentFlags, printDryRun } from '../../lib/pack/options';
+import {
+  applyPack,
+  exportRequest,
+  packContentFlags,
+  printDryRun,
+  uploadPackFile,
+} from '../../lib/pack/options';
 
 export default class PackSend extends BaseCommand {
   static override summary = 'Send AI teammates to an Agor Cloud workspace';
   static override description =
-    'Exports the teammates from the connected daemon and uploads the pack to an Agor Cloud ' +
+    'Exports the teammates from the connected daemon and uploads the .agor file to an Agor Cloud ' +
     'workspace with a personal API key from that workspace, read from an environment variable. ' +
     'Prints the dry-run; with --apply, imports them (each on a new board) and prints the link ' +
-    'to the reconnect checklist in Cloud. Sending the same pack again changes nothing.';
+    'to Finish setup in Cloud. An interrupted upload resumes; sending the same file again ' +
+    'changes nothing.';
 
   static override examples = [
     'AGOR_CLOUD_API_KEY=agor_sk_… <%= config.bin %> <%= command.id %> 01933e4a --cloud-url https://acme.dp-us1a.agor.cloud --api-key-env AGOR_CLOUD_API_KEY --apply',
@@ -76,15 +90,25 @@ export default class PackSend extends BaseCommand {
         bearer,
         `/agor-pack/downloads/${exported.export_id}/${exported.ref}`
       );
-      this.logToStderr(chalk.dim(`Sending ${exported.size} bytes to ${new URL(cloudUrl).host}…`));
-      const uploaded = await packFetch(cloudUrl, cloudKey, '/agor-pack/uploads', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/zip', 'Content-Length': String(exported.size) },
-        body: download.body,
-        duplex: 'half',
-        redirect: 'error',
-      } as RequestInit);
-      let receipt = (await uploaded.json()) as AgorPackImport;
+      // The chunked upload needs the file's hash first, so stage it locally.
+      const dir = await mkdtemp(join(tmpdir(), 'agor-pack-send-'));
+      let receipt: AgorPackImport;
+      try {
+        const file = join(dir, `export${AGOR_PACK.extension}`);
+        await pipeline(
+          Readable.fromWeb(download.body as never),
+          createWriteStream(file, { mode: 0o600 })
+        );
+        this.logToStderr(chalk.dim(`Sending ${exported.size} bytes to ${new URL(cloudUrl).host}…`));
+        receipt = await uploadPackFile({
+          baseUrl: cloudUrl,
+          bearer: cloudKey,
+          file,
+          log: (line) => this.logToStderr(line),
+        });
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
       printDryRun((line) => this.logToStderr(line), receipt);
       if (flags.apply) {
         receipt = await applyPack({
@@ -96,7 +120,7 @@ export default class PackSend extends BaseCommand {
           log: (line) => this.logToStderr(line),
         });
         this.logToStderr(
-          `Reconnect credentials in Cloud: ${agorCloudReconnectUrl(cloudUrl, receipt.import_id)}`
+          `Finish setup in Cloud: ${agorCloudReconnectUrl(cloudUrl, receipt.import_id)}`
         );
       }
       this.log(JSON.stringify(receipt));

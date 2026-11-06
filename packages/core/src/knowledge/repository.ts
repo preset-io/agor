@@ -319,7 +319,7 @@ export function importRepositoryLinks(
 }
 
 /**
- * Repository v2 writer shared by `agor kb export` and the `.agorpack` exporter:
+ * Repository v2 writer shared by `agor kb export` and the `.agor` exporter:
  * maps logical paths to portable files (keeping `previous` names), rewrites
  * links to relative files and enforces the serialized limits the reader checks.
  */
@@ -400,7 +400,7 @@ export function decodeKnowledgeRepositoryFile(
 
 /**
  * Import plan for a decoded repository v2 (in `index.documents` order), shared
- * by `agor kb import` and the `.agorpack` importer. Source Knowledge URLs and
+ * by `agor kb import` and the `.agor` importer. Source Knowledge URLs and
  * relative file links are rewritten to `targetSlug`; manifest entries describe
  * the rewritten bodies. `unresolved` counts every link left as-is; `outside`
  * is the subset that points at other namespaces or documents outside the

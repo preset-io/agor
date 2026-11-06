@@ -170,7 +170,7 @@ describe('agor_cards_list', () => {
 });
 
 describe('card MCP realtime events', () => {
-  it('passes actor params only where needed and emits correctly-shaped events', async () => {
+  it('passes caller params to every board-authorized card method and emits correctly-shaped events', async () => {
     const params = {
       authenticated: true,
       provider: 'mcp',
@@ -215,8 +215,8 @@ describe('card MCP realtime events', () => {
 
     expect(boardsGet).toHaveBeenCalledOnce();
     expect(createWithPlacement).toHaveBeenCalledWith(expect.any(Object), params);
-    expect(moveToZone).toHaveBeenCalledWith('card-1', null, undefined);
-    expect(archive).toHaveBeenCalledWith('card-1');
+    expect(moveToZone).toHaveBeenCalledWith('card-1', null, undefined, params);
+    expect(archive).toHaveBeenCalledWith('card-1', params);
     expect(cardsEmit).toHaveBeenCalledWith(
       'created',
       card,

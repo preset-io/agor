@@ -405,6 +405,51 @@ function parseOptionalPortEnvironmentValue(
   return port;
 }
 
+function parseOptionalBoundedIntegerEnvironmentValue(
+  value: string | undefined,
+  name: string,
+  min: number,
+  max: number
+): number | undefined {
+  if (value === undefined || value === '') return undefined;
+  const parsed = /^\d+$/.test(value) ? Number(value) : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(`Config error: ${name} must be an integer between ${min} and ${max}`);
+  }
+  return parsed;
+}
+
+/** Default browser refresh-token lifetime (30 days) when `daemon.refresh_token_ttl_seconds` is unset. */
+export const DEFAULT_REFRESH_TOKEN_TTL_SECONDS = 2_592_000;
+// Lower bound keeps the refresh token longer than the 15-minute access token;
+// upper bound stops a typo (an extra zero) from issuing year-long tokens.
+const MIN_REFRESH_TOKEN_TTL_SECONDS = 3_600;
+const MAX_REFRESH_TOKEN_TTL_SECONDS = 7_776_000;
+
+function assertValidRefreshTokenTtlSeconds(value: unknown): void {
+  if (
+    value !== undefined &&
+    (!Number.isSafeInteger(value) ||
+      (value as number) < MIN_REFRESH_TOKEN_TTL_SECONDS ||
+      (value as number) > MAX_REFRESH_TOKEN_TTL_SECONDS)
+  ) {
+    throw new Error(
+      `Config error: daemon.refresh_token_ttl_seconds must be an integer between ${MIN_REFRESH_TOKEN_TTL_SECONDS} and ${MAX_REFRESH_TOKEN_TTL_SECONDS}`
+    );
+  }
+}
+
+/**
+ * Browser refresh-token lifetime in seconds for an effective (env-resolved)
+ * config. The single source for every refresh-token issuer. Re-checks bounds so
+ * a config that skipped load-time validation still fails closed.
+ */
+export function resolveRefreshTokenTtlSeconds(config: AgorConfig): number {
+  const value = config.daemon?.refresh_token_ttl_seconds;
+  assertValidRefreshTokenTtlSeconds(value);
+  return value ?? DEFAULT_REFRESH_TOKEN_TTL_SECONDS;
+}
+
 function parseOptionalSdkHomeModeEnvironmentValue(
   value: string | undefined
 ): 'inherit' | 'per_branch' | undefined {
@@ -821,6 +866,7 @@ function validateConfig(config: AgorConfig): void {
     'externalAppLink',
     'externalAppLabel',
     'impersonation_token_expiry_ms',
+    'refresh_token_ttl_seconds',
     'cors_allow_sandpack',
     'cors_origins',
     'trust_proxy_hops',
@@ -833,6 +879,7 @@ function validateConfig(config: AgorConfig): void {
   ) {
     throw new Error('Config error: daemon.websocket_compression must be a boolean');
   }
+  assertValidRefreshTokenTtlSeconds(config.daemon?.refresh_token_ttl_seconds);
   only(config.ui, 'ui', ['base_url', 'port', 'host']);
   only(config.uploads, 'uploads', ['location', 'max_age_days', 'max_file_size_mb']);
   only(config.external_launch, 'external_launch', [
@@ -1652,6 +1699,12 @@ export function resolveEffectiveConfig(
     env.AGOR_WEBSOCKET_COMPRESSION,
     'AGOR_WEBSOCKET_COMPRESSION'
   );
+  const refreshTokenTtlSeconds = parseOptionalBoundedIntegerEnvironmentValue(
+    env.AGOR_REFRESH_TOKEN_TTL_SECONDS,
+    'AGOR_REFRESH_TOKEN_TTL_SECONDS',
+    MIN_REFRESH_TOKEN_TTL_SECONDS,
+    MAX_REFRESH_TOKEN_TTL_SECONDS
+  );
   const apmTraceServices = parseOptionalApmTraceDepthEnvironmentValue(env.AGOR_APM_TRACE_SERVICES);
   const externalLaunch = resolveEffectiveExternalLaunchConfig(config.external_launch, env);
 
@@ -1734,6 +1787,9 @@ export function resolveEffectiveConfig(
       ...(env.EXTERNAL_APP_LABEL ? { externalAppLabel: env.EXTERNAL_APP_LABEL } : {}),
       ...(websocketCompression !== undefined
         ? { websocket_compression: websocketCompression }
+        : {}),
+      ...(refreshTokenTtlSeconds !== undefined
+        ? { refresh_token_ttl_seconds: refreshTokenTtlSeconds }
         : {}),
     },
     ui: { ...defaults.ui, ...config.ui },

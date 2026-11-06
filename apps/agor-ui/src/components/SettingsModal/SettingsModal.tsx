@@ -38,6 +38,7 @@ import {
   selectUserById,
 } from '../../store/selectors';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import { ImportPackSection } from '../AgorPack/ImportPackSection';
 import { BranchModal } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { AboutTab } from './AboutTab';
@@ -185,16 +186,13 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   const reducedMotion = usePrefersReducedMotion();
   const settingsSectionKeys = useMemo(() => new Set<string>(SETTINGS_SECTIONS), []);
 
-  // Role gate — MCP Servers and Gateway Channels are global admin-managed
-  // configuration (credentials, webhook URLs, env vars). The daemon enforces
-  // ADMIN role on writes for both services (see register-hooks.ts); hiding
-  // the menu entries here avoids showing members a tab where every action
-  // would 403.
+  // Role gate — Gateway Channels are global admin-managed configuration
+  // (credentials, webhook URLs). The daemon enforces ADMIN role on writes (see
+  // register-hooks.ts); hiding the menu entry here avoids showing members a tab
+  // where every action would 403.
   //
-  // The MCP Servers tab is offered to everyone. What a member may do there is
-  // the tenant's `mcp_member_policy`, which members may read precisely so a
-  // refusal is legible to the person it refuses; the tab shows them that
-  // policy and the servers they can already use.
+  // MCP servers are not configured here at all: everyone manages them in the
+  // MCP Catalog's My Servers tab, under the tenant's `mcp_member_policy`.
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   // Move to Agor Cloud only makes sense on a self-hosted install: Cloud
   // workspaces are reached through launch authentication.
@@ -223,6 +221,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         case 'move-to-cloud':
           // Members move their own teammates; admins can move anyone's.
           return selfHosted && hasMinimumRole(currentUser?.role, ROLES.MEMBER);
+        case 'import':
+          return canListUsers;
         default:
           return true;
       }
@@ -480,6 +480,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         );
       case 'move-to-cloud':
         return <MoveToCloudSection currentUser={currentUser} branchById={branchById} />;
+      case 'import':
+        return <ImportPackSection selfHosted={selfHosted} onClose={onClose} />;
       case 'card-types':
         return <CardTypesPanel client={client} cardTypeById={cardTypeById} />;
       case 'cards':

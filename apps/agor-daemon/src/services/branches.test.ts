@@ -1420,6 +1420,43 @@ describe('BranchesService.unarchive', () => {
     );
   });
 
+  it.each([
+    [false, 0],
+    [true, 1],
+  ])(
+    'restores a missing placement only for a Board Editor (editor=%s)',
+    async (canEdit, creates) => {
+      const { service, reposService, boardObjectsService } = createServiceHarness();
+      const branchId = 'wt-restore' as BranchID;
+      const boardId = 'board-restore' as BoardID;
+      reposService.retryBranchProvisioning.mockResolvedValue({ board_id: boardId });
+      vi.spyOn(service, 'get').mockResolvedValue({
+        branch_id: branchId,
+        name: 'Restore',
+        path: '/tmp',
+        archived: true,
+        board_id: boardId,
+      } as never);
+      vi.spyOn(service as never, 'computeDefaultBoardPositionForBranch').mockResolvedValue({
+        x: 1,
+        y: 2,
+      });
+      const canMutate = vi.spyOn(BoardRepository.prototype, 'canMutate').mockResolvedValue(canEdit);
+      const committed = { branch_id: branchId, archived: false, board_id: boardId };
+      stubCommittedRead(service, committed);
+      const external = {
+        provider: 'mcp',
+        user: { user_id: 'user-1' as UUID, email: 'user-1@example.test', role: 'member' },
+      } as never;
+
+      // The branch is restored either way; only the canvas card needs Board Editor.
+      expect(await service.unarchive(branchId, undefined, external)).toBe(committed);
+      expect(canMutate).toHaveBeenCalledWith(boardId, 'user-1');
+      expect(boardObjectsService.create).toHaveBeenCalledTimes(creates);
+      canMutate.mockRestore();
+    }
+  );
+
   it('does not create a new board object when one already exists', async () => {
     const { service, reposService, boardObjectsService } = createServiceHarness();
     reposService.retryBranchProvisioning.mockResolvedValue({ board_id: 'board-b' });

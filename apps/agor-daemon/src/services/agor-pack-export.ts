@@ -1,5 +1,5 @@
 /**
- * `.agorpack` export: serialize one or more AI teammates into a streaming,
+ * `.agor` export: serialize one or more AI teammates into a streaming,
  * secret-free zip using the existing serializers (board blob, Knowledge
  * repository v2, repository rows → section DTOs) plus an executor-collected
  * fragment for git history and Claude memory.
@@ -57,7 +57,8 @@ import {
   type AgorPackArtifactFile,
   type AgorPackAuthor,
   type AgorPackBoardFile,
-  type AgorPackExportRequest,
+  type AgorPackExportOptions,
+  type AgorPackFlaggedSession,
   type AgorPackManifest,
   type AgorPackMessage,
   type AgorPackPreflightTeammate,
@@ -290,8 +291,9 @@ export class AgorPackExporter {
   /** Sessions the request selects; archived ones are left out and counted. */
   private async selectSessions(
     branch: Branch,
-    mode: AgorPackExportRequest['sessions'],
-    includeOthers: boolean
+    mode: AgorPackExportOptions['sessions'],
+    includeOthers: boolean,
+    excluded: ReadonlySet<string> = new Set()
   ): Promise<{ sessions: Session[]; archived: number }> {
     if (mode === 'none') return { sessions: [], archived: 0 };
     const all = await this.unit(() =>
@@ -299,6 +301,7 @@ export class AgorPackExporter {
     );
     const since = Date.now() - RECENT_MS;
     const selected = all
+      .filter((session) => !excluded.has(session.session_id))
       .filter((session) => includeOthers || session.created_by === this.ctx.user.user_id)
       .filter((session) => mode === 'all' || Date.parse(session.last_updated) >= since);
     return {
@@ -435,6 +438,28 @@ export class AgorPackExporter {
       const others = all.filter((s) => s.created_by !== this.ctx.user.user_id);
       const recent = (list: Session[]) =>
         list.filter((s) => Date.parse(s.last_updated) >= since).length;
+      // Same serializer and secret scan as the export: sizes for the history
+      // choice, and the sessions it would redact ("may contain passwords").
+      const sessionBytes = { own: 0, others: 0, recent_own: 0, recent_others: 0 };
+      const flagged: AgorPackFlaggedSession[] = [];
+      for (const session of all) {
+        const { file, lines, redacted } = await this.serializeSession(session, new Set());
+        const bytes =
+          Buffer.byteLength(JSON.stringify(file)) +
+          lines.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0);
+        const isOwn = session.created_by === this.ctx.user.user_id;
+        const isRecent = Date.parse(session.last_updated) >= since;
+        sessionBytes[isOwn ? 'own' : 'others'] += bytes;
+        if (isRecent) sessionBytes[isOwn ? 'recent_own' : 'recent_others'] += bytes;
+        if (redacted > 0) {
+          flagged.push({
+            session_id: session.session_id,
+            title: session.title ?? null,
+            own: isOwn,
+            recent: isRecent,
+          });
+        }
+      }
       const schedules = await this.unit(() =>
         new ScheduleRepository(this.ctx.db).findByBranchId(branch.branch_id)
       );
@@ -446,6 +471,7 @@ export class AgorPackExporter {
         ? await this.unit(() => previewKnowledgeExport(this.ctx.db, namespaceId, this.ctx.user))
         : {
             documents: 0,
+            bytes: 0,
             archived: 0,
             privateSkipped: 0,
             outsideLinks: { count: 0, namespaces: [] },
@@ -472,6 +498,15 @@ export class AgorPackExporter {
           recent_own: recent(own),
           recent_others: recent(others),
         },
+        session_bytes: sessionBytes,
+        other_bytes:
+          knowledge.bytes +
+          artifacts.reduce(
+            (sum, artifact) => sum + Buffer.byteLength(JSON.stringify(artifact.files ?? {})),
+            0
+          ),
+        flagged_sessions: flagged,
+        board: Boolean(branch.board_id) && !boardHidden,
         schedules: schedules.length,
         artifacts: artifacts.length,
         knowledge_documents: knowledge.documents,
@@ -489,6 +524,86 @@ export class AgorPackExporter {
       });
     }
     return results;
+  }
+
+  /**
+   * One session as it goes into a pack: the session file and its message
+   * lines, secret-shaped text redacted (`redacted` counts the values). The
+   * preflight runs the same serializer to flag sessions and estimate sizes.
+   */
+  private async serializeSession(
+    session: Session,
+    exportedIds: ReadonlySet<string>
+  ): Promise<{ file: AgorPackSessionFile; lines: string[]; redacted: number }> {
+    const tasks = await this.unit(() =>
+      new TaskRepository(this.ctx.db).findAll({ sessionId: session.session_id })
+    );
+    const file: AgorPackSessionFile = {
+      version: 1,
+      session: {
+        source_session_id: session.session_id,
+        title: session.title ?? null,
+        description: session.description ?? null,
+        agentic_tool: session.agentic_tool,
+        model_config: (session.model_config as Record<string, unknown> | undefined) ?? null,
+        created_at: iso(session.created_at),
+        last_updated: iso(session.last_updated),
+        parent_source_session_id:
+          session.genealogy?.parent_session_id &&
+          exportedIds.has(session.genealogy.parent_session_id)
+            ? session.genealogy.parent_session_id
+            : null,
+        forked_from_source_session_id:
+          session.genealogy?.forked_from_session_id &&
+          exportedIds.has(session.genealogy.forked_from_session_id)
+            ? session.genealogy.forked_from_session_id
+            : null,
+        originally_by: await this.authorOf(session.created_by),
+      },
+      tasks: tasks
+        .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
+        .map((task) => ({
+          source_task_id: task.task_id,
+          full_prompt: task.full_prompt ?? '',
+          status: task.status,
+          model: task.model ?? null,
+          created_at: iso(task.created_at),
+          completed_at: task.completed_at ? iso(task.completed_at) : null,
+          duration_ms: typeof task.duration_ms === 'number' ? task.duration_ms : null,
+          message_range: (task.message_range as Record<string, unknown> | undefined) ?? null,
+        })),
+    };
+    const scrubbedFile = redactSecretsDeep(file);
+    let redacted = scrubbedFile.redacted;
+    const messages = await this.unit(() =>
+      new MessagesRepository(this.ctx.db).findAll({ sessionId: session.session_id })
+    );
+    const lines: string[] = [];
+    for (const message of messages) {
+      const line: AgorPackMessage = {
+        source_message_id: message.message_id,
+        source_task_id: message.task_id ?? null,
+        type: message.type,
+        role: message.role,
+        index: message.index,
+        timestamp: iso(message.timestamp),
+        content_preview: message.content_preview ?? '',
+        content: message.content,
+        tool_uses: (message.tool_uses as unknown[] | undefined) ?? null,
+        parent_tool_use_id: message.parent_tool_use_id ?? null,
+        // Only display metadata travels; runtime/recovery bookkeeping stays behind.
+        metadata: message.metadata
+          ? {
+              ...(message.metadata.model ? { model: message.metadata.model } : {}),
+              ...(message.metadata.tokens ? { tokens: message.metadata.tokens } : {}),
+            }
+          : null,
+      };
+      const scrubbed = redactSecretsDeep(line);
+      redacted += scrubbed.redacted;
+      lines.push(JSON.stringify(scrubbed.value));
+    }
+    return { file: { ...scrubbedFile.value, redacted_values: redacted }, lines, redacted };
   }
 
   private environment(branch: Branch, repo: Repo): AgorPackTeammateSummary['environment'] {
@@ -556,7 +671,7 @@ export class AgorPackExporter {
   }
 
   async export(
-    request: AgorPackExportRequest,
+    request: AgorPackExportOptions,
     writer: AgorPackWriter,
     authorized?: Array<{ branch: Branch; repo: Repo }>
   ): Promise<AgorPackManifest> {
@@ -601,7 +716,7 @@ export class AgorPackExporter {
     key: string,
     branch: Branch,
     repo: Repo,
-    request: AgorPackExportRequest,
+    request: AgorPackExportOptions,
     sections: Set<string>,
     writer: AgorPackWriter
   ): Promise<AgorPackTeammateSummary> {
@@ -740,7 +855,8 @@ export class AgorPackExporter {
     const { sessions, archived: archivedSessions } = await this.selectSessions(
       branch,
       request.sessions,
-      request.include_others_sessions
+      request.include_others_sessions,
+      new Set(request.exclude_session_ids)
     );
     archivedSkipped.sessions = archivedSessions;
     const { requirements, servers } = await this.requirements(
@@ -791,89 +907,26 @@ export class AgorPackExporter {
     // Sessions (+ uploads referenced from them).
     const uploadRefs = new Map<string, string>();
     if (sessions.length > 0) {
-      const tasksRepo = new TaskRepository(this.ctx.db);
-      const messagesRepo = new MessagesRepository(this.ctx.db);
       let messageCount = 0;
       let redacted = 0;
+      let flagged = 0;
       const exportedIds = new Set(sessions.map((session) => session.session_id as string));
       for (const [index, session] of sessions.entries()) {
         const sequence = packSequence(index);
-        const tasks = await this.unit(() => tasksRepo.findAll({ sessionId: session.session_id }));
-        const file: AgorPackSessionFile = {
-          version: 1,
-          session: {
-            source_session_id: session.session_id,
-            title: session.title ?? null,
-            description: session.description ?? null,
-            agentic_tool: session.agentic_tool,
-            model_config: (session.model_config as Record<string, unknown> | undefined) ?? null,
-            created_at: iso(session.created_at),
-            last_updated: iso(session.last_updated),
-            parent_source_session_id:
-              session.genealogy?.parent_session_id &&
-              exportedIds.has(session.genealogy.parent_session_id)
-                ? session.genealogy.parent_session_id
-                : null,
-            forked_from_source_session_id:
-              session.genealogy?.forked_from_session_id &&
-              exportedIds.has(session.genealogy.forked_from_session_id)
-                ? session.genealogy.forked_from_session_id
-                : null,
-            originally_by: await this.authorOf(session.created_by),
-          },
-          tasks: tasks
-            .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
-            .map((task) => ({
-              source_task_id: task.task_id,
-              full_prompt: task.full_prompt ?? '',
-              status: task.status,
-              model: task.model ?? null,
-              created_at: iso(task.created_at),
-              completed_at: task.completed_at ? iso(task.completed_at) : null,
-              duration_ms: typeof task.duration_ms === 'number' ? task.duration_ms : null,
-              message_range: (task.message_range as Record<string, unknown> | undefined) ?? null,
-            })),
-        };
-        const sessionFile = redactSecretsDeep(file);
-        redacted += sessionFile.redacted;
-        writer.addBuffer(
-          path(`sessions/${sequence}.json`),
-          `${JSON.stringify(sessionFile.value, null, 2)}\n`
-        );
-
-        const messages = await this.unit(() =>
-          messagesRepo.findAll({ sessionId: session.session_id })
-        );
-        const lines: string[] = [];
-        for (const message of messages) {
-          const line: AgorPackMessage = {
-            source_message_id: message.message_id,
-            source_task_id: message.task_id ?? null,
-            type: message.type,
-            role: message.role,
-            index: message.index,
-            timestamp: iso(message.timestamp),
-            content_preview: message.content_preview ?? '',
-            content: message.content,
-            tool_uses: (message.tool_uses as unknown[] | undefined) ?? null,
-            parent_tool_use_id: message.parent_tool_use_id ?? null,
-            // Only display metadata travels; runtime/recovery bookkeeping stays behind.
-            metadata: message.metadata
-              ? {
-                  ...(message.metadata.model ? { model: message.metadata.model } : {}),
-                  ...(message.metadata.tokens ? { tokens: message.metadata.tokens } : {}),
-                }
-              : null,
-          };
-          const scrubbed = redactSecretsDeep(line);
-          redacted += scrubbed.redacted;
-          const text = JSON.stringify(scrubbed.value);
+        const {
+          file,
+          lines,
+          redacted: sessionRedacted,
+        } = await this.serializeSession(session, exportedIds);
+        for (const text of lines) {
           for (const match of text.matchAll(UPLOAD_LINK)) {
             uploadRefs.set(match[1] as string, session.session_id);
           }
-          lines.push(text);
         }
         messageCount += lines.length;
+        redacted += sessionRedacted;
+        if (sessionRedacted > 0) flagged += 1;
+        writer.addBuffer(path(`sessions/${sequence}.json`), `${JSON.stringify(file, null, 2)}\n`);
         writer.addBuffer(
           path(`sessions/${sequence}.messages.jsonl`),
           lines.length ? `${lines.join('\n')}\n` : ''
@@ -885,6 +938,7 @@ export class AgorPackExporter {
         messages: messageCount,
         others_included: request.include_others_sessions,
         redacted_values: redacted,
+        flagged,
       };
       if (redacted > 0) {
         warnings.push(

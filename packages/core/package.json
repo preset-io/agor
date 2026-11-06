@@ -424,6 +424,12 @@
       "import": "./dist/agor-pack/index.js",
       "default": "./dist/agor-pack/index.js"
     },
+    "./agor-pack/upload-client": {
+      "source": "./src/agor-pack/upload-client.ts",
+      "types": "./dist/agor-pack/upload-client.d.ts",
+      "import": "./dist/agor-pack/upload-client.js",
+      "default": "./dist/agor-pack/upload-client.js"
+    },
     "./agor-pack/file-source": {
       "source": "./src/agor-pack/file-source.ts",
       "types": "./dist/agor-pack/file-source.d.ts",

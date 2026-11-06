@@ -121,6 +121,15 @@ export interface AgorDaemonSettings {
   /** Maximum expiry for impersonation tokens in ms (default: 3600000 = 1 hour, capped at 1 hour) */
   impersonation_token_expiry_ms?: number;
 
+  /**
+   * Lifetime of browser refresh tokens, in whole seconds. Every refresh issues
+   * a new refresh token with this lifetime, so it is the longest a browser can
+   * stay idle and still be signed in. The access token stays 15 minutes.
+   * Must be an integer from 3600 (1 hour) to 7776000 (90 days).
+   * Default: 2592000 (30 days). Env override: `AGOR_REFRESH_TOKEN_TTL_SECONDS`.
+   */
+  refresh_token_ttl_seconds?: number;
+
   /** Allow CORS from Sandpack/CodeSandbox bundler origins (default: true).
    * Enables artifacts on the hosted bundler to call the Agor API. */
   cors_allow_sandpack?: boolean;

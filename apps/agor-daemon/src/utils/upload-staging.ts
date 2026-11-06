@@ -28,7 +28,7 @@ let factory: UploadStagingStoreFactory = () =>
 let instance: UploadStagingStore | undefined;
 
 /**
- * `.agorpack` files and executor pack fragments are blobs of the same upload
+ * `.agor` files and executor pack fragments are blobs of the same upload
  * store (see `MetadataUploadStagingStore.blobs`): their own byte namespace
  * (`agor-packs`, pack size limit, short TTL), their own owner rows, and the
  * same expiry sweep as attachments.

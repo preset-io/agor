@@ -1,21 +1,25 @@
 /**
- * Browser client for the daemon's raw `.agorpack` routes. Packs are binary
- * and can be large, so these use fetch/XHR with the stored bearer (refreshed
- * once on 401, like attachment uploads) instead of the Feathers socket.
+ * Browser client for the daemon's raw `.agor` routes. Packs are binary
+ * and can be large, so these use fetch with the stored bearer (refreshed once
+ * on 401, like attachment uploads) instead of the Feathers socket.
  */
 
-import type {
-  AgorCloudLinkCompleteRequest,
-  AgorCloudLinkStartResult,
-  AgorCloudLinkStatus,
-  AgorCloudTransfer,
-  AgorPackApplyRequest,
-  AgorPackExportRequest,
-  AgorPackImport,
-  AgorPackManifest,
-  AgorPackPreflightTeammate,
-  AgorPackSwitchOverState,
+import { uploadPackChunked } from '@agor/core/agor-pack/upload-client';
+import {
+  AGOR_PACK,
+  type AgorCloudLinkCompleteRequest,
+  type AgorCloudLinkStartResult,
+  type AgorCloudLinkStatus,
+  type AgorCloudTransfer,
+  type AgorPackApplyRequest,
+  type AgorPackExportRequest,
+  type AgorPackImport,
+  type AgorPackManifest,
+  type AgorPackPreflightTeammate,
+  type AgorPackSwitchOverState,
 } from '@agor/core/types';
+import { sha256 } from '@noble/hashes/sha2';
+import { bytesToHex } from '@noble/hashes/utils';
 import { getDaemonUrl } from '../config/daemon';
 import { isExpiringSoon } from './jwtExpiry';
 import { readStoredCredentialOwner, refreshStoredAccessTokenForOwner } from './storedTokenRecovery';
@@ -105,36 +109,52 @@ export async function exportPack(
   return result;
 }
 
-/** Upload a pack with progress; resolves to the dry-run receipt. */
+/** SHA-256 of a file, read in chunk-sized slices (packs can be 2 GB). */
+async function fileSha256(file: Blob, onProgress?: (read: number) => void): Promise<string> {
+  const hash = sha256.create();
+  for (let start = 0; start < file.size; start += AGOR_PACK.chunkBytes) {
+    const slice = file.slice(start, Math.min(file.size, start + AGOR_PACK.chunkBytes));
+    hash.update(new Uint8Array(await slice.arrayBuffer()));
+    onProgress?.(Math.min(file.size, start + AGOR_PACK.chunkBytes));
+  }
+  return bytesToHex(hash.digest());
+}
+
+export type PackUploadPhase = 'checking' | 'uploading';
+
+/**
+ * Upload a pack with the resumable chunked protocol; resolves to the dry-run
+ * receipt. Calling it again with the same file after a failure sends only the
+ * chunks the daemon doesn't have yet.
+ */
 export async function uploadPack(
   file: File,
-  onProgress?: (percent: number) => void
+  onProgress?: (percent: number, phase: PackUploadPhase) => void,
+  signal?: AbortSignal
 ): Promise<AgorPackImport> {
-  const send = (token: string | null) =>
-    new Promise<{ status: number; body: string }>((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', `${daemonUrl()}/agor-pack/uploads`);
-      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-      xhr.setRequestHeader('Content-Type', 'application/zip');
-      xhr.upload.onprogress = (event) => {
-        if (event.lengthComputable) onProgress?.(Math.round((event.loaded / event.total) * 100));
-      };
-      xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
-      xhr.onerror = () => reject(new Error('Upload failed: the daemon could not be reached'));
-      xhr.send(file);
-    });
-  let result = await send(await bearer());
-  if (result.status === 401) result = await send(await bearer(true));
-  if (result.status < 200 || result.status >= 300) {
-    let message = `Upload failed (${result.status})`;
-    try {
-      message = (JSON.parse(result.body) as { error?: string }).error ?? message;
-    } catch {
-      // keep the status message
-    }
-    throw new Error(message);
-  }
-  return JSON.parse(result.body) as AgorPackImport;
+  const percent = (part: number) => (file.size ? Math.floor((part / file.size) * 100) : 100);
+  const digest = await fileSha256(file, (read) => onProgress?.(percent(read), 'checking'));
+  return uploadPackChunked({
+    size: file.size,
+    sha256: digest,
+    readChunk: async (start, end) => file.slice(start, end),
+    send: async (path, init) => {
+      const send = async (token: string | null) =>
+        fetch(`${daemonUrl()}${path}`, {
+          method: init.method,
+          body: init.body as BodyInit | undefined,
+          signal,
+          headers: {
+            ...(init.headers ?? {}),
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        });
+      const response = await send(await bearer());
+      return response.status === 401 ? send(await bearer(true)) : response;
+    },
+    onProgress: (sent) => onProgress?.(percent(sent), 'uploading'),
+    signal,
+  });
 }
 
 export function getPackImport(importId: string): Promise<AgorPackImport> {

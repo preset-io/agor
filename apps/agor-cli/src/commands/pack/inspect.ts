@@ -1,5 +1,5 @@
 /**
- * `agor pack inspect` — validate a `.agorpack` locally and summarize it.
+ * `agor pack inspect` — validate a `.agor` locally and summarize it.
  * Offline: reads the zip, checks every entry name, size, and hash.
  */
 
@@ -11,11 +11,11 @@ import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
 
 export default class PackInspect extends BaseCommand {
-  static override summary = 'Validate and summarize a .agorpack file';
-  static override examples = ['<%= config.bin %> <%= command.id %> ada.agorpack'];
+  static override summary = 'Validate and summarize a .agor file';
+  static override examples = ['<%= config.bin %> <%= command.id %> ada.agor'];
 
   static override args = {
-    file: Args.string({ description: 'Path to the .agorpack file', required: true }),
+    file: Args.string({ description: 'Path to the .agor file', required: true }),
   };
 
   static override flags = {
@@ -40,7 +40,7 @@ export default class PackInspect extends BaseCommand {
         return;
       }
       this.log(
-        `${chalk.bold('.agorpack')} v${manifest.version} from Agor ${manifest.source.agor_version}, ` +
+        `${chalk.bold('.agor')} v${manifest.version} from Agor ${manifest.source.agor_version}, ` +
           `exported ${manifest.created_at} by ${manifest.source.exported_by.name ?? manifest.source.exported_by.email ?? 'unknown'}`
       );
       this.log(

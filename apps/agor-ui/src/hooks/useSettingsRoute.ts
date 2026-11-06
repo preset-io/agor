@@ -20,6 +20,7 @@ export const SETTINGS_SECTIONS = [
   'users',
   'move-to-cloud',
   'about',
+  'import',
 ] as const;
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];

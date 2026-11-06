@@ -76,10 +76,10 @@ function migrationTenantTables(): string[] {
     'packages/core/drizzle/postgres/0117_opencode_checkpoint_attempts.sql'
   );
   const agorPackImportsMigration = readRepoFile(
-    'packages/core/drizzle/postgres/0120_agor_pack_imports.sql'
+    'packages/core/drizzle/postgres/0121_agor_pack_imports.sql'
   );
   const agorPackStagingMigration = readRepoFile(
-    'packages/core/drizzle/postgres/0121_agor_pack_staging.sql'
+    'packages/core/drizzle/postgres/0122_agor_pack_staging.sql'
   );
   const retiredTables = retiredTenantTables();
   return [
@@ -131,8 +131,8 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0118_teams_gateway_ha.sql'),
     readRepoFile('packages/core/drizzle/postgres/0112_kb_import_receipts.sql'),
     readRepoFile('packages/core/drizzle/postgres/0117_opencode_checkpoint_attempts.sql'),
-    readRepoFile('packages/core/drizzle/postgres/0120_agor_pack_imports.sql'),
-    readRepoFile('packages/core/drizzle/postgres/0121_agor_pack_staging.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0121_agor_pack_imports.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0122_agor_pack_staging.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [

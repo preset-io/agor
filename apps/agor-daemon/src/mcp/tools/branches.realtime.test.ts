@@ -216,10 +216,20 @@ async function fixture(options: { rollback?: boolean; storageMode?: 'clone' | 'w
       return [userId];
     },
   });
+  // Branch placements also need board view; the reader can view the fixture board.
+  const boardRepository = {
+    async findById(id: string) {
+      return { board_id: id };
+    },
+    async findRealtimeViewUserIds() {
+      return [userId];
+    },
+  };
   configureRealtimePublish({
     app: remote,
     db: { run() {} } as never,
     branchRepository: visibilityRepository(true) as never,
+    boardRepository: boardRepository as never,
     sessionsRepository: {} as never,
     allowSuperadmin: false,
     multiTenancy: { mode: 'required_from_auth', static_tenant_id: 'unused' as never },
@@ -236,6 +246,7 @@ async function fixture(options: { rollback?: boolean; storageMode?: 'clone' | 'w
     app: source,
     db: db as never,
     branchRepository: visibilityRepository(false) as never,
+    boardRepository: boardRepository as never,
     sessionsRepository: {} as never,
     allowSuperadmin: false,
     multiTenancy: { mode: 'required_from_auth', static_tenant_id: 'unused' as never },
