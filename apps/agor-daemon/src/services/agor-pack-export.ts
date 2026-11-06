@@ -497,6 +497,7 @@ export class AgorPackExporter {
             0
           ),
         flagged_sessions: flagged,
+        board: Boolean(branch.board_id) && !boardHidden,
         schedules: schedules.length,
         artifacts: artifacts.length,
         knowledge_documents: knowledge.documents,

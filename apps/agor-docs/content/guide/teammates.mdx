@@ -193,33 +193,47 @@ Teammates appear as branch cards on boards, distinguished by a robot icon and bl
 
 ## Moving teammates between workspaces
 
-**Settings → Teammates → Export** writes a `.agor` file with the teammates
-you pick. Checkboxes choose what goes in: the board, Knowledge (optionally with
-version history), artifacts, schedules, Claude memory, attachments, and session
-history (none, the last 30 days by default, or all; your own sessions unless you also
-include other people's). Git history that isn't pushed, uncommitted files, and
-a framework teammate's whole tree travel too. Anything archived (sessions,
-Knowledge documents, artifacts) stays behind, and so do Knowledge documents and
-boards you can't open yourself. Links to Knowledge outside the teammate are kept
-as-is; the export shows these counts before you download.
+**Export to file…** (the teammate menu on its board, or the teammate's row in
+**Settings → Teammates**) writes a `.agor` file. Everything moves: the board,
+artifacts, Knowledge with its version history, schedules, Claude memory and
+skills, attachments, unpushed git history and uncommitted files (a framework
+teammate's whole tree). The one choice is session history: the last 90 days
+(the default), all of it, or none; your own sessions unless you also include
+other people's. Anything archived stays behind, and so do Knowledge documents
+and boards you can't open yourself. Members export their own teammates; admins
+can export anyone's.
+
+Before you download, **Check before moving** shows what moves, what to
+reconnect afterwards (your Claude account, apps, Slack, variables), and what
+won't work in Agor Cloud yet: environments that run Docker on your server, and
+hosts only reachable on your network (`*.internal`, `localhost`, private IPs).
+Sessions that may contain a password or API key are listed under **May contain
+passwords**; **Leave these out** (on by default) keeps them out of the file.
 
 The file never contains secrets. Environment variables, MCP credentials, and
-gateway tokens travel by **name** only.
+gateway tokens travel by **name** only, and secret-shaped text in session
+history is redacted.
 
-**Settings → Teammates → Import .agor** shows what is inside before anything
-is created. You own everything you import; the original author is kept as
-"originally by". Schedules arrive paused, custom MCP servers arrive disabled
-without credentials, and sessions arrive as archived, read-only history. A
-reconnect checklist then walks through the credentials and schedules to turn
-back on. Importing the same file again changes nothing. The import runs in the
-background (cloning a repository can take a while); if it stops part-way, for
-example because a clone failed or the server restarted, **Resume** continues
-where it stopped without creating a second copy.
+**Settings → Import** takes `.agor` files up to 2 GB. The upload is sent in
+small resumable chunks, so a dropped connection picks up where it stopped. The
+same check report shows what's inside before anything is created. You own
+everything you import; the original author is kept as "originally by".
+Schedules arrive paused, custom MCP servers arrive disabled without
+credentials, and sessions arrive as read-only history tagged **Imported**.
+Importing the same file again changes nothing. The import runs in the
+background (cloning a repository can take a while); if it stops part-way,
+**Retry** continues where it stopped without creating a second copy.
+
+The imported teammate's board then shows **Finish setup**: each account, app,
+variable and channel to reconnect, with what uses it ("Used by the Morning brief
+schedule"), using the usual settings forms. Its schedules say what they're
+waiting for until you turn them on.
 
 On a self-hosted install, **Settings → Move to Agor Cloud** wraps this: export,
 import in your Cloud workspace, then **Switch over** to pause the teammate's
 schedules and gateway channels on the old install (Undo resumes them). The CLI
-equivalents are `agor pack export`, `agor pack inspect`, and `agor pack import`.
+equivalents are `agor pack export`, `agor pack inspect`, and `agor pack import`
+(which resumes an interrupted upload when run again).
 
 ## Real-world examples
 

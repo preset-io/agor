@@ -553,7 +553,7 @@ export class AgorPackImporter {
               repo,
               request.board_id ?? null,
               state,
-              { check, fenced },
+              { check, fenced, importId },
               persist
             );
             results = [...results, result];
@@ -724,7 +724,12 @@ export class AgorPackImporter {
     {
       check,
       fenced,
-    }: { check: () => Promise<void>; fenced: <T>(work: () => Promise<T>) => Promise<T> },
+      importId,
+    }: {
+      check: () => Promise<void>;
+      fenced: <T>(work: () => Promise<T>) => Promise<T>;
+      importId: string;
+    },
     persist: () => Promise<void>
   ): Promise<AgorPackTeammateResult> {
     const path = (relative: string) => teammatePackPath(summary.key, relative);
@@ -829,7 +834,15 @@ export class AgorPackImporter {
       // Provenance is server-managed and kept out of template-visible context
       // (also set when an earlier attempt stopped right after the create).
       branch = await this.write(() =>
-        branchRepo.update(state.branch_id, { agor_pack: { imported_from: importedFrom } })
+        branchRepo.update(state.branch_id, {
+          agor_pack: {
+            imported_from: {
+              ...importedFrom,
+              import_id: importId,
+              requirements: summary.requirements,
+            },
+          },
+        })
       );
     }
     await persist();

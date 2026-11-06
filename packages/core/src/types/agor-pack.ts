@@ -688,6 +688,10 @@ export interface AgorPackImportedFrom {
   source_branch_id: string;
   originally_by: AgorPackAuthor;
   imported_at: string;
+  /** The receipt (absent on teammates imported before it was recorded). */
+  import_id?: string;
+  /** What to reconnect (names only), for Finish setup. */
+  requirements?: AgorPackRequirements;
 }
 
 /** `Branch.agor_pack`: server-managed, never exposed to prompt templates. */
@@ -731,6 +735,8 @@ export interface AgorPackPreflightTeammate {
   /** Estimated size of everything else (artifacts, Knowledge, schedules). */
   other_bytes: number;
   flagged_sessions: AgorPackFlaggedSession[];
+  /** The teammate has a board the exporter can view (it goes into the pack). */
+  board: boolean;
   schedules: number;
   artifacts: number;
   knowledge_documents: number;

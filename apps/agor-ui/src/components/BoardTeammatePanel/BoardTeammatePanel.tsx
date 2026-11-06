@@ -5,12 +5,14 @@ import type {
   BranchArchiveOrDeleteOptions,
   Repo,
   SpawnConfig,
+  User,
 } from '@agor-live/client';
 import { getTeammateConfig, hasMinimumRole, isTeammate, ROLES } from '@agor-live/client';
-import { LeftOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
+import { LeftOutlined, MoreOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import {
   Badge,
   Button,
+  Dropdown,
   Empty,
   Select,
   Skeleton,
@@ -38,6 +40,11 @@ import { selectTeammatesLoaded } from '../../store/userScope';
 import { formatActionError } from '../../utils/connectionErrors';
 import { mapToArray } from '../../utils/mapHelpers';
 import { useThemedMessage } from '../../utils/message';
+import { ExportPackModal } from '../AgorPack/ExportPackModal';
+import { FinishSetupCard, TeammateSchedules } from '../AgorPack/FinishSetup';
+import { useImportedSessions } from '../AgorPack/ImportedSessionTag';
+import { canExportTeammate } from '../AgorPack/packCheck';
+import { PACK_COPY } from '../AgorPack/packCopy';
 import { BranchSessionSections } from '../BranchCard';
 import { BranchFilesystemRecovery } from '../BranchFilesystemRecovery';
 import { BranchHeaderPill } from '../BranchHeaderPill';
@@ -142,6 +149,8 @@ interface BoardTeammatePanelProps {
    */
   boardReady?: boolean;
   currentUserId?: string;
+  /** The signed-in user with their own credential status (Finish setup). */
+  authenticatedUser?: User | null;
   selectedSessionId?: string | null;
   onSessionClick: (sessionId: string) => void;
   onCreateSession?: (branchId: string) => void;
@@ -188,6 +197,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   primaryTeammateInaccessible,
   boardReady = true,
   currentUserId,
+  authenticatedUser,
   selectedSessionId,
   onSessionClick,
   onCreateSession,
@@ -382,11 +392,16 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
       background: true,
     }
   );
+  const importedSessions = useImportedSessions(client, primaryTeammateBranch);
   const teammateSessions = useMemo(
     () =>
-      primaryTeammateBranch ? sessionsByBranch.get(primaryTeammateBranch.branch_id) || [] : [],
-    [primaryTeammateBranch, sessionsByBranch]
+      primaryTeammateBranch
+        ? [...(sessionsByBranch.get(primaryTeammateBranch.branch_id) || []), ...importedSessions]
+        : [],
+    [primaryTeammateBranch, sessionsByBranch, importedSessions]
   );
+  const [exportOpen, setExportOpen] = useState(false);
+  const setupUser = authenticatedUser ?? currentUser;
 
   // Subscribes to the failed flag only, so other partition entry changes don't re-render the panel.
   const boardFailed = useAgorStore(
@@ -493,7 +508,31 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
                   Primary teammate
                 </Typography.Text>
               </div>
+              {canExportTeammate(setupUser, primaryTeammateBranch) && (
+                <Dropdown
+                  trigger={['click']}
+                  menu={{
+                    items: [{ key: 'export', label: PACK_COPY.menuExport }],
+                    onClick: ({ key }) => key === 'export' && setExportOpen(true),
+                  }}
+                >
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<MoreOutlined />}
+                    aria-label="Teammate menu"
+                    style={{ marginLeft: 'auto' }}
+                  />
+                </Dropdown>
+              )}
             </div>
+            {exportOpen && (
+              <ExportPackModal
+                open
+                teammate={primaryTeammateBranch}
+                onClose={() => setExportOpen(false)}
+              />
+            )}
 
             <BranchFilesystemRecovery
               branch={primaryTeammateBranch}
@@ -524,6 +563,12 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             )}
           </div>
 
+          <FinishSetupCard
+            branch={primaryTeammateBranch}
+            client={client}
+            currentUser={setupUser}
+            style={{ margin: '8px 0 4px', flexShrink: 0 }}
+          />
           {sessionDetailsHydrated ? (
             <BranchSessionSections
               branch={primaryTeammateBranch}
@@ -558,6 +603,11 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               </Space>
             </div>
           )}
+          <TeammateSchedules
+            branch={primaryTeammateBranch}
+            client={client}
+            currentUser={setupUser}
+          />
         </div>
       );
     }

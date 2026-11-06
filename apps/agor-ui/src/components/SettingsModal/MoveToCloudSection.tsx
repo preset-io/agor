@@ -109,7 +109,7 @@ export const MoveToCloudSection: React.FC<MoveToCloudSectionProps> = ({
             <ExportPackPanel
               teammates={teammates}
               initialBranchIds={mine.length ? mine : teammates.map((t) => t.branch_id)}
-              exportLabel="Download .agor"
+              exportLabel="Download"
               onExported={(result) => {
                 setExported(result);
                 setStep(1);
@@ -129,9 +129,9 @@ export const MoveToCloudSection: React.FC<MoveToCloudSectionProps> = ({
             )}
             <Typography.Paragraph>
               In your Agor Cloud workspace, open{' '}
-              <Typography.Text strong>Settings → Teammates</Typography.Text> and choose{' '}
-              <Typography.Text strong>Import .agor</Typography.Text>. You'll review what's inside
-              before anything is created, then reconnect credentials and turn schedules on.
+              <Typography.Text strong>Settings → Import</Typography.Text> and drop the file. You'll
+              check what's inside before anything is created, then finish setup on each teammate's
+              board.
             </Typography.Paragraph>
             <Space>
               <Button

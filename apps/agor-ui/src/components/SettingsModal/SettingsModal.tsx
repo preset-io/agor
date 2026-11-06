@@ -38,6 +38,7 @@ import {
   selectUserById,
 } from '../../store/selectors';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import { ImportPackSection } from '../AgorPack/ImportPackSection';
 import { BranchModal } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { AboutTab } from './AboutTab';
@@ -222,6 +223,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
           return canListUsers;
         case 'move-to-cloud':
           return selfHosted && canListUsers;
+        case 'import':
+          return canListUsers;
         default:
           return true;
       }
@@ -479,6 +482,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         );
       case 'move-to-cloud':
         return <MoveToCloudSection currentUser={currentUser} branchById={branchById} />;
+      case 'import':
+        return <ImportPackSection selfHosted={selfHosted} onClose={onClose} />;
       case 'card-types':
         return <CardTypesPanel client={client} cardTypeById={cardTypeById} />;
       case 'cards':
