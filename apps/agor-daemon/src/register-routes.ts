@@ -79,11 +79,11 @@ import {
   NotFound,
 } from '@agor/core/feathers';
 import {
+  activeSessionMcpServers,
   isMCPServerNotUsableError,
   isMCPServerUsableBy,
   MCP_RUNTIME_PROVIDER_CAPABILITIES,
   mcpRuntimeProviderCapability,
-  resolveEffectiveSessionMcpServers,
 } from '@agor/core/mcp';
 import { escapePromptProvenanceSentinels } from '@agor/core/templates/prompt-provenance';
 import type {
@@ -229,6 +229,7 @@ import {
   type SchedulerService,
 } from './services/scheduler.js';
 import { runSessionInitializationStages } from './services/session-initialization.js';
+import { resolveSessionMcpViewForSession } from './services/session-mcp-effective.js';
 import { createSpawnPromptService } from './services/session-spawn-prompt';
 import {
   lockTenantAuthorizationFence,
@@ -5001,6 +5002,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     return session;
   };
 
+  /** Read-only MCP views need only session view access (they carry no credentials). */
+  const loadSessionForMcpView = async (sessionId: string, params: RouteParams) => {
+    if (!params.user) throw new NotAuthenticated('Authentication required');
+    await app.service('sessions').get(sessionId, { ...params, query: {} });
+    return (await sessionsService.get(sessionId, { provider: undefined })) as Session;
+  };
+
   const projectMcpServersForExecutor = async (
     servers: MCPServer[],
     session: Session,
@@ -5477,9 +5485,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async find(params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
-        const session = await authorizeAndLoadSessionForMcpConfig(id, params, {
-          allowExecutorProjection: true,
-        });
+        // `effective`: the session MCP pill / `attached_mcp_servers` view, every
+        // entry with its state, for the caller. Reading it needs only session
+        // view access; it never carries credentials.
+        const effectiveView =
+          params.query?.effective === 'true' || params.query?.effective === true;
+        const session =
+          effectiveView && !authenticatedTaskExecutorRuntimeScope(params)
+            ? await loadSessionForMcpView(id, params)
+            : await authorizeAndLoadSessionForMcpConfig(id, params, {
+                allowExecutorProjection: true,
+              });
         if (params.query?.available === true || params.query?.available === 'true') {
           // Configuration choices are not administrative inventory. Even admins
           // may attach private rows only to their owner's sessions, and a shared
@@ -5581,6 +5597,31 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             server: redactMCPServerSecrets(entry.server),
           }));
         }
+        const exposeSecrets =
+          !(params as RouteParams & { _forceMcpRuntimeRedaction?: boolean })
+            ._forceMcpRuntimeRedaction &&
+          shouldExposeMCPServerSecrets(params, {
+            allowSessionToken: true,
+            sessionId: id,
+          });
+        if (includeGlobal || effectiveView) {
+          const entries = await resolveSessionMcpViewForSession(db, session, credentialUserId);
+          if (effectiveView) {
+            return {
+              selection_explicit: session.mcp_selection_explicit === true,
+              entries: entries.map((entry) => ({
+                mcp_server_id: entry.server.mcp_server_id,
+                source: entry.source,
+                state: entry.state,
+                server: redactMCPServerSecrets(entry.server),
+              })),
+            };
+          }
+          const servers = activeSessionMcpServers(entries);
+          return exposeSecrets
+            ? projectMcpServersForExecutor(servers, session, params)
+            : servers.map(redactMCPServerSecrets);
+        }
         const sessionServerRefs = await sessionMCPServersService.listServers(
           id as import('@agor/core/types').SessionID,
           enabledOnly,
@@ -5595,36 +5636,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             }
           })
         );
-        const globalQuery = {
-          scope: 'global',
-          ...(enabledOnly ? { enabled: true } : {}),
-          ...(userId ? { forUserId: userId } : {}),
-          // Private global servers belong to the current prompt actor. Shared
-          // rows remain available and resolve per-user OAuth for this same ID.
-          usableByUserId: credentialUserId,
-          $limit: 1000,
-        };
-        const servers = await resolveEffectiveSessionMcpServers(
-          session,
-          sessionServers,
-          async () => {
-            const globalResult = includeGlobal
-              ? await mcpService.find({
-                  ...params,
-                  provider: undefined,
-                  query: globalQuery,
-                })
-              : [];
-            return Array.isArray(globalResult) ? globalResult : globalResult.data;
-          },
-          credentialUserId
+        const servers = sessionServers.filter((server) =>
+          isMCPServerUsableBy(server, credentialUserId)
         );
-        return !(params as RouteParams & { _forceMcpRuntimeRedaction?: boolean })
-          ._forceMcpRuntimeRedaction &&
-          shouldExposeMCPServerSecrets(params, {
-            allowSessionToken: true,
-            sessionId: id,
-          })
+        return exposeSecrets
           ? projectMcpServersForExecutor(servers, session, params)
           : servers.map(redactMCPServerSecrets);
       },
@@ -5766,16 +5781,34 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (!mcpId) throw new Error('MCP Server ID required');
         if (typeof data.enabled !== 'boolean') throw new Error('enabled field required');
         await authorizeAndLoadSessionForMcpConfig(id, params);
-        const toggle = () =>
-          sessionMCPServersService.toggleServer(
-            id as import('@agor/core/types').SessionID,
-            mcpId as import('@agor/core/types').MCPServerID,
-            data.enabled,
-            params
-          );
-        const result = await (data.enabled
+        // Upserts the link, so a global server can be switched off for just
+        // this session (a disabled link is the opt-out).
+        const toggle = async () => {
+          try {
+            return await sessionMCPServersService.setServerEnabled(
+              id as import('@agor/core/types').SessionID,
+              mcpId as import('@agor/core/types').MCPServerID,
+              data.enabled,
+              params
+            );
+          } catch (error) {
+            if (isMCPServerNotUsableError(error)) {
+              throw new Forbidden('That MCP server is private to another user');
+            }
+            throw error;
+          }
+        };
+        await (data.enabled
           ? toggle()
           : coordinateSessionMcpRevocation(id, [mcpId], params, toggle));
+        // Link events describe enabled links, which is what clients hold.
+        const relationship = { session_id: id, mcp_server_id: mcpId, enabled: data.enabled };
+        emitServiceEvent(app, {
+          path: 'session-mcp-servers',
+          event: data.enabled ? 'created' : 'removed',
+          data: relationship,
+          params,
+        });
         scheduleMcpRuntimeHint(
           db,
           (params as AuthenticatedParams).tenant?.tenant_id,
@@ -5788,7 +5821,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               mcpId
             )
         );
-        return result;
+        return relationship;
       },
       // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
     } as any,

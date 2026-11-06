@@ -342,7 +342,6 @@ import {
   MCP_OAUTH_START_BUDGET_MS,
   mcpOAuthStartPhaseRunner,
 } from './services/mcp-oauth-start-phases.js';
-import { resolveAuthenticatedServerIds } from './services/mcp-oauth-status.js';
 import {
   acquireMCPOAuthGrant,
   MCPClientCredentialsConfigurationError,
@@ -370,6 +369,10 @@ import {
 } from './services/schedules.js';
 import { createSessionCountsService } from './services/session-counts.js';
 import { createSessionEnvSelectionsService } from './services/session-env-selections.js';
+import {
+  loadAuthenticatedMcpServerIds,
+  sessionMcpScopeServerIds,
+} from './services/session-mcp-effective.js';
 import { createSessionMCPServersService } from './services/session-mcp-servers.js';
 import { createSessionStreamsService } from './services/session-streams.js';
 import { createSessionsService } from './services/sessions.js';
@@ -7004,16 +7007,9 @@ export async function registerMCPServices(
       const userId = params?.user?.user_id;
       if (!userId) return { authenticated_server_ids: [] };
       try {
-        const userTokenRepo = new UserMCPOAuthTokenRepository(db);
-        const serverRepo = new MCPServerRepository(db);
-        const authenticatedServerIds = await resolveAuthenticatedServerIds({
-          viewer: { user_id: userId as UserID, role: params?.user?.role },
-          listForUser: (id) => userTokenRepo.listStatusForSubject(id),
-          listShared: () => userTokenRepo.listStatusForSubject(null),
-          findServers: (serverIds) => serverRepo.findByIds(serverIds),
-          requireGrantBinding: true,
-          isGrantBoundToServer: (server, grant) =>
-            isMCPOAuthGrantAuthorizedForServer(db, server, grant),
+        const authenticatedServerIds = await loadAuthenticatedMcpServerIds(db, {
+          user_id: userId as UserID,
+          role: params?.user?.role,
         });
         return { authenticated_server_ids: authenticatedServerIds };
       } catch (error) {
@@ -7160,38 +7156,19 @@ export async function registerMCPServices(
         if (!executorSessionId) {
           throw new Forbidden('oauth-auth-headers requires executor session scope');
         }
-        const { attachedServers, globalServers } = await runInOAuthTenantScope(
-          db,
-          tenantId,
-          async () => {
-            const executorSession = await sessionsRepository.findById(executorSessionId);
-            if (!executorSession) {
-              throw new Forbidden('oauth-auth-headers requires a resolvable executor session');
-            }
-            return {
-              attachedServers: await new SessionMCPServerRepository(db).listServers(
-                executorSessionId as SessionID,
-                true
-              ),
-              globalServers: executorSession.mcp_selection_explicit
-                ? []
-                : await new MCPServerRepository(db).findAll({
-                    scope: 'global',
-                    enabled: true,
-                    // The task token is issued to the actual prompter. Connector
-                    // credentials and private server visibility stay with that
-                    // caller rather than silently borrowing the Session owner.
-                    usableByUserId: userId,
-                  }),
-            };
+        const allowedServerIds = await runInOAuthTenantScope(db, tenantId, async () => {
+          const executorSession = await sessionsRepository.findById(executorSessionId);
+          if (!executorSession) {
+            throw new Forbidden('oauth-auth-headers requires a resolvable executor session');
           }
-        );
-        const allowedServerIds = new Set([
-          ...globalServers.map((server) => server.mcp_server_id),
-          ...attachedServers.map((server) => server.mcp_server_id),
-        ]);
+          // The task token is issued to the actual prompter. Connector
+          // credentials and private server visibility stay with that caller
+          // rather than silently borrowing the Session owner.
+          if (!userId) return new Set<string>();
+          return sessionMcpScopeServerIds(db, executorSession, userId);
+        });
         for (const serverId of serverIds) {
-          if (!allowedServerIds.has(serverId as MCPServerID)) {
+          if (!allowedServerIds.has(serverId)) {
             headers[serverId] = { error: 'server_not_in_session_scope' };
           }
         }

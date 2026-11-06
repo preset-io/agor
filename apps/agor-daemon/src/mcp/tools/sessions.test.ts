@@ -616,7 +616,7 @@ describe('agor_sessions_get', () => {
           mcp_token: 'secret-token',
         }),
       },
-      'session-mcp-servers': { find: async () => ({ data: [] }) },
+      '/sessions/:id/mcp-servers': { find: async () => ({ entries: [] }) },
     });
 
     const { agor_sessions_get } = await registerAndCaptureHandlers(
@@ -2385,17 +2385,20 @@ describe('attached_mcp_servers in session-info tools', () => {
           branch_id: null, // skip branch denormalization for brevity
         }),
       },
-      'session-mcp-servers': {
-        find: async () => ({ data: [{ mcp_server_id: 'srv-1' }, { mcp_server_id: 'srv-2' }] }),
-      },
-      'mcp-servers': {
-        get: async (id: string) => ({
-          mcp_server_id: id,
-          name: `name-${id}`,
-          display_name: `Display ${id}`,
-          transport: 'http',
-          enabled: true,
-          auth: { type: 'none' },
+      '/sessions/:id/mcp-servers': {
+        find: async () => ({
+          entries: ['srv-1', 'srv-2'].map((id) => ({
+            source: id === 'srv-2' ? 'global' : 'session',
+            state: 'active',
+            server: {
+              mcp_server_id: id,
+              name: `name-${id}`,
+              display_name: `Display ${id}`,
+              transport: 'http',
+              enabled: true,
+              auth: { type: 'none' },
+            },
+          })),
         }),
       },
     });
@@ -2416,7 +2419,9 @@ describe('attached_mcp_servers in session-info tools', () => {
       auth_type: 'none',
       oauth_authenticated: true,
       enabled: true,
+      source: 'session',
     });
+    expect(payload.attached_mcp_servers[1]).toMatchObject({ source: 'global' });
   });
 
   it('agor_sessions_get returns attached_mcp_servers for the requested session', async () => {
@@ -2424,18 +2429,24 @@ describe('attached_mcp_servers in session-info tools', () => {
       sessions: {
         get: async (id: string) => ({ session_id: id }),
       },
-      'session-mcp-servers': {
-        find: async (params: { query?: { session_id?: string } }) => ({
-          data: params?.query?.session_id === 'sess-other' ? [{ mcp_server_id: 'srv-x' }] : [],
-        }),
-      },
-      'mcp-servers': {
-        get: async (id: string) => ({
-          mcp_server_id: id,
-          name: `name-${id}`,
-          transport: 'stdio',
-          enabled: true,
-          auth: { type: 'none' },
+      '/sessions/:id/mcp-servers': {
+        find: async (params: { route?: { id?: string } }) => ({
+          entries:
+            params?.route?.id === 'sess-other'
+              ? [
+                  {
+                    source: 'session',
+                    state: 'active',
+                    server: {
+                      mcp_server_id: 'srv-x',
+                      name: 'name-srv-x',
+                      transport: 'stdio',
+                      enabled: true,
+                      auth: { type: 'none' },
+                    },
+                  },
+                ]
+              : [],
         }),
       },
     });
