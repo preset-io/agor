@@ -231,34 +231,47 @@ waiting for until you turn them on.
 
 ### Moving to Agor Cloud
 
-On a self-hosted install, **Settings → Move to Agor Cloud** moves the
-teammates you own (admins can move anyone's):
+On a self-hosted install, **Settings → Agor Cloud** has a **Move to Agor
+Cloud** button. The teammate menu has **Move _name_ to Agor Cloud…** too, which
+starts with just that teammate picked. You move the teammates you own; admins
+can move anyone's.
 
-1. **Sign in to Agor Cloud** opens the Cloud console in your browser. Sign in,
-   pick the workspace, and you come back to Settings. Agor shows the workspace
-   address and connects only when you click **Connect**.
-2. **Send to Agor Cloud** packs the teammates you pick and sends them straight
-   to that workspace, with progress.
-3. Review what the workspace will create, then **Import into Agor Cloud**. Each
-   teammate gets its own board. **Open reconnect checklist in Agor Cloud** takes
-   you to the workspace to reconnect credentials and turn schedules back on.
-4. **Switch over** pauses the teammate's schedules and gateway channels on this
-   install (Undo resumes them). **Done** forgets the Cloud sign-in.
+1. **Sign in**: **Open sign-in page** opens Agor Cloud in a new tab. Sign in
+   there and pick a workspace. The tab comes back to this Agor, shows the
+   workspace address, and connects only when you click **Connect**. The first
+   tab picks up the sign-in by itself.
+2. **Choose**: all teammates or some of them, and how much session history to
+   bring (last 90 days, all, or none). The total size is shown.
+3. **Check**: the same report as an export: what moves, what to reconnect,
+   what won't work in Agor Cloud yet, and sessions that may contain passwords
+   (left out by default).
+4. **Move**: this Agor exports each teammate, sends it to the workspace in
+   resumable chunks, and imports it there on a new board, one teammate after
+   another. You can close the window; keep the server on until the move is done.
+   Opening the modal again shows the progress. If a teammate fails, **Retry**
+   sends the same file again; nothing is imported twice.
+
+When it's done, **Open Agor Cloud** opens **Finish setup** in the workspace,
+where you reconnect accounts and turn schedules on. Back here, **Switch over**
+pauses the teammate's schedules and gateway channels on this install, and
+**Switch back** resumes them.
 
 Your self-hosted install keeps the Cloud sign-in encrypted with its master
 secret (`AGOR_MASTER_SECRET`) and never hands it to the browser. It is
-forgotten when you click **Disconnect** or **Done**, or after 7 days unused
-(checked the next time it is used); the Cloud session itself expires after 30
-days. A send stays tied to the sign-in it started with: if you disconnect or
-sign in again, it stops and you start it again. The install needs outbound
-HTTPS to your Cloud workspace. Sign-in works when this Agor is served over
-HTTPS, or over plain http on a private network address (localhost, 10.x,
-172.16-31.x, 192.168.x, IPv6 `fc00::/7`, `.local` / `.internal` / `.lan`
-names, or a single-label name). On http, Settings warns that the sign-in code
-returns over an unencrypted connection on your network.
+forgotten when you click **Disconnect** (or **Use another account**), or after
+7 days unused (checked the next time it is used); the Cloud session itself
+expires after 30 days. A move stays tied to the sign-in it started with: if you
+disconnect or sign in again, it stops and you start it again. Moves are kept in
+the daemon's memory, so restarting the server stops one that is running. The
+install needs outbound HTTPS to your Cloud workspace. Sign-in works when this
+Agor is served over HTTPS, or over plain http on a private network address
+(localhost, 10.x, 172.16-31.x, 192.168.x, IPv6 `fc00::/7`, `.local` /
+`.internal` / `.lan` names, or a single-label name). On http, the Sign in step
+warns that the sign-in code returns over an unencrypted connection on your
+network.
 
-**Download a .agorpack file instead** keeps the manual route: download the file
-here, then use **Import .agorpack** in the Cloud workspace.
+**Download an .agor file instead** keeps the manual route: download the file
+here, then import it in the workspace's **Settings → Import**.
 
 To script it, `agor pack send <teammate-id> --cloud-url <workspace URL>
 --api-key-env AGOR_CLOUD_API_KEY --apply` sends teammates with a personal API

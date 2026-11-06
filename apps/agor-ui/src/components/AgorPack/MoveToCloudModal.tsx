@@ -136,7 +136,7 @@ export function useMovableTeammates(user: User | null | undefined): Branch[] {
 const STEP_TITLES = PACK_COPY.steps.split(' · ');
 
 /** Overall progress of a move: each teammate counts the same. */
-function movePercent(move: AgorCloudMove): number {
+export function movePercent(move: AgorCloudMove): number {
   const part = (item: AgorCloudMoveItem) => {
     switch (item.status) {
       case 'done':
@@ -248,6 +248,10 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
   const { showError, showSuccess } = useThemedMessage();
   const teammates = useMovableTeammates(currentUser);
   const boardById = useAgorStore(selectBoardById);
+  const boardOf = (branchId: string) => {
+    const boardId = teammates.find((t) => t.branch_id === branchId)?.board_id;
+    return boardId ? boardById.get(boardId)?.name : undefined;
+  };
   const allIds = useMemo<string[]>(() => teammates.map((t) => t.branch_id), [teammates]);
 
   const [step, setStep] = useState(0);
@@ -655,7 +659,7 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
                     {emojiOf(branch)} {nameOf(branch)}
                   </Checkbox>
                   <Typography.Text type="secondary" ellipsis style={{ flex: 1, minWidth: 0 }}>
-                    {branch.board_id ? boardById.get(branch.board_id)?.name : null}
+                    {boardOf(branch.branch_id)}
                   </Typography.Text>
                   <Typography.Text type="secondary">{sizeOf(branch.branch_id)}</Typography.Text>
                 </Flex>
@@ -807,6 +811,15 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
                     <Typography.Text strong style={{ whiteSpace: 'nowrap' }}>
                       {item.emoji ?? '🤖'} {item.display_name}
                     </Typography.Text>
+                    {boardOf(item.branch_id) && (
+                      <Typography.Text
+                        type="secondary"
+                        ellipsis
+                        style={{ fontSize: token.fontSizeSM, maxWidth: 160 }}
+                      >
+                        › {boardOf(item.branch_id)}
+                      </Typography.Text>
+                    )}
                     {active ? (
                       <Progress
                         percent={

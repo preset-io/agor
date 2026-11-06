@@ -12,6 +12,7 @@ import {
 } from '../../utils/agorPack';
 import {
   MoveToCloudModal,
+  movePercent,
   peekCloudReturn,
   SwitchOverControl,
   useMovableTeammates,
@@ -75,12 +76,11 @@ export const MoveToCloudSection: React.FC<MoveToCloudSectionProps> = ({ currentU
 
   const link = cloud?.link;
   const host = link ? new URL(link.workspace_url).host : null;
-  const sent = move?.items.filter((i) => i.status === 'done' || i.status === 'failed').length ?? 0;
 
   return (
     <div>
       <ResponsiveSettingsHeader title={PACK_COPY.cloudNav} />
-      <Flex vertical gap="middle" style={{ maxWidth: 560 }}>
+      <Flex vertical gap="middle" style={{ maxWidth: 680 }}>
         <Flex
           vertical
           gap={14}
@@ -160,16 +160,13 @@ export const MoveToCloudSection: React.FC<MoveToCloudSectionProps> = ({ currentU
               border: `1px solid ${token.colorBorderSecondary}`,
             }}
           >
-            <Typography.Text>{PACK_COPY.progTitle}</Typography.Text>
+            <Typography.Link onClick={() => setOpen(true)}>{PACK_COPY.progTitle}</Typography.Link>
             <Progress
-              percent={Math.round((sent / Math.max(1, move.items.length)) * 100)}
+              percent={movePercent(move)}
               size="small"
               status="active"
               style={{ flex: 1, margin: 0 }}
             />
-            <Button size="small" onClick={() => setOpen(true)}>
-              {PACK_COPY.progMoving}…
-            </Button>
           </Flex>
         )}
 

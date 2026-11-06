@@ -258,7 +258,7 @@ describe('Settings → Agor Cloud', () => {
     vi.mocked(getCloudMove).mockResolvedValue(move('failed', { error: 'Agor Cloud answered 500' }));
     vi.mocked(retryCloudMove).mockResolvedValue(move('waiting'));
     mount(<MoveToCloudSection currentUser={member} />);
-    fireEvent.click(await screen.findByRole('button', { name: /Moving…/ }));
+    fireEvent.click(await screen.findByText('Moving your teammates'));
     const modal = await dialog();
     expect(await within(modal).findByText('Moving your teammates')).toBeInTheDocument();
     expect(
