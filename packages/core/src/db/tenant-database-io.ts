@@ -27,6 +27,7 @@
  */
 
 import { type SQL, sql } from 'drizzle-orm';
+import { AGOR_CLOUD } from '../types/agor-cloud';
 import type { Database } from './client';
 import { executeRaw } from './database-wrapper';
 import { readTableJsonl, sha256Hex, type TenantArchiveTable } from './tenant-archive';
@@ -119,6 +120,17 @@ function linesToJsonbArrayText(lines: string[]): string {
   return `[${lines.join(',')}]`;
 }
 
+/**
+ * `app_variables` rows that never travel in a tenant archive: the write-gate
+ * record (see exportTenantTableRows) and the sealed Agor Cloud sign-in of each
+ * user, a credential for one source install.
+ */
+function excludeNonPortableAppVariables(tableName: string): SQL {
+  return tableName === 'app_variables'
+    ? sql` AND NOT (namespace = ${TENANT_WRITE_GATE_NAMESPACE} AND key = ${TENANT_WRITE_GATE_KEY}) AND namespace <> ${AGOR_CLOUD.linkNamespace}`
+    : sql``;
+}
+
 /** Count the rows a table holds for one tenant. */
 export async function countTenantTableRows(
   db: Database,
@@ -127,15 +139,11 @@ export async function countTenantTableRows(
   tenantColumn: string = TENANT_SCOPE_COLUMN
 ): Promise<number> {
   const column = sql.identifier(tenantColumn);
-  // Exclude the reserved write-gate record so inspect's inventory matches what
-  // export/verify account for (both drop this row); see exportTenantTableRows.
-  const excludeGateRow =
-    tableName === 'app_variables'
-      ? sql` AND NOT (namespace = ${TENANT_WRITE_GATE_NAMESPACE} AND key = ${TENANT_WRITE_GATE_KEY})`
-      : sql``;
+  // Exclude the non-portable app variables so inspect's inventory matches what
+  // export/verify account for (both drop these rows); see exportTenantTableRows.
   const result = await executeRaw(
     db,
-    sql`SELECT pg_catalog.count(*) AS n FROM ${qualifiedTable(tableName)} WHERE ${column} = ${tenantId}${excludeGateRow}`
+    sql`SELECT pg_catalog.count(*) AS n FROM ${qualifiedTable(tableName)} WHERE ${column} = ${tenantId}${excludeNonPortableAppVariables(tableName)}`
   );
   return Number(rowsOf(result)[0]?.n ?? 0);
 }
@@ -175,16 +183,12 @@ export async function exportTenantTableRows(
   // the source's generation. Exclude it here so export, verify (live re-export
   // compare), and import classification — all of which call this function —
   // agree that the gate row is never part of the archive.
-  const excludeGateRow =
-    tableName === 'app_variables'
-      ? sql` AND NOT (namespace = ${TENANT_WRITE_GATE_NAMESPACE} AND key = ${TENANT_WRITE_GATE_KEY})`
-      : sql``;
   const result = await executeRaw(
     db,
     sql`
       SELECT ${TENANT_ROW_CANONICAL_TEXT} AS row
       FROM ${qualifiedTable(tableName)} t
-      WHERE ${column} = ${tenantId}${excludeGateRow}
+      WHERE ${column} = ${tenantId}${excludeNonPortableAppVariables(tableName)}
       ${TENANT_EXPORT_ORDER_BY}
     `
   );

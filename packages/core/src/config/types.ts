@@ -1595,6 +1595,17 @@ export interface AgorConfig {
     callback_origin: string;
   };
 
+  /**
+   * Agor Cloud as seen from a self-hosted install (Settings → Move to Agor
+   * Cloud). Defaults to the production console and workspace hosts.
+   */
+  agor_cloud?: {
+    /** Cloud console origin the sign-in starts at. */
+    console_url?: string;
+    /** Workspace host suffixes a sign-in may connect to (`agor.cloud` matches `*.agor.cloud`). */
+    workspace_host_suffixes?: string[];
+  };
+
   /** User identity, lifecycle, role, and local-login authority. */
   identity?: AgorIdentitySettings;
 

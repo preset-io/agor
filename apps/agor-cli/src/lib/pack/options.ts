@@ -1,0 +1,190 @@
+/** Flags and helpers shared by `agor pack export`, `import`, and `send`. */
+
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { open, stat } from 'node:fs/promises';
+import { pipeline } from 'node:stream/promises';
+import { uploadPackChunked } from '@agor/core/agor-pack/upload-client';
+import { loadConfig } from '@agor/core/config';
+import { shortId } from '@agor/core/db';
+import {
+  AGOR_CLOUD,
+  AGOR_PACK_DEFAULT_SESSION_MODE,
+  type AgorPackExportRequest,
+  type AgorPackImport,
+} from '@agor/core/types';
+import { Flags } from '@oclif/core';
+import chalk from 'chalk';
+import { packJson } from './http';
+
+const SESSION_MODES: Record<string, NonNullable<AgorPackExportRequest['sessions']>> = {
+  none: 'none',
+  '90d': 'last_90_days',
+  all: 'all',
+};
+const DEFAULT_SESSIONS_FLAG = Object.keys(SESSION_MODES).find(
+  (key) => SESSION_MODES[key] === AGOR_PACK_DEFAULT_SESSION_MODE
+) as string;
+
+export const packContentFlags = {
+  sessions: Flags.string({
+    description: 'Session history to include',
+    options: Object.keys(SESSION_MODES),
+    default: DEFAULT_SESSIONS_FLAG,
+  }),
+  'include-others-sessions': Flags.boolean({
+    description: "Also include other people's sessions on these teammates",
+    default: false,
+  }),
+};
+
+/** The export request body for these flags. */
+export function exportRequest(
+  branchIds: string[],
+  flags: { sessions: string; 'include-others-sessions': boolean }
+): AgorPackExportRequest {
+  return {
+    branch_ids: branchIds,
+    sessions: SESSION_MODES[flags.sessions] ?? AGOR_PACK_DEFAULT_SESSION_MODE,
+    include_others_sessions: flags['include-others-sessions'],
+  };
+}
+
+/**
+ * Whether `host` is an Agor Cloud workspace (`agor_cloud.workspace_host_suffixes`,
+ * or the default Cloud hosts): `agor pack send` refuses those.
+ */
+export async function isAgorCloudHost(host: string): Promise<boolean> {
+  const configured = await loadConfig()
+    .then((config) => config.agor_cloud?.workspace_host_suffixes)
+    .catch(() => undefined);
+  const suffixes = configured ?? AGOR_CLOUD.defaultWorkspaceHostSuffixes;
+  const name = host.toLowerCase();
+  return suffixes.some((suffix) => name === suffix || name.endsWith(`.${suffix}`));
+}
+
+/**
+ * Why an API key can't be sent as a Bearer, or null. Never includes the key:
+ * Node's header check would otherwise throw with the whole header value.
+ */
+export function apiKeyProblem(key: string): string | null {
+  return /^[\x21-\x7e]+$/.test(key)
+    ? null
+    : 'contains spaces, line breaks or other invalid characters';
+}
+
+/**
+ * The first key that can't be sent as a Bearer, named by its `label` (never
+ * the key itself), or null. Check every key before any request uses one.
+ */
+export function apiKeysProblem(keys: Array<{ key: string; label: string }>): string | null {
+  for (const { key, label } of keys) {
+    const problem = apiKeyProblem(key);
+    if (problem) return `${label} ${problem}.`;
+  }
+  return null;
+}
+
+/** `message` with every occurrence of each secret replaced, for errors shown to the user. */
+export function redactSecrets(message: string, secrets: Array<string | undefined>): string {
+  return secrets.reduce<string>(
+    (text, secret) => (secret ? text.split(secret).join('[redacted]') : text),
+    message
+  );
+}
+
+type Log = (line: string) => void;
+
+/**
+ * Upload (or resume) a pack file to `baseUrl` with the resumable chunked
+ * upload and return its dry-run receipt.
+ */
+export async function uploadPackFile(input: {
+  baseUrl: string;
+  bearer: string;
+  file: string;
+  log: Log;
+}): Promise<AgorPackImport> {
+  const { size } = await stat(input.file);
+  const hash = createHash('sha256');
+  await pipeline(createReadStream(input.file), hash);
+  const file = await open(input.file, 'r');
+  try {
+    let reported = -1;
+    return await uploadPackChunked({
+      size,
+      sha256: hash.digest('hex'),
+      readChunk: async (start, end) => {
+        const buffer = Buffer.alloc(end - start);
+        await file.read(buffer, 0, buffer.byteLength, start);
+        return buffer;
+      },
+      send: (path, init) =>
+        fetch(`${input.baseUrl.replace(/\/$/, '')}${path}`, {
+          ...init,
+          body: init.body as RequestInit['body'],
+          headers: { Authorization: `Bearer ${input.bearer}`, ...(init.headers ?? {}) },
+          redirect: 'error',
+        }),
+      onProgress: (sent, total) => {
+        const percent = Math.floor((sent / total) * 100);
+        if (percent >= reported + 10 || sent === total) {
+          reported = percent;
+          input.log(chalk.dim(`  ${percent}%`));
+        }
+      },
+    });
+  } finally {
+    await file.close();
+  }
+}
+
+export function printDryRun(log: Log, receipt: AgorPackImport): void {
+  for (const teammate of receipt.dry_run) {
+    const done = teammate.already_imported_branch_id ? chalk.green(' (already imported)') : '';
+    log(
+      `  ${chalk.bold(teammate.key)} ${teammate.display_name} — repo ${teammate.repo_status}${done}`
+    );
+    for (const warning of teammate.warnings) log(chalk.yellow(`    ! ${warning}`));
+  }
+}
+
+/** Apply a staged pack on a daemon and follow the receipt until the rows are in. */
+export async function applyPack(input: {
+  daemonUrl: string;
+  bearer: string;
+  receipt: AgorPackImport;
+  teammates?: string;
+  boardId: string | null;
+  log: Log;
+}): Promise<AgorPackImport> {
+  const { daemonUrl, bearer, log } = input;
+  const keys = input.teammates
+    ? input.teammates.split(',').map((key) => key.trim())
+    : input.receipt.manifest.teammates.map((t) => t.key);
+  let receipt = await packJson<AgorPackImport>(
+    daemonUrl,
+    bearer,
+    `/agor-pack/imports/${input.receipt.import_id}/apply`,
+    { teammates: keys, board_id: input.boardId }
+  );
+  while (receipt.status === 'applying') {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    receipt = await packJson<AgorPackImport>(
+      daemonUrl,
+      bearer,
+      `/agor-pack/imports/${receipt.import_id}`
+    );
+  }
+  if (receipt.status === 'failed') {
+    throw new Error(`${receipt.error ?? 'apply failed'} (run the command again to resume)`);
+  }
+  for (const result of receipt.results) {
+    log(
+      chalk.green(`✓ ${result.display_name} → branch ${shortId(result.branch_id)}`) +
+        chalk.dim(` (files: ${result.filesystem})`)
+    );
+    for (const warning of result.warnings) log(chalk.yellow(`    ! ${warning}`));
+  }
+  return receipt;
+}

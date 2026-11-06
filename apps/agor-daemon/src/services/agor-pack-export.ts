@@ -15,9 +15,11 @@
  * while bytes stream.
  */
 
+import { createHash } from 'node:crypto';
+import { Transform } from 'node:stream';
 import {
   AGOR_PACK_FRAGMENT_KEY,
-  type AgorPackWriter,
+  AgorPackWriter,
   assertNoSecrets,
   assertNoSecretsDeep,
   classifyEnvironmentVariants,
@@ -50,7 +52,7 @@ import {
   UploadRepository,
   UsersRepository,
 } from '@agor/core/db';
-import { type Application, BadRequest, NotFound } from '@agor/core/feathers';
+import { type Application, BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
 import { generateId } from '@agor/core/ids';
 import {
   AGOR_PACK,
@@ -106,6 +108,17 @@ export interface AgorPackServiceContext {
   tenantId: TenantID;
   user: User;
   agorVersion: string;
+}
+
+/** A finished export, staged for download or a send to Agor Cloud. */
+export interface AgorPackStagedExport {
+  export_id: string;
+  ref: string;
+  size: number;
+  /** SHA-256 (hex) of the file, for the resumable chunked upload. */
+  sha256: string;
+  filename: string;
+  manifest: AgorPackManifest;
 }
 
 const RECENT_MS = AGOR_PACK.recentSessionDays * 24 * 60 * 60 * 1000;
@@ -330,6 +343,15 @@ export class AgorPackExporter {
     const branch = await this.unit(() => this.branches.findById(branchId));
     if (!branch || branch.archived || !isTeammate(branch)) {
       throw new NotFound(`Teammate not found: ${branchId}`);
+    }
+    // Members move their own teammates (by primary owner); admins can move anyone's.
+    if (
+      !hasMinimumRole(this.ctx.user.role, ROLES.ADMIN) &&
+      (branch.primary_owner_user_id ?? branch.created_by) !== this.ctx.user.user_id
+    ) {
+      throw new Forbidden(
+        `Only the owner of ${getTeammateConfig(branch)?.displayName ?? 'this teammate'} or an admin can export it`
+      );
     }
     await this.unit(() =>
       ensureBranchWorkspaceAccess(
@@ -736,14 +758,86 @@ export class AgorPackExporter {
   }
 
   /**
+   * Export into the caller's staging area (a failure anywhere surfaces as a
+   * clean error instead of a truncated download). Pass `authorized` from
+   * {@link authorize} to refuse before anything streams.
+   */
+  async stage(
+    request: AgorPackExportOptions,
+    authorized?: Array<{ branch: Branch; repo: Repo }>
+  ): Promise<AgorPackStagedExport> {
+    const exportId = generateId();
+    const writer = new AgorPackWriter();
+    // A failure can abort the stream before staging listens to it; the
+    // export call below still rejects and the staged write is awaited.
+    writer.output.on('error', () => undefined);
+    const hash = createHash('sha256');
+    const hashed = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        hash.update(chunk);
+        callback(null, chunk);
+      },
+    });
+    writer.output.once('error', (error) => hashed.destroy(error));
+    writer.output.pipe(hashed);
+    const staged = getBlobStagingStore().stage({
+      owner: {
+        tenantId: this.ctx.tenantId,
+        kind: 'agor-pack',
+        scopeId: exportId,
+        createdBy: this.ctx.user.user_id as UserID,
+      },
+      name: `export${AGOR_PACK.extension}`,
+      mimeType: AGOR_PACK.mimeType,
+      body: hashed,
+    });
+    let manifest: AgorPackManifest;
+    try {
+      manifest = await this.export(request, writer, authorized);
+    } catch (error) {
+      writer.abort(error instanceof Error ? error : new Error(String(error)));
+      await staged.catch(() => undefined);
+      throw error;
+    }
+    const metadata = await staged;
+    const first = manifest.teammates[0]?.display_name ?? 'teammates';
+    const slug =
+      first
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '') || 'teammates';
+    return {
+      export_id: exportId,
+      ref: metadata.ref,
+      size: metadata.size,
+      sha256: hash.digest('hex'),
+      filename: `${slug}${manifest.teammates.length > 1 ? `-and-${manifest.teammates.length - 1}-more` : ''}${AGOR_PACK.extension}`,
+      manifest,
+    };
+  }
+
+  /**
    * Stream the pack into `writer` and finish it. The caller owns `writer.output`
    * (pipe it before calling) and aborts the writer on error.
    */
-  async export(request: AgorPackExportOptions, writer: AgorPackWriter): Promise<AgorPackManifest> {
-    const sections = new Set(request.sections);
-    const unique = [...new Set(request.branch_ids)];
+  /**
+   * Every teammate of an export, checked (exists, owner or admin, full
+   * access, repo). Run it before any streaming starts so a refusal is a clean
+   * HTTP error, not an aborted stream.
+   */
+  async authorize(branchIds: string[]): Promise<Array<{ branch: Branch; repo: Repo }>> {
     const loaded = [];
-    for (const id of unique) loaded.push(await this.loadTeammate(id));
+    for (const id of new Set(branchIds)) loaded.push(await this.loadTeammate(id));
+    return loaded;
+  }
+
+  async export(
+    request: AgorPackExportOptions,
+    writer: AgorPackWriter,
+    authorized?: Array<{ branch: Branch; repo: Repo }>
+  ): Promise<AgorPackManifest> {
+    const sections = new Set(request.sections);
+    const loaded = authorized ?? (await this.authorize(request.branch_ids));
     const teammates: AgorPackTeammateSummary[] = [];
     for (const [index, { branch, repo }] of loaded.entries()) {
       teammates.push(

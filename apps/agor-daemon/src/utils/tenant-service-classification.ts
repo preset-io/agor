@@ -268,6 +268,29 @@ export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassif
     scopeClass: 'identity-only',
     why: 'Patches schedules and gateway channels through their services, each in its own scope, then saves the branch state in one short unit.',
   },
+  // Sign in to Agor Cloud / Move (routes/agor-cloud.ts): calls the linked
+  // Cloud workspace over the network; the caller's sealed link record is read
+  // and written in short units keyed by their own user id.
+  'agor-pack/cloud/link': {
+    scopeClass: 'identity-only',
+    why: "Reads or deletes the caller's own link record in one short unit.",
+  },
+  'agor-pack/cloud/link/start': {
+    scopeClass: 'identity-only',
+    why: "Writes the caller's pending sign-in state in one short unit.",
+  },
+  'agor-pack/cloud/link/complete': {
+    scopeClass: 'identity-only',
+    why: 'Spends the pending state in one short unit, redeems the launch code at the Cloud workspace over the network, then stores the link in another.',
+  },
+  'agor-pack/cloud/moves': {
+    scopeClass: 'identity-only',
+    why: "Checks the caller's teammates and link, then exports, sends, and imports in a deferred tenant-scoped run; exporter and link reads/writes are short units.",
+  },
+  'agor-pack/cloud/moves/:moveId/retry': {
+    scopeClass: 'identity-only',
+    why: "Requeues one teammate of the caller's own in-memory move; the deferred run uses short units.",
+  },
 
   // --------------------------------------------------------------------------
   // Repository `.agor.yml` import. The file is read by an executor, so like

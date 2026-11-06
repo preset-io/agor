@@ -7,6 +7,10 @@
 import { uploadPackChunked } from '@agor/core/agor-pack/upload-client';
 import {
   AGOR_PACK,
+  type AgorCloudLinkCompleteRequest,
+  type AgorCloudLinkStartResult,
+  type AgorCloudLinkStatus,
+  type AgorCloudMove,
   type AgorPackApplyRequest,
   type AgorPackExportRequest,
   type AgorPackImport,
@@ -57,6 +61,16 @@ async function errorMessage(response: Response): Promise<string> {
   }
 }
 
+/** A failed pack request, with its HTTP status. */
+export class PackRequestError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'PackRequestError';
+    this.status = status;
+  }
+}
+
 async function request(path: string, init: RequestInit = {}): Promise<Response> {
   const send = async (token: string | null) =>
     fetch(`${daemonUrl()}${path}`, {
@@ -65,13 +79,13 @@ async function request(path: string, init: RequestInit = {}): Promise<Response> 
     });
   let response = await send(await bearer());
   if (response.status === 401) response = await send(await bearer(true));
-  if (!response.ok) throw new Error(await errorMessage(response));
+  if (!response.ok) throw new PackRequestError(await errorMessage(response), response.status);
   return response;
 }
 
-async function json<T>(path: string, body?: unknown): Promise<T> {
+async function json<T>(path: string, body?: unknown, method?: string): Promise<T> {
   const response = await request(path, {
-    method: body === undefined ? 'GET' : 'POST',
+    method: method ?? (body === undefined ? 'GET' : 'POST'),
     ...(body === undefined
       ? {}
       : { body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } }),
@@ -169,4 +183,50 @@ export function switchOverTeammate(
   undo: boolean
 ): Promise<AgorPackSwitchOverResult> {
   return json<AgorPackSwitchOverResult>(`/agor-pack/switch-over/${branchId}`, { undo });
+}
+
+// ---------------------------------------------------------------------------
+// Sign in to Agor Cloud / Move (the daemon holds the Cloud session)
+// ---------------------------------------------------------------------------
+
+export function getCloudLink(): Promise<AgorCloudLinkStatus> {
+  return json<AgorCloudLinkStatus>('/agor-pack/cloud/link');
+}
+
+export function startCloudLink(returnTo: string): Promise<AgorCloudLinkStartResult> {
+  return json<AgorCloudLinkStartResult>('/agor-pack/cloud/link/start', { return_to: returnTo });
+}
+
+export function completeCloudLink(
+  body: AgorCloudLinkCompleteRequest
+): Promise<AgorCloudLinkStatus> {
+  return json<AgorCloudLinkStatus>('/agor-pack/cloud/link/complete', body);
+}
+
+export function disconnectCloudLink(): Promise<AgorCloudLinkStatus> {
+  return json<AgorCloudLinkStatus>('/agor-pack/cloud/link', undefined, 'DELETE');
+}
+
+/** Move teammates to the linked workspace; the daemon runs it (the window can close). */
+export function startCloudMove(body: AgorPackExportRequest): Promise<AgorCloudMove> {
+  return json<AgorCloudMove>('/agor-pack/cloud/moves', body);
+}
+
+/** The caller's latest move (running, or finished in the last day). */
+export function getLatestCloudMove(): Promise<AgorCloudMove | null> {
+  return json<{ move: AgorCloudMove | null }>('/agor-pack/cloud/moves').then((r) => r.move);
+}
+
+/** The move, or null when this daemon doesn't know it (it restarted since). */
+export async function getCloudMove(moveId: string): Promise<AgorCloudMove | null> {
+  try {
+    return await json<AgorCloudMove>(`/agor-pack/cloud/moves/${moveId}`);
+  } catch (error) {
+    if (error instanceof PackRequestError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+export function retryCloudMove(moveId: string, branchId: string): Promise<AgorCloudMove> {
+  return json<AgorCloudMove>(`/agor-pack/cloud/moves/${moveId}/retry`, { branch_id: branchId });
 }

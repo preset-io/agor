@@ -3,7 +3,37 @@
  * examples ("Ada", "Notion") are `{placeholders}`; fill them with `fill`.
  */
 export const PACK_COPY = {
+  cloudNav: 'Agor Cloud',
+  cloudTitle: 'Move to Agor Cloud',
+  cloudLead: 'Agor Cloud runs your teammates for you.',
+  cloudP1: 'Teammates keep working when your computer is off',
+  cloudP2: 'Nothing to install or update',
+  cloudP3: 'Invite your team to the same workspace',
+  cloudComes: 'Teammates move with their boards, knowledge and session history.',
+  cloudBtn: 'Move to Agor Cloud',
+  cloudSafe: 'Your teammates keep running on Community Edition until you switch over.',
+
+  menuMove: 'Move {name} to Agor Cloud…',
   menuExport: 'Export to file…',
+
+  moveTitle: 'Move to Agor Cloud',
+  steps: 'Sign in · Choose · Check · Move',
+  signTitle: 'Sign in to Agor Cloud',
+  signLead: 'Agor Cloud opens in your browser. Sign in there and it sends you back here.',
+  signBtn: 'Open sign-in page',
+  signWait: 'Finish signing in on the Agor Cloud tab in your browser.',
+  signReopen: 'Open the sign-in page again',
+  signedAs: 'Signed in as {email}',
+  signSwitch: 'Use another account',
+  pickWs: 'Workspace',
+  wsCreate: 'Create a workspace',
+  wsCreateD: 'For a team that isn’t in Agor Cloud yet',
+  continue: 'Continue',
+
+  chooseTitle: 'Choose what to move',
+  tmAll: 'All teammates',
+  tmAllD: '{names}, with their memory, skills, boards, artifacts, knowledge and schedules',
+  tmPick: 'Choose teammates',
 
   tmLabel: 'Teammates',
   histTitle: 'Session history',
@@ -33,11 +63,21 @@ export const PACK_COPY = {
   lookShow: 'Show sessions',
   lookToggle: 'Leave these {n} out',
   checkFoot: 'Your teammates keep running on Community Edition until you switch over.',
+  startBtn: 'Move {n} teammates',
+  startBtnOne: 'Move {name}',
 
+  progTitle: 'Moving your teammates',
+  progClose: 'You can close this window. Keep your server on until the move is done.',
+  progToRetry: '{n} to retry',
   progMoving: 'Moving',
   progWaiting: 'Waiting',
   progDone: 'Done',
   progRetry: 'Retry',
+  doneTitle: '{names} {are} ready in Agor Cloud',
+  doneSub: '{they} {keep} running on Community Edition until you switch over.',
+  doneNext: 'Next, reconnect your accounts in Agor Cloud, then switch over.',
+  doneOpen: 'Open Agor Cloud',
+  doneClose: 'Close',
 
   expTitle: 'Export {name} to a file',
   expMove: 'Move {name}',
@@ -106,6 +146,12 @@ export function fill(template: string, values: Record<string, string | number>):
   return template.replace(/\{(\w+)\}/g, (match, key: string) =>
     key in values ? String(values[key]) : match
   );
+}
+
+/** "Ada", "Ada and Wendy", "Ada, Wendy and Blake". */
+export function listNames(names: string[]): string {
+  if (names.length <= 1) return names.join('');
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
 /** "1 teammate" / "3 teammates" in the design's count labels. */

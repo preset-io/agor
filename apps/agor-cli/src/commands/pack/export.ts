@@ -5,25 +5,12 @@
 import { createWriteStream } from 'node:fs';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import {
-  AGOR_PACK,
-  AGOR_PACK_DEFAULT_SESSION_MODE,
-  type AgorPackExportRequest,
-  type AgorPackManifest,
-} from '@agor/core/types';
+import { AGOR_PACK, type AgorPackManifest } from '@agor/core/types';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
 import { packFetch, packJson } from '../../lib/pack/http';
-
-const SESSION_MODES: Record<string, NonNullable<AgorPackExportRequest['sessions']>> = {
-  none: 'none',
-  '90d': 'last_90_days',
-  all: 'all',
-};
-const DEFAULT_SESSIONS_FLAG = Object.keys(SESSION_MODES).find(
-  (key) => SESSION_MODES[key] === AGOR_PACK_DEFAULT_SESSION_MODE
-) as string;
+import { exportRequest, packContentFlags } from '../../lib/pack/options';
 
 export default class PackExport extends BaseCommand {
   static override summary = 'Export AI teammates to a .agor file';
@@ -46,15 +33,7 @@ export default class PackExport extends BaseCommand {
 
   static override flags = {
     output: Flags.string({ char: 'o', description: 'Output file', required: true }),
-    sessions: Flags.string({
-      description: 'Session history to include',
-      options: Object.keys(SESSION_MODES),
-      default: DEFAULT_SESSIONS_FLAG,
-    }),
-    'include-others-sessions': Flags.boolean({
-      description: "Also include other people's sessions on these teammates",
-      default: false,
-    }),
+    ...packContentFlags,
   };
 
   async run(): Promise<void> {
@@ -74,11 +53,7 @@ export default class PackExport extends BaseCommand {
         ref: string;
         size: number;
         manifest: AgorPackManifest;
-      }>(daemonUrl, bearer, '/agor-pack/exports', {
-        branch_ids: branchIds,
-        sessions: SESSION_MODES[flags.sessions] ?? AGOR_PACK_DEFAULT_SESSION_MODE,
-        include_others_sessions: flags['include-others-sessions'],
-      } satisfies AgorPackExportRequest);
+      }>(daemonUrl, bearer, '/agor-pack/exports', exportRequest(branchIds, flags));
       const response = await packFetch(
         daemonUrl,
         bearer,
