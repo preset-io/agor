@@ -227,6 +227,7 @@ export async function createPackFixture(input: {
         path: 'docs/plan.md',
         title: 'Plan',
         content_text: '# Plan\n\nv1',
+        change_summary: 'First draft of the plan',
       },
       params(ada)
     );

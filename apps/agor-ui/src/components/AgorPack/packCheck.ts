@@ -61,17 +61,59 @@ export function toolAccountLabel(tool: string): string {
 const capitalize = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
 
 /** Reconnect chips for a set of requirements, deduplicated, account first. */
+/** One thing to reconnect after a move; the Check report and Finish setup both list these. */
+export type ReconnectItem =
+  | { kind: 'account'; key: string; label: string; tool: string }
+  | { kind: 'mcp'; key: string; label: string; server: AgorPackRequirements['mcp_servers'][number] }
+  | {
+      kind: 'channel';
+      key: string;
+      label: string;
+      channel: AgorPackRequirements['gateway_channels'][number];
+    }
+  | { kind: 'env'; key: string; label: string; env: AgorPackRequirements['env_vars'][number] };
+
+/** What to reconnect, deduplicated: accounts first, then apps, channels, variables. */
+export function reconnectItems(requirements: AgorPackRequirements[]): ReconnectItem[] {
+  const items = new Map<string, ReconnectItem>();
+  const add = (item: ReconnectItem) => {
+    if (!items.has(item.key)) items.set(item.key, item);
+  };
+  for (const req of requirements) {
+    for (const tool of req.agentic_tools) {
+      add({ kind: 'account', key: `account:${tool}`, label: toolAccountLabel(tool), tool });
+    }
+  }
+  for (const req of requirements) {
+    for (const server of req.mcp_servers) {
+      add({
+        kind: 'mcp',
+        key: `mcp:${server.name}`,
+        label: server.display_name ?? server.name,
+        server,
+      });
+    }
+  }
+  for (const req of requirements) {
+    for (const channel of req.gateway_channels) {
+      add({
+        kind: 'channel',
+        key: `channel:${channel.channel_type}:${channel.name}`,
+        label: capitalize(channel.channel_type),
+        channel,
+      });
+    }
+  }
+  for (const req of requirements) {
+    for (const env of req.env_vars)
+      add({ kind: 'env', key: `env:${env.name}`, label: env.name, env });
+  }
+  return [...items.values()];
+}
+
+/** Reconnect chips for a set of requirements. */
 export function reconnectLabels(requirements: AgorPackRequirements[]): string[] {
-  const labels = new Set<string>();
-  for (const req of requirements) {
-    for (const tool of req.agentic_tools) labels.add(toolAccountLabel(tool));
-  }
-  for (const req of requirements) {
-    for (const server of req.mcp_servers) labels.add(server.display_name ?? server.name);
-    for (const channel of req.gateway_channels) labels.add(capitalize(channel.channel_type));
-    for (const env of req.env_vars) labels.add(env.name);
-  }
-  return [...labels];
+  return [...new Set(reconnectItems(requirements).map((item) => item.label))];
 }
 
 /** Docker-style environments and private hosts, per teammate. */

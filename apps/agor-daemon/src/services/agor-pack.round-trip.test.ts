@@ -268,6 +268,8 @@ dbTest(
           document_id: plan!.document_id,
         });
         expect(planVersions.map((v) => v.content_text)).toEqual(['# Plan\n\nv2', '# Plan\n\nv1']);
+        // The original change summary travels with its version.
+        expect(planVersions[1]?.change_summary).toBe('First draft of the plan');
 
         // Artifact recreated for Bea and the board object points at it.
         const newArtifactId = result.remap.artifacts['artifact-a'];
@@ -512,6 +514,23 @@ dbTest(
       expect(restored.staged.dry_run[0]?.warnings.join(' ')).not.toMatch(/chart\.png/);
       expect(restored.applied.results[0]?.remap.uploads).toHaveLength(1);
     })
+);
+
+dbTest('the size estimate counts the attachments a session history carries', async ({ db: raw }) =>
+  withFixture(raw, async (fx) => {
+    const { db, unit, ctx, ada, seeded, upload } = fx;
+    const MiB = 1024 * 1024;
+    await unit(() =>
+      update(db, uploads)
+        .set({ size_bytes: 120 * MiB })
+        .where(eq(uploads.upload_ref, upload.ref))
+        .run()
+    );
+    const [preflight] = await new AgorPackExporter(ctx(ada)).preflight([seeded.branch.branch_id]);
+    expect(preflight?.session_bytes.own).toBeGreaterThan(120 * MiB);
+    expect(preflight?.session_bytes.own).toBeLessThan(121 * MiB);
+    expect(preflight?.large_attachments).toEqual([]);
+  })
 );
 
 dbTest(

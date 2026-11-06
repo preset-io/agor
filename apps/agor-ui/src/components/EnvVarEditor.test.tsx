@@ -110,4 +110,33 @@ describe('EnvVarEditor failures', () => {
     expect(await screen.findByText("Couldn't save the variable.")).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/variable name/i)).toHaveValue('MY_TOKEN');
   });
+
+  it('stacks one row per variable in compact mode (narrow drawers), with its value field', async () => {
+    const onSave = vi.fn(async () => {});
+    render(
+      <AntApp>
+        <EnvVarEditor
+          compact
+          envVars={{
+            GITHUB_TOKEN: { set: false, scope: 'global' },
+            NPM_TOKEN: { set: true, scope: 'global' },
+          }}
+          onSave={onSave}
+          onDelete={vi.fn(async () => {})}
+          identityKey="user-a:member"
+          operationScope={['user-a:member', 1]}
+        />
+      </AntApp>
+    );
+    // No table columns, no add form.
+    expect(screen.queryByRole('columnheader')).toBeNull();
+    expect(screen.queryByText('Add New Variable')).toBeNull();
+    expect(screen.getByText('Not Set')).toBeInTheDocument();
+    expect(screen.getByText('Set (encrypted)')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('GITHUB_TOKEN value'), { target: { value: 'ghp-x' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    });
+    expect(onSave).toHaveBeenCalledWith('GITHUB_TOKEN', 'ghp-x', 'global');
+  });
 });

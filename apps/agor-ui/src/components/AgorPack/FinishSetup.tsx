@@ -32,6 +32,13 @@ export function scheduleStateLine(
   return { text: PACK_COPY.schedPaused, tone: 'secondary' };
 }
 
+/** The lead names schedules only when there are some to unblock. */
+export function finishSetupLead(setup: Pick<FinishSetupState, 'name' | 'schedules'>): string {
+  return fill(setup.schedules.length ? PACK_COPY.fsLead : PACK_COPY.fsLeadNoSchedules, {
+    name: setup.name,
+  });
+}
+
 const ICONS: Record<FinishSetupItem['kind'], React.ReactNode> = {
   account: <RobotOutlined />,
   mcp: <ApiOutlined />,
@@ -80,9 +87,7 @@ export const FinishSetupCard: React.FC<FinishSetupProps & { style?: React.CSSPro
               {PACK_COPY.fsOpen}
             </Button>
           </Flex>
-          <Typography.Text type="secondary">
-            {fill(PACK_COPY.fsLead, { name: setup.name })}
-          </Typography.Text>
+          <Typography.Text type="secondary">{finishSetupLead(setup)}</Typography.Text>
           <Progress
             percent={Math.round((setup.done / setup.total) * 100)}
             showInfo={false}
@@ -242,7 +247,7 @@ function FinishSetupPanel({
       }
     >
       <Flex vertical gap={12}>
-        <Typography.Text>{fill(PACK_COPY.fsLead, { name: setup.name })}</Typography.Text>
+        <Typography.Text>{finishSetupLead(setup)}</Typography.Text>
         <Flex align="center" gap={8}>
           <Progress
             percent={setup.total ? Math.round((setup.done / setup.total) * 100) : 100}
@@ -290,6 +295,7 @@ function FinishSetupPanel({
                 onDelete={async () => undefined}
                 loading={saving}
                 hideDescription
+                compact
                 identityKey={authority.identityKey}
                 operationScope={authority.operationScope}
               />

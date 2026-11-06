@@ -105,6 +105,7 @@ export const PACK_COPY = {
 
   fsTitle: 'Finish setup',
   fsLead: 'Reconnect your accounts so {name}’s schedules can run.',
+  fsLeadNoSchedules: 'Reconnect your accounts so {name} can work.',
   fsCount: '{n} of {total} reconnected',
   fsCountShort: '{n} of {total}',
   fsOpen: 'Finish setup',
