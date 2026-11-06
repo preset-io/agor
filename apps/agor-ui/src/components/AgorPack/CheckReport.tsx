@@ -1,3 +1,4 @@
+import { shortId } from '@agor-live/client';
 import {
   ApiOutlined,
   CheckCircleFilled,
@@ -179,7 +180,7 @@ export const FlaggedSessionsCard: React.FC<
               <Flex vertical gap={2} style={{ maxWidth: 320 }}>
                 {check.flagged.map((session) => (
                   <Typography.Text key={session.session_id} ellipsis>
-                    {session.title || session.session_id.slice(0, 8)}
+                    {session.title || shortId(session.session_id)}
                   </Typography.Text>
                 ))}
               </Flex>
