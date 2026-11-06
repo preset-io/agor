@@ -11,6 +11,7 @@ import type {
 import jwt from 'jsonwebtoken';
 import { describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { tenantChannelName, tenantUserChannelName } from '../realtime/routing';
 import {
   buildFeatureAnnouncementsFeed,
   CloudFeatureAnnouncementsPoller,
@@ -19,6 +20,7 @@ import {
   featureAnnouncementItemsForAgents,
   featureAnnouncementsPollIntervalMs,
   mergeFeatureAnnouncementsSeen,
+  notifyFeatureAnnouncementsChanged,
   parseFeatureAnnouncements,
   resolveFeatureAnnouncementsSource,
   shortBrief,
@@ -448,6 +450,39 @@ describe('CloudFeatureAnnouncementsPoller', () => {
     warn.mockRestore();
   });
 
+  it('tells listeners when a poll changes the announcements, and only then', async () => {
+    const [first, ...rest] = RELEASES;
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ announcements: RELEASES }))
+      .mockResolvedValueOnce(Response.json({ announcements: RELEASES }))
+      // An operator removed the newest release.
+      .mockResolvedValueOnce(Response.json({ announcements: rest }));
+    const poller = new CloudFeatureAnnouncementsPoller(CLOUD_ENV, undefined, fetchImpl);
+    const listener = vi.fn();
+    poller.onChange(listener);
+
+    await poller.refresh();
+    expect(listener).toHaveBeenCalledTimes(1);
+    await poller.refresh();
+    expect(listener).toHaveBeenCalledTimes(1);
+    await poller.refresh();
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(poller.announcements()?.map((r) => r.id)).not.toContain(first.id);
+  });
+
+  it('says whether it keeps an answer when a poll fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const poller = new CloudFeatureAnnouncementsPoller(
+      CLOUD_ENV,
+      undefined,
+      vi.fn<typeof fetch>().mockResolvedValue(new Response('down', { status: 503 }))
+    );
+    await poller.refresh();
+    expect(warn.mock.calls[0][0]).toMatch(/showing none until it succeeds/);
+    warn.mockRestore();
+  });
+
   it('refuses a non-HTTPS Cloud API', () => {
     expect(
       () =>
@@ -456,6 +491,37 @@ describe('CloudFeatureAnnouncementsPoller', () => {
           AGOR_CLOUD_API_BASE_URL: 'http://cloud/api',
         })
     ).toThrow(/HTTPS/);
+  });
+});
+
+describe('notifyFeatureAnnouncementsChanged', () => {
+  it('emits a content-free event once per connected tenant, addressed to that tenant', () => {
+    const seen: Array<[unknown, string, unknown]> = [];
+    const app = {
+      channels: [
+        tenantChannelName('tenant-a'),
+        tenantChannelName('tenant-b'),
+        tenantUserChannelName('tenant-a', 'user-1'),
+        'authenticated',
+      ],
+      service: () => ({
+        emit: (
+          event: string,
+          data: unknown,
+          hook: { params: { tenant?: { tenant_id: string } } }
+        ) => {
+          seen.push([hook.params.tenant?.tenant_id, event, data]);
+          return true;
+        },
+      }),
+    };
+
+    notifyFeatureAnnouncementsChanged(app as never);
+
+    expect(seen).toEqual([
+      ['tenant-a', 'changed', {}],
+      ['tenant-b', 'changed', {}],
+    ]);
   });
 });
 

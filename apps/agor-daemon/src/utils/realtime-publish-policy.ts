@@ -288,8 +288,8 @@ export const REALTIME_PUBLISH_POLICY = {
     why: 'Acknowledgement response; updated branch publishes through branches.',
   },
   [FEATURE_ANNOUNCEMENTS_SERVICE]: {
-    audience: 'none',
-    why: 'Per-caller feed; notes are read on demand and seen state is per user.',
+    audience: 'tenant',
+    why: 'Only the content-free "changed" event, so open tabs refetch their own feed.',
   },
   [FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE]: {
     audience: 'none',

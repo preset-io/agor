@@ -10,10 +10,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type AgorConfig, FEATURE_ANNOUNCEMENTS_MEDIA_ORIGIN } from '@agor/core/config';
 import type { UsersRepository } from '@agor/core/db';
-import { BadRequest, NotAuthenticated, NotFound } from '@agor/core/feathers';
+import { type Application, BadRequest, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import {
   type AuthenticatedParams,
+  FEATURE_ANNOUNCEMENTS_CHANGED_EVENT,
   FEATURE_ANNOUNCEMENTS_LIMITS,
+  FEATURE_ANNOUNCEMENTS_SERVICE,
   type FeatureAnnouncementClientItem,
   type FeatureAnnouncementDTO,
   type FeatureAnnouncementItemDTO,
@@ -27,10 +29,12 @@ import {
   hasMinimumRole,
   type Params,
   ROLES,
+  type TenantID,
   type User,
   type UserID,
 } from '@agor/core/types';
 import { z } from 'zod';
+import { parseTenantChannelName } from '../realtime/routing.js';
 import {
   type CloudRuntimeCredential,
   hasCloudRuntimeCredential,
@@ -38,6 +42,7 @@ import {
   readBoundedText,
   signCloudRuntimeAssertion,
 } from '../utils/cloud-runtime-credential.js';
+import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { clip, parseChangelogFeatureAnnouncements } from './feature-announcements-changelog.js';
 import { withPreferencesMerge } from './users.js';
 
@@ -139,6 +144,8 @@ export interface FeatureAnnouncementsProvider {
   readonly source: FeatureAnnouncementsSource;
   /** Null until the source has answered once; the UI shows nothing until then. */
   announcements(): FeatureAnnouncementDTO[] | null;
+  /** Called after the announcements change; only the Cloud source changes after startup. */
+  onChange?(listener: () => void): void;
 }
 
 /** Walk up from this module to the first directory containing `relative`. */
@@ -189,6 +196,7 @@ export class CloudFeatureAnnouncementsPoller implements FeatureAnnouncementsProv
   readonly source = 'cloud' as const;
   private cached: FeatureAnnouncementDTO[] | null = null;
   private failing = false;
+  private readonly listeners: Array<() => void> = [];
   private readonly url: string;
   private readonly credential: CloudRuntimeCredential;
 
@@ -215,6 +223,10 @@ export class CloudFeatureAnnouncementsPoller implements FeatureAnnouncementsProv
     return this.cached;
   }
 
+  onChange(listener: () => void): void {
+    this.listeners.push(listener);
+  }
+
   async refresh(): Promise<void> {
     try {
       // Plain fetch, as in the MCP OAuth relay: the destination is the
@@ -230,20 +242,25 @@ export class CloudFeatureAnnouncementsPoller implements FeatureAnnouncementsProv
       });
       if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
       const body = JSON.parse(await readBoundedText(response, CLOUD_MAX_RESPONSE_BYTES));
-      this.cached = parseFeatureAnnouncements(
+      const next = parseFeatureAnnouncements(
         z.object({ announcements: z.unknown() }).parse(body).announcements,
         this.mediaOrigins
       );
+      const changed = JSON.stringify(next) !== JSON.stringify(this.cached);
+      this.cached = next;
+      if (changed) for (const listener of this.listeners) listener();
       // Debug level: shown in development, filtered out by default in production.
       console.debug(`[feature-announcements] Cloud poll ok: ${this.cached.length} announcement(s)`);
       if (this.failing)
         console.log('[feature-announcements] Cloud feature announcements recovered');
       this.failing = false;
     } catch (error) {
-      // Log the transition once; keep serving the last good answer.
+      // Log the transition once; keep serving the last good answer, if any.
       if (!this.failing) {
         console.warn(
-          '[feature-announcements] Cloud feature announcements refresh failed; keeping the cached ones:',
+          this.cached
+            ? '[feature-announcements] Cloud feature announcements refresh failed; keeping the last good answer:'
+            : '[feature-announcements] Cloud feature announcements refresh failed; showing none until it succeeds:',
           error instanceof Error ? error.message : String(error)
         );
       }
@@ -419,6 +436,9 @@ function callerId(params: AuthenticatedParams | undefined): UserID {
 
 /** `GET /feature-announcements`: the caller's feed. Reads only the caller's own user row. */
 export class FeatureAnnouncementsService {
+  /** Custom realtime event, published per tenant by notifyFeatureAnnouncementsChanged. */
+  readonly events = [FEATURE_ANNOUNCEMENTS_CHANGED_EVENT];
+
   constructor(
     private readonly provider: FeatureAnnouncementsProvider,
     private readonly users: Pick<UsersRepository, 'findById'>
@@ -485,6 +505,25 @@ export class FeatureAnnouncementsMarkSeenService {
       )
     );
     return this.feed.feedFor(params);
+  }
+}
+
+/**
+ * Tell open tabs that the announcements changed. The announcements are
+ * platform content, so every tenant with a connected socket on this replica
+ * hears a content-free event, published with that tenant as explicit context
+ * so the realtime policy routes it to that tenant's channel only.
+ */
+export function notifyFeatureAnnouncementsChanged(app: Application & { channels: string[] }): void {
+  for (const tenantId of new Set(app.channels.map(parseTenantChannelName))) {
+    if (!tenantId) continue;
+    emitServiceEvent(app, {
+      path: FEATURE_ANNOUNCEMENTS_SERVICE,
+      event: FEATURE_ANNOUNCEMENTS_CHANGED_EVENT,
+      method: 'find',
+      data: {},
+      params: { tenant: { tenant_id: tenantId as TenantID, source: 'explicit' } },
+    });
   }
 }
 

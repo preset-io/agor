@@ -11,6 +11,7 @@ import {
   createFeatureAnnouncementsProvider,
   FeatureAnnouncementsMarkSeenService,
   FeatureAnnouncementsService,
+  notifyFeatureAnnouncementsChanged,
 } from './services/feature-announcements';
 import { ProductAnalyticsService } from './services/product-analytics.js';
 import { sandboxManagedCredentialIsolationAvailable } from './utils/sandbox-wrap.js';
@@ -4555,6 +4556,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     { find: { role: ROLES.VIEWER, action: 'read feature announcements' } },
     requireAuth
   );
+  featureAnnouncementsProvider.onChange?.(() => notifyFeatureAnnouncementsChanged(app));
   registerAuthenticatedRoute(
     app,
     FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE,

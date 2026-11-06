@@ -78,6 +78,13 @@ export function tenantChannelName(tenantId: string): string {
   return `${REALTIME_ROOM_PREFIX}${encodeRealtimeRoomComponent(tenantId)}`;
 }
 
+/** The tenant of a `tenantChannelName` room, or null for any other room. */
+export function parseTenantChannelName(name: string): string | null {
+  if (!name.startsWith(REALTIME_ROOM_PREFIX)) return null;
+  const encoded = name.slice(REALTIME_ROOM_PREFIX.length);
+  return encoded.includes(':') ? null : decodeRealtimeRoomComponent(encoded);
+}
+
 export function tenantUserChannelName(tenantId: string, userId: string): string {
   return `${tenantChannelName(tenantId)}:user:${encodeRealtimeRoomComponent(userId)}`;
 }

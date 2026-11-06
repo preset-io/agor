@@ -12,6 +12,12 @@ import { z } from 'zod';
 /** `find` returns the caller's feed; `create` on the sibling path records what they saw. */
 export const FEATURE_ANNOUNCEMENTS_SERVICE = 'feature-announcements';
 export const FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE = 'feature-announcements/mark-seen';
+/**
+ * Realtime event on FEATURE_ANNOUNCEMENTS_SERVICE when the daemon's announcements
+ * change (a Cloud poll brought something new or removed something). It carries
+ * no content: open tabs refetch their own feed.
+ */
+export const FEATURE_ANNOUNCEMENTS_CHANGED_EVENT = 'changed';
 
 /** `bundled`: CHANGELOG.md shipped with the daemon. `cloud`: published by Agor Cloud. */
 export const FEATURE_ANNOUNCEMENTS_SOURCES = ['bundled', 'cloud', 'off'] as const;
