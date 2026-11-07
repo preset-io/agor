@@ -28,6 +28,8 @@ export const LEGACY_SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE =
 export const SAFE_MISSING_PROVIDER_RESULT_MESSAGE =
   'The Claude Code stream closed without a final result. Completion could not be confirmed. Review any output and tool activity before retrying.';
 
+export type ProviderFallbackKind = 'zero_turn' | 'provider_error' | 'missing_result';
+
 export type CodexLifecycleFailureCode =
   | 'authentication_required'
   | 'completed_without_response'

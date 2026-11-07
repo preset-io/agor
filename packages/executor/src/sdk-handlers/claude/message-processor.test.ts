@@ -1,4 +1,8 @@
-import { generateId, SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE } from '@agor/core';
+import {
+  classifyProviderFallback,
+  generateId,
+  SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
+} from '@agor/core';
 import type { SDKSystemMessage } from '@agor/core/sdk';
 import type { Message, MessageID, SessionID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -121,6 +125,236 @@ describe('SDKMessageProcessor result logging', () => {
     ]);
     expect(JSON.stringify(message)).not.toContain('Credit balance is too low');
     expect(message.metadata?.is_zero_turn_result).toBe(true);
+  });
+
+  it('does not synthesize a zero-turn failure when manual compaction completed successfully in the turn', async () => {
+    const processor = createProcessor();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      // 1. Compaction status
+      const statusEvents = await processor.process(systemMsg({ status: 'compacting' }));
+      expect(statusEvents).toHaveLength(1);
+      expect(statusEvents[0].type).toBe('complete');
+
+      // 2. Compaction finished with manual trigger (e.g. /compact)
+      const boundaryEvents = await processor.process(
+        systemMsg({
+          subtype: 'compact_boundary',
+          compact_metadata: { trigger: 'manual', pre_tokens: 50_000, post_tokens: 10_000 },
+        })
+      );
+      expect(boundaryEvents).toEqual([
+        {
+          type: 'system_complete',
+          systemType: 'compaction',
+          agentSessionId: undefined,
+          metadata: { trigger: 'manual', pre_tokens: 50_000 },
+        },
+      ]);
+
+      // 3. Terminal success result with 0 assistant messages
+      const resultEvents = await processor.process({
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        duration_ms: 500,
+        num_turns: 0,
+        result: 'Compacted',
+        uuid: 'result-uuid',
+        session_id: 'sdk-session',
+      } as never);
+
+      // Must NOT synthesize an assistant message with SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE
+      const completeEvent = resultEvents.find((e) => e.type === 'complete');
+      expect(completeEvent).toBeUndefined();
+      expect(resultEvents.some((e) => e.type === 'result')).toBe(true);
+      expect(resultEvents.some((e) => e.type === 'end')).toBe(true);
+
+      const rawEvent = resultEvents.find(
+        (e): e is Extract<ProcessedEvent, { type: 'result' }> => e.type === 'result'
+      );
+      expect(
+        classifyProviderFallback({
+          status: 'completed',
+          error_message: null,
+          raw_sdk_response: rawEvent?.raw_sdk_message,
+        })
+      ).toBeUndefined();
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    { trigger: 'auto' as const, label: 'auto trigger' },
+    { trigger: undefined, label: 'missing trigger' },
+  ])(
+    'synthesizes zero-turn fallback when compaction occurs with $label but turn produces no assistant response',
+    async ({ trigger }) => {
+      const processor = createProcessor();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      try {
+        // 1. Compaction status (mirrors manual path)
+        const statusEvents = await processor.process(systemMsg({ status: 'compacting' }));
+        expect(statusEvents).toHaveLength(1);
+        expect(statusEvents[0].type).toBe('complete');
+
+        // 2. Compaction finished with auto or missing trigger
+        const boundaryEvents = await processor.process(
+          systemMsg({
+            subtype: 'compact_boundary',
+            compact_metadata: trigger
+              ? { trigger, pre_tokens: 50_000, post_tokens: 10_000 }
+              : undefined,
+          })
+        );
+        expect(boundaryEvents).toHaveLength(1);
+        expect(boundaryEvents[0].type).toBe('system_complete');
+
+        // 3. Terminal success result with 0 assistant messages
+        const resultEvents = await processor.process({
+          type: 'result',
+          subtype: 'success',
+          is_error: false,
+          num_turns: 0,
+          result: '',
+          uuid: 'result-uuid',
+          session_id: 'sdk-session',
+        } as never);
+
+        // Automatic compaction was an intermediate operation, not the prompt's response.
+        // Must STILL synthesize SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE!
+        const complete = resultEvents.find(
+          (e): e is Extract<ProcessedEvent, { type: 'complete' }> => e.type === 'complete'
+        );
+        expect(complete?.isSynthesizedResult).toBe(true);
+        expect(complete?.content).toEqual([
+          { type: 'text', text: SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE },
+        ]);
+
+        const rawEvent = resultEvents.find(
+          (e): e is Extract<ProcessedEvent, { type: 'result' }> => e.type === 'result'
+        );
+        expect(
+          classifyProviderFallback({
+            status: 'failed',
+            error_message: SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
+            raw_sdk_response: rawEvent?.raw_sdk_message,
+          })
+        ).toBe('zero_turn');
+      } finally {
+        logSpy.mockRestore();
+      }
+    }
+  );
+
+  it('does not synthesize zero-turn fallback when automatic compaction occurs and assistant response is confirmed', async () => {
+    const processor = createProcessor();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      // Automatic compaction mid-turn
+      await processor.process(
+        systemMsg({
+          subtype: 'compact_boundary',
+          compact_metadata: { trigger: 'auto', pre_tokens: 50_000 },
+        })
+      );
+
+      // Model assistant response arrives
+      await processor.process({
+        type: 'assistant',
+        session_id: 'sdk-session',
+        parent_tool_use_id: null,
+        message: {
+          id: 'msg-1',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Here is the answer to your prompt' }],
+        },
+      } as never);
+
+      // Terminal success result
+      const resultEvents = await processor.process({
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        num_turns: 1,
+        uuid: 'result-uuid',
+        session_id: 'sdk-session',
+      } as never);
+
+      const complete = resultEvents.find((e) => e.type === 'complete');
+      expect(complete).toBeUndefined();
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('still preserves zero-turn fallback when streaming text deltas arrive without a complete assistant message', async () => {
+    const processor = createProcessor({ enableTokenStreaming: true });
+
+    // Stream event delta arrived, but no complete assistant message ever arrived
+    await processor.process({
+      type: 'stream_event',
+      event: {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'Partial text that was cut off...' },
+      },
+    } as never);
+
+    expect(processor.getState().hasTextDeltas).toBe(true);
+    expect(processor.getState().assistantMessageCount).toBe(0);
+
+    const resultEvents = await processor.process({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      num_turns: 0,
+      uuid: 'result-uuid',
+      session_id: 'sdk-session',
+    } as never);
+
+    // Because no complete assistant message was confirmed and no compaction happened,
+    // zero-turn fallback MUST still be synthesized
+    const complete = resultEvents.find(
+      (e): e is Extract<ProcessedEvent, { type: 'complete' }> => e.type === 'complete'
+    );
+    expect(complete?.isSynthesizedResult).toBe(true);
+    expect(complete?.content).toEqual([
+      { type: 'text', text: SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE },
+    ]);
+  });
+
+  it('does not synthesize zero-turn when compaction completed but terminal result reports an error', async () => {
+    const processor = createProcessor();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      await processor.process(
+        systemMsg({
+          subtype: 'compact_boundary',
+          compact_metadata: { trigger: 'auto', pre_tokens: 10_000 },
+        })
+      );
+
+      const resultEvents = await processor.process({
+        type: 'result',
+        subtype: 'error_during_execution',
+        is_error: true,
+        uuid: 'result-uuid',
+        session_id: 'sdk-session',
+      } as never);
+
+      // Result handler only synthesizes for subtype === 'success' && !is_error
+      const completeEvent = resultEvents.find((e) => e.type === 'complete');
+      expect(completeEvent).toBeUndefined();
+      expect(resultEvents.some((e) => e.type === 'result')).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 });
 

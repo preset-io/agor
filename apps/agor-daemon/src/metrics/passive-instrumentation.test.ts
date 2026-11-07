@@ -534,4 +534,134 @@ describe('Task/executor lifecycle metrics', () => {
     });
     expect(metrics.calls.map((call) => call.name)).toEqual(['executor.connections']);
   });
+
+  describe('provider fallback telemetry', () => {
+    it('records zero_turn fallback with bounded dimensions', () => {
+      const metrics = new RecordingMetrics();
+      recordTaskSettlement(metrics, {
+        ...task,
+        status: 'failed',
+        error_message:
+          'Agor could not confirm a successful response. Review any output and tool activity before retrying.',
+        raw_sdk_response: { type: 'result', subtype: 'success', is_error: false },
+        recorded_tool_count: 0,
+        metadata: { source: 'agor' },
+        executor_mode: 'local',
+      } as unknown as Task);
+
+      const fallbackCall = metrics.calls.find((c) => c.name === 'task.provider_fallback');
+      expect(fallbackCall).toBeDefined();
+      expect(fallbackCall?.value).toBe(1);
+      expect(fallbackCall?.tags).toEqual({
+        fallback_kind: 'zero_turn',
+        surface: 'ui',
+        tool_chain: 'none',
+        mode: 'local',
+      });
+    });
+
+    it('records provider_error fallback with gateway surface and short tool chain', () => {
+      const metrics = new RecordingMetrics();
+      recordTaskSettlement(metrics, {
+        ...task,
+        status: 'failed',
+        error_message:
+          'Agor could not confirm a successful response. Review any output and tool activity before retrying. Provider detail: error_during_execution',
+        raw_sdk_response: { type: 'result', subtype: 'error_during_execution', is_error: true },
+        recorded_tool_count: 3,
+        metadata: { gateway_task_source: { channel_type: 'slack' } },
+        executor_mode: 'templated',
+      } as unknown as Task);
+
+      const fallbackCall = metrics.calls.find((c) => c.name === 'task.provider_fallback');
+      expect(fallbackCall).toBeDefined();
+      expect(fallbackCall?.tags).toEqual({
+        fallback_kind: 'provider_error',
+        surface: 'gateway',
+        tool_chain: 'short',
+        mode: 'templated',
+      });
+    });
+
+    it('records missing_result fallback with unknown surface and long tool chain', () => {
+      const metrics = new RecordingMetrics();
+      recordTaskSettlement(metrics, {
+        ...task,
+        status: 'failed',
+        error_message:
+          'The Claude Code stream closed without a final result. Completion could not be confirmed. Review any output and tool activity before retrying.',
+        recorded_tool_count: 7,
+        executor_mode: 'local',
+      } as unknown as Task);
+
+      const fallbackCall = metrics.calls.find((c) => c.name === 'task.provider_fallback');
+      expect(fallbackCall).toBeDefined();
+      expect(fallbackCall?.tags).toEqual({
+        fallback_kind: 'missing_result',
+        surface: 'unknown',
+        tool_chain: 'long',
+        mode: 'local',
+      });
+    });
+
+    it('treats missing tool count as unknown tool_chain', () => {
+      const metrics = new RecordingMetrics();
+      recordTaskSettlement(metrics, {
+        ...task,
+        status: 'failed',
+        error_message:
+          'The Claude Code stream closed without a final result. Completion could not be confirmed. Review any output and tool activity before retrying.',
+        recorded_tool_count: null,
+      } as unknown as Task);
+
+      const fallbackCall = metrics.calls.find((c) => c.name === 'task.provider_fallback');
+      expect(fallbackCall?.tags?.tool_chain).toBe('unknown');
+    });
+
+    it('does not emit task.provider_fallback on completed task', () => {
+      const metrics = new RecordingMetrics();
+      recordTaskSettlement(metrics, {
+        ...task,
+        status: 'completed',
+        error_message: null,
+      } as unknown as Task);
+
+      expect(metrics.calls.find((c) => c.name === 'task.provider_fallback')).toBeUndefined();
+    });
+
+    it('does not emit task.provider_fallback on unrelated task failure', () => {
+      const metrics = new RecordingMetrics();
+      recordTaskSettlement(metrics, {
+        ...task,
+        status: 'failed',
+        error_message: 'Permission request timed out after 30000ms.',
+      } as unknown as Task);
+
+      expect(metrics.calls.find((c) => c.name === 'task.provider_fallback')).toBeUndefined();
+    });
+
+    it('does not double-count provider_fallback on repeated terminal settlement of the same task', () => {
+      const metrics = new RecordingMetrics();
+      const failedTask = {
+        ...task,
+        status: 'failed',
+        error_message:
+          'Agor could not confirm a successful response. Review any output and tool activity before retrying.',
+        raw_sdk_response: { type: 'result', subtype: 'success', is_error: false },
+        recorded_tool_count: 0,
+        metadata: { source: 'agor' },
+        executor_mode: 'local',
+      } as unknown as Task;
+
+      recordTaskSettlement(metrics, failedTask);
+      recordTaskSettlement(metrics, failedTask);
+
+      const fallbackCalls = metrics.calls.filter((c) => c.name === 'task.provider_fallback');
+      expect(fallbackCalls).toHaveLength(1);
+      expect(fallbackCalls[0].value).toBe(1);
+
+      const settlementCalls = metrics.calls.filter((c) => c.name === 'task.settlements');
+      expect(settlementCalls).toHaveLength(1);
+    });
+  });
 });

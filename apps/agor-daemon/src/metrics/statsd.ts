@@ -20,16 +20,19 @@ export type MetricsErrorReporter = (error: Error) => void;
 
 const METRIC_NAME = /^[a-z][a-z0-9_.-]{0,127}$/;
 const ALLOWED_TAG_KEYS = new Set([
+  'disconnect_reason',
+  'fallback_kind',
   'job',
   'method',
   'mode',
   'outcome',
-  'disconnect_reason',
   'route',
   'scope',
   'service',
   'status',
   'status_code',
+  'surface',
+  'tool_chain',
   'transport',
 ]);
 const UUID_VALUE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
