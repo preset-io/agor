@@ -5,21 +5,26 @@
 import http from 'node:http';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
+  BOUND_SECRET_ENVELOPE_VERSION,
   createDatabase,
   createTenantScopedDatabaseProxy,
+  dcrRegistrationBinding,
   executeRaw,
+  generateId,
   initializeDatabase,
+  MCPOAuthClientRegistrationRepository,
   MCPOAuthPendingFlowRepository,
   MCPServerRepository,
   type RawDatabase,
   runWithTenantDatabaseScope,
+  sealBoundSecret,
   sql,
   type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
   UsersRepository,
   userMcpOauthTokens,
 } from '../../db';
-import type { MCPServerID, UserID } from '../../types';
+import type { MCPOAuthClientRegistrationID, MCPServerID, UserID } from '../../types';
 import * as outbound from '../../utils/safe-outbound-fetch';
 import {
   AmbiguousRefreshError,
@@ -128,7 +133,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     async function seed(
       label: string,
       tokenEndpoint: string,
-      clientSecret?: string
+      clientSecret?: string,
+      clientId = 'configured-client'
     ): Promise<Seed> {
       const tenantId = `oauth-refresh-${label}-${crypto.randomUUID()}`;
       return runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
@@ -148,7 +154,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           auth: {
             type: 'oauth',
             oauth_mode: 'per_user',
-            oauth_client_id: 'configured-client',
+            oauth_client_id: clientId,
             oauth_token_url: tokenEndpoint,
           },
         });
@@ -164,7 +170,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           {
             accessToken: `expired-access-${label}`,
             refreshToken: `refresh-${label}-0`,
-            clientId: 'configured-client',
+            clientId,
             ...(clientSecret ? { clientSecret } : {}),
             expiresAt: new Date(Date.now() - 60_000),
             grantBinding: {
@@ -221,6 +227,62 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         )
       );
       return generation;
+    }
+
+    async function seedDcrRegistration(
+      db: TenantScopeAwareDatabase,
+      tenantId: string,
+      serverId: MCPServerID,
+      clientId: string,
+      clientSecret?: string
+    ) {
+      return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+        const repo = new MCPOAuthClientRegistrationRepository(scoped);
+        const regId = generateId() as MCPOAuthClientRegistrationID;
+        const fingerprint = 'b'.repeat(64);
+        const claim = await repo.claimOrObserve({
+          tenantId,
+          registrationId: regId,
+          mcpServerId: serverId,
+          bindingFingerprint: fingerprint,
+          serverConfigVersion: 1,
+          envelopeVersion: BOUND_SECRET_ENVELOPE_VERSION,
+          claimId: crypto.randomUUID(),
+          leaseMs: 30_000,
+        });
+        if (claim.outcome !== 'owner') throw new Error('Expected claim owner');
+        await repo.markDispatched(claim.registration);
+        const material = {
+          version: 1,
+          tenantId,
+          registrationId: regId,
+          mcpServerId: serverId,
+          bindingVersion: 1,
+          bindingFingerprint: fingerprint,
+          serverConfigVersion: 1,
+          registrationEndpoint: 'https://provider.example.test/register',
+          registrationEndpointSource: 'metadata' as const,
+          metadataUrl: 'https://provider.example.test/.well-known/oauth-authorization-server',
+          resourceUri: `https://mcp.example.test/${serverId}`,
+          issuer: 'https://provider.example.test',
+          authorizationEndpoint: 'https://provider.example.test/authorize',
+          tokenEndpoint: 'https://provider.example.test/token',
+          redirectUri: 'https://agor.example.test/mcp-servers/oauth-callback',
+          applicationType: 'web' as const,
+          compatibilityMode: 'strict' as const,
+          dcrMode: 'advertised' as const,
+          clientId,
+          ...(clientSecret ? { clientSecret } : {}),
+        };
+        const sealed = sealBoundSecret(
+          JSON.stringify(material),
+          masterSecret,
+          'dcr-client',
+          dcrRegistrationBinding(material)
+        );
+        await repo.finishRegistered(claim.registration, sealed, undefined);
+        return regId;
+      });
     }
 
     function initialRefreshVersion(seed: Seed) {
@@ -858,6 +920,201 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           )
         )
       ).resolves.toBeNull();
+    });
+
+    it('invalidates current DCR registration when refresh receives invalid_client', async () => {
+      const tokenProvider = await provider((_body, response) => {
+        response.writeHead(400, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: 'invalid_client' }));
+      });
+      const dcrClientId = `dcr-client-${crypto.randomUUID()}`;
+      const bound = await seed(
+        'refresh-invalid-client-dcr',
+        tokenProvider.url,
+        undefined,
+        dcrClientId
+      );
+      const regId = await seedDcrRegistration(dbA, bound.tenantId, bound.serverId, dcrClientId);
+
+      const before = await runWithTenantDatabaseScope(dbA, bound.tenantId, (scoped) =>
+        new MCPOAuthClientRegistrationRepository(scoped).getCurrent(bound.tenantId, bound.serverId)
+      );
+      expect(before).toMatchObject({
+        registrationId: regId,
+        isCurrent: true,
+        status: 'registered',
+      });
+
+      await expect(
+        refreshAndPersistToken({
+          db: dbA,
+          tenantId: bound.tenantId,
+          userId: bound.userId,
+          mcpServerId: bound.serverId,
+          validateGrant: async () => true,
+          observedRefreshVersion: initialRefreshVersion(bound),
+          allowLocalhostHttpDevelopment: true,
+          masterSecret,
+        })
+      ).rejects.toBeInstanceOf(InvalidGrantError);
+
+      await runWithTenantDatabaseScope(dbA, bound.tenantId, async (scoped) => {
+        // Token removed
+        const token = await new UserMCPOAuthTokenRepository(scoped, masterSecret).getToken(
+          bound.userId,
+          bound.serverId
+        );
+        expect(token).toBeNull();
+
+        // Registration no longer current
+        const currentReg = await new MCPOAuthClientRegistrationRepository(scoped).getCurrent(
+          bound.tenantId,
+          bound.serverId
+        );
+        expect(currentReg).toBeNull();
+
+        // Registration marked superseded according to existing semantics
+        const rows = rowsOf(
+          await executeRaw(
+            scoped,
+            sql`SELECT status, is_current, failure_code
+                FROM mcp_oauth_client_registrations
+                WHERE registration_id = ${regId}`
+          )
+        );
+        expect(rows).toEqual([
+          expect.objectContaining({
+            status: 'superseded',
+            is_current: false,
+            failure_code: 'provider_invalidated_client',
+          }),
+        ]);
+      });
+    });
+
+    it('invalid_grant deletes token but keeps current DCR registration', async () => {
+      const tokenProvider = await provider((_body, response) => {
+        response.writeHead(400, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: 'invalid_grant' }));
+      });
+      const dcrClientId = `dcr-client-${crypto.randomUUID()}`;
+      const bound = await seed(
+        'refresh-invalid-grant-dcr',
+        tokenProvider.url,
+        undefined,
+        dcrClientId
+      );
+      const regId = await seedDcrRegistration(dbA, bound.tenantId, bound.serverId, dcrClientId);
+
+      await expect(
+        refreshAndPersistToken({
+          db: dbA,
+          tenantId: bound.tenantId,
+          userId: bound.userId,
+          mcpServerId: bound.serverId,
+          validateGrant: async () => true,
+          observedRefreshVersion: initialRefreshVersion(bound),
+          allowLocalhostHttpDevelopment: true,
+        })
+      ).rejects.toBeInstanceOf(InvalidGrantError);
+
+      await runWithTenantDatabaseScope(dbA, bound.tenantId, async (scoped) => {
+        // Token removed
+        const token = await new UserMCPOAuthTokenRepository(scoped, masterSecret).getToken(
+          bound.userId,
+          bound.serverId
+        );
+        expect(token).toBeNull();
+
+        // Registration still current
+        const currentReg = await new MCPOAuthClientRegistrationRepository(scoped).getCurrent(
+          bound.tenantId,
+          bound.serverId
+        );
+        expect(currentReg).toMatchObject({
+          registrationId: regId,
+          isCurrent: true,
+          status: 'registered',
+        });
+      });
+    });
+
+    it('does not invalidate a newer replacement registration when a stale refresh fails with invalid_client', async () => {
+      let requestArrived!: () => void;
+      const arrived = new Promise<void>((resolve) => {
+        requestArrived = resolve;
+      });
+      let releaseResponse!: () => void;
+      const release = new Promise<void>((resolve) => {
+        releaseResponse = resolve;
+      });
+      const tokenProvider = await provider(async (_body, response) => {
+        requestArrived();
+        await release;
+        response.writeHead(400, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: 'invalid_client' }));
+      });
+
+      const oldClientId = `dcr-old-client-${crypto.randomUUID()}`;
+      const bound = await seed(
+        'stale-refresh-concurrency',
+        tokenProvider.url,
+        undefined,
+        oldClientId
+      );
+      const oldRegId = await seedDcrRegistration(dbA, bound.tenantId, bound.serverId, oldClientId);
+
+      // Start slow refresh on daemon A
+      const slowRefresh = refreshAndPersistToken({
+        db: dbA,
+        tenantId: bound.tenantId,
+        userId: bound.userId,
+        mcpServerId: bound.serverId,
+        validateGrant: async () => true,
+        observedRefreshVersion: initialRefreshVersion(bound),
+        allowLocalhostHttpDevelopment: true,
+      });
+
+      await arrived;
+
+      // Meanwhile, daemon B invalidates the old registration and replaces it with a new DCR client
+      await runWithTenantDatabaseScope(dbB, bound.tenantId, async (scoped) => {
+        const repo = new MCPOAuthClientRegistrationRepository(scoped);
+        await repo.invalidateRegisteredById({
+          tenantId: bound.tenantId,
+          serverId: bound.serverId,
+          registrationId: oldRegId,
+        });
+      });
+      const newClientId = `dcr-new-client-${crypto.randomUUID()}`;
+      const newRegId = await seedDcrRegistration(dbB, bound.tenantId, bound.serverId, newClientId);
+
+      // Also replace the grant on daemon B
+      await replaceGrant(
+        dbB,
+        bound,
+        tokenProvider.url,
+        'new-account-access',
+        'new-account-refresh'
+      );
+
+      // Now release daemon A's old refresh response
+      releaseResponse();
+
+      await expect(slowRefresh).rejects.toBeInstanceOf(GrantConfigurationChangedError);
+
+      await runWithTenantDatabaseScope(dbA, bound.tenantId, async (scoped) => {
+        // Newer registration remains current!
+        const currentReg = await new MCPOAuthClientRegistrationRepository(scoped).getCurrent(
+          bound.tenantId,
+          bound.serverId
+        );
+        expect(currentReg).toMatchObject({
+          registrationId: newRegId,
+          isCurrent: true,
+          status: 'registered',
+        });
+      });
     });
   }
 );
