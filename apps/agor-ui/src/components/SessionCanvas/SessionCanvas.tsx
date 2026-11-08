@@ -1071,7 +1071,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // Track resize state
     const resizeTimerRef = useRef<NodeJS.Timeout | null>(null);
     const pendingResizeUpdatesRef = useRef<
-      Record<string, { width: number; height: number; ticket: BoardWriteTicket }>
+      Record<
+        string,
+        { width: number; height: number; x?: number; y?: number; ticket: BoardWriteTicket }
+      >
     >({});
 
     // Handler to open edit modal for existing markdown note
@@ -2450,10 +2453,27 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               // An unloaded board's zone geometry may be stale: no write.
               const ticket = boardGuard.capture();
               if (!ticket) return;
-              // Accumulate resize updates
+              // A left or top edge moves the origin. React Flow reports that as a
+              // position change in this same batch, and getNode still has the old
+              // origin until onNodesChange returns. Right and bottom edges omit it.
+              const positionChange = changes.find(
+                (candidate: { type?: string; id?: string }) =>
+                  candidate.type === 'position' && candidate.id === change.id
+              ) as
+                | {
+                    position?: { x: number; y: number };
+                    positionAbsolute?: { x: number; y: number };
+                  }
+                | undefined;
+              const moved = positionChange?.positionAbsolute ?? positionChange?.position;
+              const queued = pendingResizeUpdatesRef.current[change.id];
+              // Accumulate resize updates. A later size-only event in this debounce
+              // window keeps the origin captured when the edge started moving.
               pendingResizeUpdatesRef.current[change.id] = {
                 width: newWidth,
                 height: newHeight,
+                x: moved ? moved.x : queued?.x,
+                y: moved ? moved.y : queued?.y,
                 ticket,
               };
 
@@ -2471,7 +2491,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 let dropped = false;
 
                 // Persist all resize changes
-                for (const [nodeId, { width, height, ticket }] of Object.entries(updates)) {
+                for (const [nodeId, { width, height, x, y, ticket }] of Object.entries(updates)) {
                   // Checked before every PATCH, including after awaiting the
                   // previous one. A board that unloaded (a reconnect) since the
                   // resize was queued drops it, even once it has reloaded: its
@@ -2487,7 +2507,12 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       ? latestBoard.objects?.[nodeId]
                       : undefined;
                   if (objectData && objectData.type === 'zone') {
-                    const updatedObject = { ...objectData, width, height };
+                    const updatedObject = {
+                      ...objectData,
+                      width,
+                      height,
+                      ...(x !== undefined && y !== undefined ? { x, y } : {}),
+                    };
 
                     try {
                       await client.service('boards').patch(ticket.boardId, {
