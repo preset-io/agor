@@ -2195,7 +2195,13 @@ describe('SlackConnector.uploadFile', () => {
           calls.push(args);
           return {
             ok: true,
-            files: [{ id: 'F123', permalink: 'https://slack.example/files/F123', name: 'a.png' }],
+            files: [
+              {
+                files: [
+                  { id: 'F123', permalink: 'https://slack.example/files/F123', name: 'a.png' },
+                ],
+              },
+            ],
           };
         },
       },
@@ -2222,7 +2228,7 @@ describe('SlackConnector.uploadFile', () => {
       files: {
         uploadV2: async (args: unknown) => {
           calls.push(args);
-          return { ok: true, files: [{ id: 'F456', name: 'b.png' }] };
+          return { ok: true, files: [{ files: [{ id: 'F456', name: 'b.png' }] }] };
         },
       },
     };
