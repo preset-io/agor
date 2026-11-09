@@ -778,6 +778,24 @@ export function setupMCPRoutes(
         userId = context.userId;
         sessionId = context.sessionId;
 
+        // An outage leaves this short-lived token working, so a running agent keeps its tools.
+        const membership = await options.apiKeyMembershipCheck?.({
+          tenantId: tenant.tenant_id,
+          userId,
+        });
+        if (membership === 'rejected') {
+          logAuthRejection(
+            'session_missing',
+            req.method,
+            credentialSource,
+            req.body,
+            req.headers[MCP_CLIENT_HINT_HEADER]
+          );
+          return res.status(401).json({
+            ...jsonRpcError(req, -32001, 'Invalid or expired session token'),
+          });
+        }
+
         try {
           authenticatedUser = await runWithTenantContext(tenant.tenant_id, () =>
             app.service('users').get(userId, { tenant } as AuthenticatedParams)

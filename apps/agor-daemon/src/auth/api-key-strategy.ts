@@ -70,7 +70,7 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
       throw new NotAuthenticated('Invalid API key');
     }
 
-    // Runs before the user lookup so a role change from the issuer applies to this request.
+    // Runs before the user lookup so a role change from a check this request waited for applies to it.
     if (this.membershipCheck) {
       const outcome = await this.membershipCheck({
         tenantId: requestTenantId ?? (typeof keyTenantId === 'string' ? keyTenantId : undefined),

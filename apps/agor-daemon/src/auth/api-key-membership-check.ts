@@ -3,7 +3,7 @@ import { NotAuthenticated } from '@agor/core/feathers';
 import type { UserID } from '@agor/core/types';
 import type { LaunchSessionRevalidator } from './launch-auth.js';
 import { runtimeTenantClaims } from './runtime-tokens.js';
-import { AUTH_REVALIDATED_AT_MS_CLAIM } from './session-lifetime.js';
+import { AUTH_LAUNCH_SUBJECT_CLAIM, AUTH_REVALIDATED_AT_MS_CLAIM } from './session-lifetime.js';
 
 /** How long a confirmed membership lets personal API keys skip the issuer; matches the access-token lifetime. */
 export const API_KEY_MEMBERSHIP_CHECK_INTERVAL_MS = 15 * 60 * 1000;
@@ -23,6 +23,7 @@ interface TrackedMembership {
   outcome: ApiKeyMembershipOutcome;
   nextCheckAtMs: number;
   confirmedAtMs?: number;
+  launchSubject?: string;
 }
 
 /**
@@ -54,7 +55,7 @@ export function createApiKeyMembershipCheck(options: {
     tenantId: string | undefined,
     userId: UserID
   ): Promise<ApiKeyMembershipOutcome> => {
-    const confirmedAtMs = tracked.get(key)?.confirmedAtMs;
+    const { confirmedAtMs, launchSubject } = tracked.get(key) ?? {};
     try {
       const result = await options.revalidate({
         userId,
@@ -62,6 +63,8 @@ export function createApiKeyMembershipCheck(options: {
           sub: userId,
           ...runtimeTenantClaims(tenantId, options.tenantClaim),
           ...(confirmedAtMs ? { [AUTH_REVALIDATED_AT_MS_CLAIM]: confirmedAtMs } : {}),
+          // A known subject skips the identity lookup, so a brief database error stays within the outage grace.
+          ...(launchSubject ? { [AUTH_LAUNCH_SUBJECT_CLAIM]: launchSubject } : {}),
         },
       });
       const nowMs = now();
@@ -73,19 +76,21 @@ export function createApiKeyMembershipCheck(options: {
             result.notAfterSeconds * 1000
           ),
           confirmedAtMs: result.revalidatedAtMs,
+          launchSubject: result.launchSubject,
         });
       }
       return remember(key, {
         outcome: 'allowed',
         nextCheckAtMs: nowMs + API_KEY_MEMBERSHIP_CHECK_INTERVAL_MS,
         confirmedAtMs: result?.revalidatedAtMs,
+        launchSubject: result?.launchSubject,
       });
     } catch (error) {
       const nextCheckAtMs = now() + API_KEY_MEMBERSHIP_RETRY_MS;
       if (error instanceof NotAuthenticated) {
         return remember(key, { outcome: 'rejected', nextCheckAtMs });
       }
-      return remember(key, { outcome: 'unavailable', nextCheckAtMs, confirmedAtMs });
+      return remember(key, { outcome: 'unavailable', nextCheckAtMs, confirmedAtMs, launchSubject });
     }
   };
 

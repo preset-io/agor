@@ -15,7 +15,7 @@ import {
   createApiKeyMembershipCheck,
 } from './api-key-membership-check.js';
 import type { LaunchSessionRevalidator } from './launch-auth.js';
-import { AUTH_REVALIDATED_AT_MS_CLAIM } from './session-lifetime.js';
+import { AUTH_LAUNCH_SUBJECT_CLAIM, AUTH_REVALIDATED_AT_MS_CLAIM } from './session-lifetime.js';
 
 const userId = 'user-1' as UserID;
 const tenantId = 'tenant-a';
@@ -48,6 +48,7 @@ describe('API key membership check', () => {
     await check({ tenantId, userId });
     expect(revalidate).toHaveBeenCalledTimes(2);
     expect(revalidate.mock.calls[1][0].payload[AUTH_REVALIDATED_AT_MS_CLAIM]).toBe(1_000_000);
+    expect(revalidate.mock.calls[1][0].payload[AUTH_LAUNCH_SUBJECT_CLAIM]).toBe('user:1');
   });
 
   it('remembers an account with no launch identity for the interval', async () => {

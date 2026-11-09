@@ -382,14 +382,19 @@ endpoint. For an account with a launch identity at this issuer, each daemon asks
 once the user's last check is 15 minutes old, or after a minute if the last check
 failed. A refusal has the same effect as one at refresh, so a removal stops the
 key within 15 minutes while the issuer is reachable, and a role change applies at
-the same check. A request running in a database transaction, which includes most
-REST writes on PostgreSQL, doesn't wait for a due check: it uses the last known
-answer (or proceeds, if there is none), so it can still succeed while the check
-runs. If the issuer can't answer, the key keeps working for up to one hour after
-that daemon last confirmed the user; after that, requests return a retryable
-`503` and the key is kept. That confirmation is held in memory, so a daemon that
-restarts during an outage returns the `503` straight away. Keys on accounts with
-no launch identity at this issuer are never checked.
+the same check. Browser tokens signed in with a key before that refusal follow
+the browser-session bounds above. On PostgreSQL, a service call runs in a database
+transaction and doesn't wait for a due check: it uses the last known answer (or
+proceeds, if there is none), so it can still succeed while the check runs. If the
+issuer can't answer, the key keeps working for up to one hour after that daemon
+last confirmed the user; after that, requests return a retryable `503` and the
+key is kept. That confirmation is held in memory, so a daemon that restarts during
+an outage returns the `503` straight away. Keys on accounts with no launch
+identity at this issuer are never checked.
+
+The session tokens agents use for MCP take the same check, so a refusal rejects
+them too. During an issuer outage they keep working until they expire, so a
+running agent keeps its tools.
 
 ## Compatibility and upgrade notes
 

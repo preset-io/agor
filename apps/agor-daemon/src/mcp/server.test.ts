@@ -806,6 +806,69 @@ describe('POST /mcp with personal API keys', () => {
     }
   );
 
+  it.each([
+    { outcome: 'rejected' as const, status: 401, userLookups: 0 },
+    { outcome: 'unavailable' as const, status: 200, userLookups: 1 },
+  ])(
+    'answers $status for a session token when the membership check is $outcome',
+    async ({ outcome, status, userLookups }) => {
+      initMcpTokens({ db: testSqliteDb(), multiTenancy: resolveMultiTenancyConfig({}) });
+      vi.spyOn(SessionRepository.prototype, 'exists').mockResolvedValue(true);
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const now = Math.floor(Date.now() / 1000);
+      const token = jwt.sign(
+        {
+          sub: 'session-for-member',
+          uid: 'user-1',
+          tid: 'default',
+          aud: MCP_TOKEN_AUDIENCE,
+          iss: MCP_TOKEN_ISSUER,
+          iat: now,
+          exp: now + 60,
+          jti: `membership-${outcome}`,
+        },
+        'mcp-server-test-secret',
+        { algorithm: 'HS256' }
+      );
+      const check = vi.fn(async () => outcome);
+      const getUser = vi.fn(async () => ({
+        user_id: 'user-1',
+        email: 'alice@example.com',
+        role: 'member',
+      }));
+      await withMcpServer(
+        {
+          users: { get: getUser },
+          sessions: {
+            get: vi.fn(async () => ({
+              session_id: 'session-for-member',
+              agentic_tool: 'claude-code',
+              branch_id: 'branch-1',
+            })),
+          },
+        },
+        async (baseUrl) => {
+          const resp = await fetch(`${baseUrl}/mcp`, {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json, text/event-stream',
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 202, method: 'tools/list' }),
+          });
+          expect(resp.status).toBe(status);
+        },
+        { multi_tenancy: undefined },
+        false,
+        'test-product-version',
+        check
+      );
+      expect(check).toHaveBeenCalledWith({ tenantId: 'default', userId: 'user-1' });
+      expect(getUser).toHaveBeenCalledTimes(userLookups);
+    }
+  );
+
   it('accepts a valid personal API key session context from X-Agor-Session-Id', async () => {
     await mockPersonalApiKeyUser();
     const getUser = vi.fn(async () => ({
