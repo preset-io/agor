@@ -212,8 +212,12 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
    * Atomically register or retry a clone without replacing its identity or branches.
    * The unique tenant/slug index arbitrates first-run races across daemon replicas;
    * the row lock arbitrates failed retries. No network or filesystem work here.
+   * `keepDefaultBranchOnRetry` stops a retry from replacing the stored default branch.
    */
-  async claimClone(data: Partial<Repo>): Promise<{
+  async claimClone(
+    data: Partial<Repo>,
+    options: { keepDefaultBranchOnRetry?: boolean } = {}
+  ): Promise<{
     repo: Repo;
     acquired: boolean;
     created: boolean;
@@ -247,7 +251,9 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         // Only a settled failed attempt may be retried; age is not proof of settlement.
         const retry = this.repoToInsert({
           ...repo,
-          default_branch: data.default_branch ?? repo.default_branch,
+          default_branch: options.keepDefaultBranchOnRetry
+            ? repo.default_branch
+            : (data.default_branch ?? repo.default_branch),
           clone_status: 'cloning',
           clone_generation: (repo.clone_generation ?? 0) + 1,
           clone_error: undefined,

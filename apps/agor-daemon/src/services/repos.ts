@@ -120,6 +120,15 @@ function sanitizeProvisioningError(error: unknown): string {
   }
 }
 
+/** Fields the git.clone worker writes when it finalizes or fails its own setup attempt. */
+const CLONE_WORKER_FIELDS: ReadonlySet<string> = new Set([
+  'local_path',
+  'default_branch',
+  'clone_status',
+  'clone_generation',
+  'clone_error',
+]);
+
 function deriveLocalRepoSlug(remoteUrl: string | undefined, explicitSlug?: string): RepoSlug {
   if (explicitSlug) {
     if (!isValidSlug(explicitSlug)) {
@@ -232,6 +241,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     data: Partial<Repo>,
     params?: RepoParams
   ): Promise<Repo | Repo[]> {
+    this.assertRepoSettingsWrite(data, params);
     this.validateCleanupPolicyWrite(data, params);
     this.validateCloneLifecycleWrite(data, params);
     await this.validateRepoLocationWrite(id, data, params);
@@ -239,10 +249,32 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   }
 
   override async update(id: string, data: Partial<Repo>, params?: RepoParams): Promise<Repo> {
+    this.assertRepoSettingsWrite(data, params);
     this.validateCleanupPolicyWrite(data, params);
     this.validateCloneLifecycleWrite(data, params);
     await this.validateRepoLocationWrite(id, data, params);
     return super.update(id, data, params);
+  }
+
+  /**
+   * Repository rows are tenant-shared: their remote, default branch and slug
+   * decide what every member's new branches check out. External writes and
+   * removals need admin; a git.clone worker may only finalize its own setup attempt. Runs
+   * before any lookup or payload validation so a denial reveals nothing.
+   */
+  private assertRepoSettingsWrite(data: Partial<Repo> | undefined, params?: RepoParams): void {
+    if (!params?.provider) return; // Internal daemon callers are trusted.
+    const user = params.user;
+    if (!user) throw new NotAuthenticated('Authentication required');
+    if (user._isServiceAccount === true || hasMinimumRole(user.role, ROLES.ADMIN)) return;
+    if (
+      data &&
+      authenticatedExecutorCommandRuntimeScope(params)?.commandId === 'git.clone' &&
+      Object.keys(data).every((key) => CLONE_WORKER_FIELDS.has(key))
+    ) {
+      return;
+    }
+    throw new Forbidden('Admin access is required to change repository settings');
   }
 
   /**
@@ -389,14 +421,18 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         this.app.get('config')
       );
       const sessionToken = await issueExecutorCommandToken(this.app, 'git.clone', userId);
-      const claim = await this.repoRepo.claimClone({
-        slug: slug as RepoSlug,
-        name: data.name || slug,
-        repo_type: 'remote',
-        remote_url: remoteUrl,
-        local_path: this.managedRepoPath(slug, params),
-        ...(data.default_branch ? { default_branch: data.default_branch } : {}),
-      });
+      const claim = await this.repoRepo.claimClone(
+        {
+          slug: slug as RepoSlug,
+          name: data.name || slug,
+          repo_type: 'remote',
+          remote_url: remoteUrl,
+          local_path: this.managedRepoPath(slug, params),
+          ...(data.default_branch ? { default_branch: data.default_branch } : {}),
+        },
+        // A retry reuses a shared row; changing its default branch is a settings write.
+        { keepDefaultBranchOnRetry: !hasMinimumRole(user.role, ROLES.ADMIN) }
+      );
       const repo = claim.repo;
       const repoId = repo.repo_id;
       if (!claim.acquired) return { status: 'exists', slug, repo_id: repoId };
@@ -488,6 +524,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
    *
    * Centralizes the rules that wrap the bare Feathers `patch` so callers
    * (MCP, REST, UI, internal) can't drift:
+   * - External callers must be admins, checked before any validation or lookup.
    * - `slug` must match `isValidSlug` and be unique across all repos.
    * - `remote_url`, when provided, must be a valid git URL.
    * - Resulting `repo_type: 'remote'` requires a `remote_url` (the patch's
@@ -508,6 +545,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     },
     params?: RepoParams
   ): Promise<Repo> {
+    this.assertRepoSettingsWrite(undefined, params);
     const cleanPatch: Partial<Repo> = {};
     if (patch.name !== undefined) cleanPatch.name = patch.name;
 
@@ -1777,6 +1815,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
    * - If cleanup=false: Delete database only (filesystem preserved)
    */
   async remove(id: string, params?: RepoParams): Promise<Repo> {
+    // Delete then re-register would retarget a shared slug, so removal is a settings write.
+    this.assertRepoSettingsWrite(undefined, params);
     const repo = await this.get(id, params);
     const cleanup = params?.query?.cleanup === true;
     // This legacy path deletes remote files before taking branch lifecycle

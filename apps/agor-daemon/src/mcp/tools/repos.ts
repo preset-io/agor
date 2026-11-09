@@ -185,7 +185,7 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
     'agor_repos_update',
     {
       description:
-        "Patch a repository's metadata (name, slug, repo_type, remote_url, default_branch). " +
+        "Patch a repository's metadata (name, slug, repo_type, remote_url, default_branch) (admin-only). " +
         'Useful for correcting metadata after a `create_local` workaround — e.g. flipping ' +
         '`repo_type: "local" → "remote"` so the repo is treated as a managed clone. ' +
         'Note: changing `slug` updates the DB only; the on-disk directory at ' +

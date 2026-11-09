@@ -8,10 +8,15 @@ import {
   runWithTenantContext,
 } from '@agor/core/db';
 import { type Application, Conflict } from '@agor/core/feathers';
-import type { AuthenticatedParams, Branch } from '@agor/core/types';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AuthenticatedParams, Branch, Repo } from '@agor/core/types';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DrizzleService } from '../adapters/drizzle';
+import {
+  EXECUTOR_COMMAND_TOKEN_PURPOSE,
+  EXECUTOR_SESSION_TOKEN_TYPE,
+} from '../auth/executor-session-token';
 import { BranchesService, type BranchParams } from './branches';
-import { ReposService } from './repos';
+import { type RepoParams, ReposService } from './repos';
 
 /** Create a managed branch dir that looks like a materialized git checkout (has `.git`). */
 function makeValidCheckout(): string {
@@ -817,6 +822,29 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
         params: expect.objectContaining({ importEnvironmentConfig: true }),
       }),
       expect.anything()
+    );
+  });
+
+  it.each([
+    ['member', true],
+    ['admin', false],
+  ])('lets a %s retry change the default branch only as an admin', async (role, keep) => {
+    const app = {
+      get: () => ({}),
+      sessionTokenService: { generateCommandToken: vi.fn(async () => 'delegated-user-token') },
+      settings: { authentication: { secret: 'test-secret' } },
+      service: vi.fn(() => ({ patch: vi.fn() })),
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+
+    await service.cloneRepository(
+      { url: 'https://github.com/preset-io/agor-retry.git', default_branch: 'other' },
+      { user: { user_id: '550e8400-e29b-41d4-a716-446655440004', role } } as never
+    );
+
+    expect(repositoryMocks.claimClone).toHaveBeenCalledWith(
+      expect.objectContaining({ default_branch: 'other' }),
+      { keepDefaultBranchOnRetry: keep }
     );
   });
 
@@ -1710,4 +1738,163 @@ it('routes a server-marked home to the tenant/caller executor without a base-cac
   await expect(service.createBranch(repoId, data, params)).rejects.toThrow('not found');
   expect(create).not.toHaveBeenCalled();
   expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+});
+
+describe('repository settings admin boundary', () => {
+  const repoId = '550e8400-e29b-41d4-a716-446655440001';
+  const stored = {
+    repo_id: repoId,
+    slug: 'acme/app',
+    name: 'App',
+    repo_type: 'remote',
+    remote_url: 'https://github.com/acme/app.git',
+    local_path: '/managed/repos/acme/app',
+    default_branch: 'main',
+  } as Repo;
+  const denied = 'Admin access is required to change repository settings';
+  const caller = (role: string, over: Partial<RepoParams> = {}) =>
+    ({
+      provider: 'mcp',
+      user: { user_id: 'caller-1', email: 'caller@example.test', role },
+      tenant: { tenant_id: 'tenant-a', source: 'explicit' },
+      ...over,
+    }) as RepoParams;
+  const cloneWorker = (role: string) =>
+    caller(role, {
+      provider: 'socketio',
+      authentication: {
+        strategy: 'jwt',
+        payload: {
+          type: EXECUTOR_SESSION_TOKEN_TYPE,
+          purpose: EXECUTOR_COMMAND_TOKEN_PURPOSE,
+          session_id: 'git.clone',
+        },
+      },
+    });
+
+  const spies: Array<{ mockRestore: () => void }> = [];
+  afterEach(() => {
+    for (const spy of spies.splice(0)) spy.mockRestore();
+  });
+
+  function makeService() {
+    const service = new ReposService({} as never, { get: () => ({}) } as unknown as Application);
+    const get = vi.spyOn(service, 'get').mockResolvedValue(stored);
+    const adapterPatch = vi
+      .spyOn(DrizzleService.prototype, 'patch')
+      .mockImplementation(async (_id, data) => ({ ...stored, ...data }) as Repo);
+    const adapterUpdate = vi
+      .spyOn(DrizzleService.prototype, 'update')
+      .mockImplementation(async (_id, data) => ({ ...stored, ...data }) as Repo);
+    spies.push(get, adapterPatch, adapterUpdate);
+    return { service, get, adapterPatch, adapterUpdate };
+  }
+
+  it.each([
+    { slug: 'acme/existing' },
+    { slug: 'not a slug' },
+    { remote_url: 'https://attacker.example/app.git' },
+    { remote_url: 'not-a-url' },
+    { default_branch: 'attacker' },
+    { repo_type: 'local' as const },
+    { name: 'Renamed' },
+    {},
+  ])('denies a member updateMetadata %o before validation or lookup', async (patch) => {
+    const { service, get, adapterPatch } = makeService();
+
+    await expect(service.updateMetadata(repoId, patch, caller('member'))).rejects.toThrow(denied);
+    expect(get).not.toHaveBeenCalled();
+    expect(adapterPatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { slug: 'acme/renamed' as Repo['slug'] },
+    { remote_url: 'https://attacker.example/app.git' },
+    { default_branch: 'attacker' },
+    { repo_type: 'local' as const },
+    { name: 'Renamed' },
+    { local_path: stored.local_path },
+    { clone_status: 'ready' as const },
+  ])('denies member and viewer patch/update %o over any transport', async (data) => {
+    const { service, get, adapterPatch, adapterUpdate } = makeService();
+    for (const params of [
+      caller('member'),
+      caller('viewer', { provider: 'rest' }),
+      caller('member', { provider: 'socketio' }),
+    ]) {
+      await expect(service.patch(repoId, data, params)).rejects.toThrow(denied);
+      await expect(service.update(repoId, data, params)).rejects.toThrow(denied);
+    }
+    expect(get).not.toHaveBeenCalled();
+    expect(adapterPatch).not.toHaveBeenCalled();
+    expect(adapterUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects an external call with no authenticated user', async () => {
+    const { service, adapterPatch } = makeService();
+    await expect(
+      service.patch(repoId, { default_branch: 'x' }, { provider: 'rest' } as RepoParams)
+    ).rejects.toThrow('Authentication required');
+    expect(adapterPatch).not.toHaveBeenCalled();
+  });
+
+  it.each(['admin', 'superadmin'])('lets %s change repository settings', async (role) => {
+    const { service, adapterPatch } = makeService();
+    const patch = {
+      remote_url: 'https://github.com/acme/app-moved.git',
+      default_branch: 'develop',
+    };
+
+    await expect(service.updateMetadata(repoId, patch, caller(role))).resolves.toMatchObject(patch);
+    await service.patch(repoId, { slug: 'acme/renamed' as Repo['slug'] }, caller(role));
+    expect(adapterPatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps internal daemon and service-account writes working', async () => {
+    const { service, adapterPatch } = makeService();
+    await service.patch(repoId, { default_branch: 'develop' });
+    await service.patch(
+      repoId,
+      { default_branch: 'develop' },
+      caller('member', { user: { user_id: 'svc', role: 'member', _isServiceAccount: true } })
+    );
+    expect(adapterPatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('lets a member-initiated clone worker finalize its own setup fields only', async () => {
+    const { service, adapterPatch } = makeService();
+    const finalization = {
+      local_path: stored.local_path,
+      default_branch: 'trunk',
+      clone_status: 'ready' as const,
+      clone_generation: 1,
+      clone_error: null as unknown as undefined,
+    };
+    const failure = {
+      clone_status: 'failed' as const,
+      clone_generation: 1,
+      clone_error: { exit_code: 1, category: 'unknown' as const, message: 'synthetic failure' },
+    };
+
+    await expect(service.patch(repoId, finalization, cloneWorker('member'))).resolves.toMatchObject(
+      { default_branch: 'trunk', clone_status: 'ready' }
+    );
+    await expect(service.patch(repoId, failure, cloneWorker('member'))).resolves.toMatchObject(
+      failure
+    );
+    for (const data of [
+      { remote_url: 'https://attacker.example/app.git' },
+      { slug: 'acme/renamed' as Repo['slug'] },
+      { name: 'Renamed' },
+      { repo_type: 'local' as const },
+    ]) {
+      await expect(
+        service.patch(repoId, { ...data, clone_status: 'ready' }, cloneWorker('member'))
+      ).rejects.toThrow(denied);
+    }
+    await expect(
+      service.updateMetadata(repoId, { default_branch: 'trunk' }, cloneWorker('member'))
+    ).rejects.toThrow(denied);
+    expect(adapterPatch).toHaveBeenCalledTimes(2);
+  });
 });

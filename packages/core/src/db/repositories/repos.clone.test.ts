@@ -32,6 +32,25 @@ describe('clone reservation and in-place recovery', () => {
     expect(await repository.count()).toBe(1);
   });
 
+  dbTest('a retry keeps the stored default branch only when asked to', async ({ db }) => {
+    const repository = new RepoRepository(db);
+    const fail = async (repo: Repo) =>
+      repository.update(repo.repo_id, {
+        clone_status: 'failed',
+        clone_generation: repo.clone_generation,
+      });
+    const { repo: first } = await repository.claimClone(data);
+    await fail(first);
+    const { repo: kept } = await repository.claimClone(
+      { ...data, default_branch: 'attacker' },
+      { keepDefaultBranchOnRetry: true }
+    );
+    expect(kept).toMatchObject({ clone_status: 'cloning', default_branch: 'main' });
+    await fail(kept);
+    const { repo: changed } = await repository.claimClone({ ...data, default_branch: 'develop' });
+    expect(changed).toMatchObject({ clone_status: 'cloning', default_branch: 'develop' });
+  });
+
   dbTest(
     'failed legacy repo with branches retries without deletion or lost settings',
     async ({ db }) => {

@@ -38,8 +38,8 @@ import { DrillInFrame, useDrillFormDraft, useSettingsDrill } from './SettingsDri
 
 interface ReposTableProps {
   repoById: Map<string, Repo>;
-  /** Whether the caller may configure the branch cleanup policy (admin-only). */
-  canConfigureCleanup?: boolean;
+  /** Whether the caller may change repository settings, including cleanup (admin-only). */
+  canEditRepos?: boolean;
   identityKey: string | null;
   operationScope: readonly unknown[] | null;
   onCreate?: (data: CreateRepoRequest, shouldApply?: () => boolean) => unknown;
@@ -61,7 +61,7 @@ interface ReposTableProps {
 
 export const ReposTable: React.FC<ReposTableProps> = ({
   repoById,
-  canConfigureCleanup = false,
+  canEditRepos = false,
   identityKey,
   operationScope,
   onCreate,
@@ -183,7 +183,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
         const policyChanges = changed.cleanup_policy as
           | Partial<ReturnType<typeof resolveRepoCleanupPolicy>>
           | undefined;
-        if (canConfigureCleanup && policyChanges && Object.keys(policyChanges).length > 0) {
+        if (canEditRepos && policyChanges && Object.keys(policyChanges).length > 0) {
           updates.cleanup_policy = {
             ...resolveRepoCleanupPolicy(editingRepo.cleanup_policy),
             ...policyChanges,
@@ -220,7 +220,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
     isEditing,
     editingRepo,
     repoMode,
-    canConfigureCleanup,
+    canEditRepos,
     isDraftDirty,
     onUpdate,
     onCreateLocal,
@@ -240,8 +240,12 @@ export const ReposTable: React.FC<ReposTableProps> = ({
     });
   };
 
+  // Repository settings are tenant-shared; members view them but only admins save.
+  const isReadOnly = isEditing && !canEditRepos;
   const drillTitle = isEditing
-    ? 'Edit Repository'
+    ? isReadOnly
+      ? 'Repository'
+      : 'Edit Repository'
     : repoMode === 'local'
       ? 'Add Local Repository'
       : 'Clone Repository';
@@ -345,7 +349,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
       width: 88,
       render: (_: unknown, repo: Repo) => (
         <SettingsActionGroup>
-          <Tooltip title="Edit repository">
+          <Tooltip title={canEditRepos ? 'Edit repository' : 'View repository'}>
             <Button
               type="text"
               size="small"
@@ -353,12 +357,17 @@ export const ReposTable: React.FC<ReposTableProps> = ({
               onClick={() => openEdit(repo)}
             />
           </Tooltip>
-          <Tooltip title="Delete repository">
+          <Tooltip
+            title={
+              canEditRepos ? 'Delete repository' : 'Only administrators can delete repositories'
+            }
+          >
             <Button
               type="text"
               size="small"
               icon={<DeleteOutlined />}
               danger
+              disabled={!canEditRepos}
               onClick={() => handleOpenDeleteModal(repo)}
             />
           </Tooltip>
@@ -373,7 +382,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
         title={drillTitle}
         dirty={isDraftDirty}
         saveLabel={drillSaveLabel}
-        onSave={handleSave}
+        onSave={isReadOnly ? undefined : handleSave}
       >
         {editingRepo && (
           <RepoSetupStatus
@@ -393,13 +402,18 @@ export const ReposTable: React.FC<ReposTableProps> = ({
             }
           />
         )}
-        <Form form={repoForm} layout="vertical" style={{ maxWidth: 520 }}>
+        {isReadOnly && (
+          <Typography.Paragraph type="secondary">
+            Only administrators can change repository settings.
+          </Typography.Paragraph>
+        )}
+        <Form form={repoForm} layout="vertical" disabled={isReadOnly} style={{ maxWidth: 520 }}>
           <RepoFormFields
             form={repoForm}
             mode={isEditing ? 'edit' : 'create'}
             repoMode={repoMode}
             onRepoModeChange={handleModeChange}
-            canConfigureCleanup={canConfigureCleanup}
+            canConfigureCleanup={canEditRepos}
           />
         </Form>
       </DrillInFrame>
