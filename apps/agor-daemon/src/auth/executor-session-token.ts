@@ -18,6 +18,10 @@ export type ExecutorSessionTokenPayload = JwtPayload & {
   branch_id?: string;
   /** Signed generation for the source-resolution capability of git.branch.add. */
   provisioning_attempt_id?: string;
+  /** Signed repository of a git.clone command; its setup writes may target only this row. */
+  repo_id?: string;
+  /** Signed clone attempt of a git.clone command, checked on every setup write. */
+  clone_generation?: number;
 };
 
 export type AuthenticatedExecutorSessionTokenPayload = ExecutorSessionTokenPayload & {

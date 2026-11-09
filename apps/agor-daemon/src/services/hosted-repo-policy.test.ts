@@ -264,7 +264,7 @@ describe('hosted repository storage policy canonical boundaries', () => {
       await expect(
         service.patch(
           'repo-1',
-          { local_path: localPath, clone_status: 'cloning' },
+          { local_path: localPath, clone_status: 'cloning', clone_generation: 1 },
           {
             ...attackerParams,
             authentication: {
@@ -273,6 +273,8 @@ describe('hosted repository storage policy canonical boundaries', () => {
                 type: EXECUTOR_SESSION_TOKEN_TYPE,
                 purpose: EXECUTOR_COMMAND_TOKEN_PURPOSE,
                 session_id: 'git.clone',
+                repo_id: 'repo-1',
+                clone_generation: 1,
               },
             },
           }

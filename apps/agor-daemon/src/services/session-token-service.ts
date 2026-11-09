@@ -188,6 +188,12 @@ class PostgreSQLSessionTokenAuthorityStore implements SessionTokenAuthorityStore
   }
 }
 
+/** The one repository and setup attempt a git.clone command token may finalize. */
+export interface CloneCommandAttempt {
+  repoId: string;
+  generation: number;
+}
+
 export interface SessionTokenServiceDependencies {
   db?: TenantScopeAwareDatabase;
   /** Unit-test seam. Supplying a store selects PostgreSQL authority semantics. */
@@ -256,15 +262,17 @@ export class SessionTokenService {
    * The durable authority schema predates taskless commands, so its historical
    * `session_id` slot carries this opaque command ID. It is never resolved as
    * a Session: only exact command-capability guards interpret it.
-   * Provisioning additionally signs the admitted generation. Durable authority
-   * binds the complete token fingerprint, so no separate attempt state is needed.
+   * Provisioning and repository clones additionally sign the admitted attempt.
+   * Durable authority binds the complete token fingerprint, so no separate
+   * attempt state is needed.
    */
   generateCommandToken(
     commandId: string,
     userId: string,
     branchId?: string,
     expirationMs = EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS,
-    provisioningAttemptId?: string
+    provisioningAttemptId?: string,
+    cloneAttempt?: CloneCommandAttempt
   ): Promise<string> {
     if (
       provisioningAttemptId !== undefined &&
@@ -272,12 +280,22 @@ export class SessionTokenService {
     ) {
       throw new Error('Provisioning scope requires a branch materialization command and attempt');
     }
+    if (
+      cloneAttempt !== undefined &&
+      (commandId !== 'git.clone' ||
+        !cloneAttempt.repoId ||
+        !Number.isInteger(cloneAttempt.generation) ||
+        cloneAttempt.generation < 1)
+    ) {
+      throw new Error('Clone scope requires a git.clone command, repository and attempt');
+    }
     return this.generateTokenWithPurpose(
       commandId,
       userId,
       {
         branchId,
         provisioningAttemptId,
+        cloneAttempt,
         maxUses: -1,
         expirationMs,
       },
@@ -307,6 +325,7 @@ export class SessionTokenService {
       taskId?: string;
       branchId?: string;
       provisioningAttemptId?: string;
+      cloneAttempt?: CloneCommandAttempt;
       maxUses?: number;
       expirationMs?: number;
     },
@@ -346,6 +365,8 @@ export class SessionTokenService {
       task_id: scope.taskId,
       branch_id: scope.branchId,
       provisioning_attempt_id: scope.provisioningAttemptId,
+      repo_id: scope.cloneAttempt?.repoId,
+      clone_generation: scope.cloneAttempt?.generation,
       // Ensure two otherwise-identical issuances in the same second produce
       // distinct bearer credentials and authority rows.
       jti: randomUUID(),
@@ -673,17 +694,19 @@ export async function issueExecutorCommandToken(
   userId: string,
   branchId?: string,
   expirationMs?: number,
-  provisioningAttemptId?: string
+  provisioningAttemptId?: string,
+  cloneAttempt?: CloneCommandAttempt
 ): Promise<string> {
   const service = (app as { sessionTokenService?: SessionTokenService }).sessionTokenService;
   if (!service) throw new Error('Session token service unavailable');
-  if (provisioningAttemptId !== undefined) {
+  if (provisioningAttemptId !== undefined || cloneAttempt !== undefined) {
     return service.generateCommandToken(
       commandId,
       userId,
       branchId,
       expirationMs,
-      provisioningAttemptId
+      provisioningAttemptId,
+      cloneAttempt
     );
   }
   return expirationMs === undefined

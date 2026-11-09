@@ -241,7 +241,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     data: Partial<Repo>,
     params?: RepoParams
   ): Promise<Repo | Repo[]> {
-    this.assertRepoSettingsWrite(data, params);
+    this.assertRepoSettingsWrite(data, params, id);
     this.validateCleanupPolicyWrite(data, params);
     this.validateCloneLifecycleWrite(data, params);
     await this.validateRepoLocationWrite(id, data, params);
@@ -249,7 +249,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   }
 
   override async update(id: string, data: Partial<Repo>, params?: RepoParams): Promise<Repo> {
-    this.assertRepoSettingsWrite(data, params);
+    this.assertRepoSettingsWrite(data, params, id);
     this.validateCleanupPolicyWrite(data, params);
     this.validateCloneLifecycleWrite(data, params);
     await this.validateRepoLocationWrite(id, data, params);
@@ -259,17 +259,29 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   /**
    * Repository rows are tenant-shared: their remote, default branch and slug
    * decide what every member's new branches check out. External writes and
-   * removals need admin; a git.clone worker may only finalize its own setup attempt. Runs
-   * before any lookup or payload validation so a denial reveals nothing.
+   * removals need admin; a git.clone worker may only finalize the repository
+   * and attempt signed into its token, and only through the generation fence
+   * (clone_status plus clone_generation). Runs before any lookup or payload
+   * validation so a denial reveals nothing.
    */
-  private assertRepoSettingsWrite(data: Partial<Repo> | undefined, params?: RepoParams): void {
+  private assertRepoSettingsWrite(
+    data: Partial<Repo> | undefined,
+    params?: RepoParams,
+    id?: string | null
+  ): void {
     if (!params?.provider) return; // Internal daemon callers are trusted.
     const user = params.user;
     if (!user) throw new NotAuthenticated('Authentication required');
     if (user._isServiceAccount === true || hasMinimumRole(user.role, ROLES.ADMIN)) return;
+    const scope = authenticatedExecutorCommandRuntimeScope(params);
     if (
       data &&
-      authenticatedExecutorCommandRuntimeScope(params)?.commandId === 'git.clone' &&
+      scope?.commandId === 'git.clone' &&
+      scope.repoId !== undefined &&
+      scope.repoId === id &&
+      Object.hasOwn(data, 'clone_status') &&
+      Object.hasOwn(data, 'clone_generation') &&
+      data.clone_generation === scope.cloneGeneration &&
       Object.keys(data).every((key) => CLONE_WORKER_FIELDS.has(key))
     ) {
       return;
@@ -413,14 +425,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         if (existing.clone_status !== 'failed')
           return { status: 'exists', slug, repo_id: existing.repo_id };
       }
-      // Validate routing and credentials before claiming, so these failures cannot
-      // leave a placeholder stuck in cloning with no worker to finish it.
+      // Validate routing before claiming, so a routing failure cannot leave a
+      // placeholder stuck in cloning with no worker to finish it.
       const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
         this.db,
         userId,
         this.app.get('config')
       );
-      const sessionToken = await issueExecutorCommandToken(this.app, 'git.clone', userId);
       const claim = await this.repoRepo.claimClone(
         {
           slug: slug as RepoSlug,
@@ -476,6 +487,17 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       };
       const launch = async () => {
         try {
+          // Signed after the claim so the token names this repository and attempt;
+          // a failure here is reported on the row rather than leaving it in cloning.
+          const sessionToken = await issueExecutorCommandToken(
+            this.app,
+            'git.clone',
+            userId,
+            undefined,
+            undefined,
+            undefined,
+            { repoId, generation: generation as number }
+          );
           spawnExecutorFireAndForget(
             {
               command: 'git.clone',
@@ -506,8 +528,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           await reportFailure(1, error);
         }
       };
-      // Includes the command token as well as the row. In PostgreSQL, launching
-      // inside the request transaction races the worker's first authenticated read.
+      // In PostgreSQL, launching inside the request transaction races the worker's
+      // first authenticated read of the row.
       if (
         !enqueueAfterTenantDatabaseCommit(async () => {
           if (tenantId) await runWithTenantContext(tenantId, launch);

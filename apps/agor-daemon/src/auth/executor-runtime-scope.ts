@@ -24,6 +24,8 @@ interface ExecutorDelegationContext {
   sessionId?: string;
   taskId?: string;
   branchId?: string;
+  repoId?: string;
+  cloneGeneration?: number;
 }
 
 interface AuthenticatedExecutorDelegationContext extends ExecutorDelegationContext {
@@ -38,6 +40,9 @@ export interface TaskExecutorRuntimeScope extends ExecutorDelegationContext {
 export interface ExecutorCommandRuntimeScope {
   commandId: string;
   branchId?: string;
+  /** Repository and attempt signed into a git.clone command token. */
+  repoId?: string;
+  cloneGeneration?: number;
 }
 
 /** Immutable Task credential authority needed by runtime-heartbeat revalidation. */
@@ -72,6 +77,8 @@ function authenticatedExecutorDelegationContext(
       sessionId: getExecutorSessionTokenSessionId(payload),
       taskId: payload.task_id,
       branchId: payload.branch_id,
+      repoId: payload.repo_id,
+      cloneGeneration: payload.clone_generation,
     };
   }
   return null;
@@ -156,6 +163,8 @@ export function authenticatedExecutorCommandRuntimeScope(
     ? {
         commandId: scope.sessionId,
         branchId: scope.branchId,
+        repoId: scope.repoId,
+        cloneGeneration: scope.cloneGeneration,
       }
     : null;
 }
