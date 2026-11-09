@@ -18,6 +18,7 @@ const ENVIRONMENT_VARIABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const EXTERNAL_LAUNCH_ENV = {
   ENABLED: 'AGOR_EXTERNAL_LAUNCH_ENABLED',
   EXCHANGE_URL: 'AGOR_EXTERNAL_LAUNCH_EXCHANGE_URL',
+  SESSION_REVALIDATION_URL: 'AGOR_EXTERNAL_LAUNCH_SESSION_REVALIDATION_URL',
   ISSUER: 'AGOR_EXTERNAL_LAUNCH_ISSUER',
   AUDIENCE: 'AGOR_EXTERNAL_LAUNCH_AUDIENCE',
   INSTANCE_ID: 'AGOR_EXTERNAL_LAUNCH_INSTANCE_ID',
@@ -378,6 +379,7 @@ export function resolveEffectiveExternalLaunchConfig(
     enabled,
     forwardRequestHost,
     nonEmptyEnvironmentValue(env[EXTERNAL_LAUNCH_ENV.EXCHANGE_URL]),
+    nonEmptyEnvironmentValue(env[EXTERNAL_LAUNCH_ENV.SESSION_REVALIDATION_URL]),
     nonEmptyEnvironmentValue(env[EXTERNAL_LAUNCH_ENV.ISSUER]),
     nonEmptyEnvironmentValue(env[EXTERNAL_LAUNCH_ENV.AUDIENCE]),
     nonEmptyEnvironmentValue(env[EXTERNAL_LAUNCH_ENV.INSTANCE_ID]),
@@ -395,6 +397,13 @@ export function resolveEffectiveExternalLaunchConfig(
     ...(enabled !== undefined ? { enabled } : {}),
     ...(nonEmptyEnvironmentValue(env[EXTERNAL_LAUNCH_ENV.EXCHANGE_URL])
       ? { exchange_url: nonEmptyEnvironmentValue(env[EXTERNAL_LAUNCH_ENV.EXCHANGE_URL]) }
+      : {}),
+    ...(nonEmptyEnvironmentValue(env[EXTERNAL_LAUNCH_ENV.SESSION_REVALIDATION_URL])
+      ? {
+          session_revalidation_url: nonEmptyEnvironmentValue(
+            env[EXTERNAL_LAUNCH_ENV.SESSION_REVALIDATION_URL]
+          ),
+        }
       : {}),
     ...(nonEmptyEnvironmentValue(env[EXTERNAL_LAUNCH_ENV.ISSUER])
       ? { issuer: nonEmptyEnvironmentValue(env[EXTERNAL_LAUNCH_ENV.ISSUER]) }
