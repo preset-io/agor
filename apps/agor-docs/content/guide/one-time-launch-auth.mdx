@@ -340,8 +340,10 @@ a launch rejects that purpose, so the two assertion kinds can't be swapped.
 
 - A `403` with `{ "error": "membership_inactive" }` is a refusal: the refresh
   fails, every browser token the user already holds on any device stops working
-  (the same fence a password change uses), and their sockets are disconnected. A later
-  launch signs them in again normally.
+  (the same fence a password change uses), their sockets are disconnected, and
+  their personal API keys are deleted. A later launch signs them in again
+  normally, but keys have to be created again. The daemon can't tell a removal from
+  a suspension, so a temporary suspension deletes keys too.
 - A timeout, network error, redirect, any other status or error code, an
   unreadable body, a verification key that can't be fetched, or a runtime
   database error while applying the answer means the check is unavailable. The
@@ -363,7 +365,7 @@ with an access token on this install no longer extends that token's expiry.
 
 With revalidation on, a user socket also closes one hour after it connected; the
 UI reconnects with its current, revalidated token. So a removal or suspension
-ends the session at its next refresh, at most one 15-minute access-token
+ends a browser session at its next refresh, at most one 15-minute access-token
 lifetime later while the issuer is reachable. A socket that never refreshes
 lasts at most that hour after it connected, and the last access token can still
 open one until it expires, so about 75 minutes in all. During an issuer outage a
@@ -373,6 +375,11 @@ On an install that also allows local sign-in, a refused member can still sign in
 with a password, and each such session lasts until its first refresh is refused. The
 absolute lifetime still applies to every launched session, and closes any socket
 still open at that deadline.
+
+These bounds cover browser sessions. A request that authenticates directly with
+a personal API key (REST, CLI, or MCP) doesn't contact the issuer, so direct key use
+by someone who never refreshes isn't covered: the key keeps working until a refresh
+for that user is refused or its owner deletes it.
 
 ## Compatibility and upgrade notes
 

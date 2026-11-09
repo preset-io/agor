@@ -11,12 +11,15 @@ import {
   initializeDatabase,
   select,
   sql,
+  UserApiKeysRepository,
   users,
 } from '@agor/core/db';
 import type { InternalUser, User, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiKeyStrategy } from './api-key-strategy.js';
 import { finalizeAuthenticatedConnectionAuthority } from './authenticated-connection-authority.js';
+import { createIssueBrowserTokensHook } from './issue-browser-tokens-hook.js';
 import {
   createLaunchAuthService,
   createLaunchProjectionSerializer,
@@ -185,6 +188,29 @@ describe('refresh-time launch membership revalidation', () => {
     return { launch, refresh, revalidateLaunchSession, usersService };
   }
 
+  /** Real key verification followed by the real `POST /authentication` token hook. */
+  function apiKeySignIn(usersService: ReturnType<typeof makeUsersService>) {
+    const keys = new UserApiKeysRepository(db);
+    const strategy = new ApiKeyStrategy();
+    strategy.setDependencies(keys, usersService, db);
+    const hook = createIssueBrowserTokensHook({
+      jwtSecret: RUNTIME_JWT_SECRET,
+      accessTokenTtl: '15m',
+      refreshTokenTtl: MAX_LIFETIME_SECONDS,
+      sessionMaxLifetimeSeconds: MAX_LIFETIME_SECONDS,
+      tenantClaim: 'tenant_id',
+    });
+    const params = { tenant: { tenant_id: 'tenant-a' } };
+    return {
+      keys,
+      authenticate: (apiKey: string) => strategy.authenticate({ apiKey }, params),
+      signIn: async (apiKey: string) => {
+        const result = await strategy.authenticate({ apiKey }, params);
+        return (await hook({ params, result })).result;
+      },
+    };
+  }
+
   async function readRole(userId: string) {
     const row = await select(db).from(users).where(eq(users.user_id, userId)).one();
     return row?.role;
@@ -233,6 +259,30 @@ describe('refresh-time launch membership revalidation', () => {
     await expect(refresh.create({ refreshToken: signedIn.refreshToken })).rejects.toThrow(
       /Invalid or expired refresh token/
     );
+  });
+
+  it('deletes personal API keys on a refusal, so they neither authenticate nor mint browser tokens', async () => {
+    const state = {
+      exchange: assertion(),
+      revalidate: (() => Response.json({ assertion: revalidation() })) as RevalidationHandler,
+    };
+    stubIssuer(state);
+    const all = services();
+    const signedIn = await all.launch.create({ launchCode: 'code' });
+    const { keys, authenticate, signIn } = apiKeySignIn(all.usersService);
+    const { rawKey } = await keys.create(signedIn.user.user_id, 'laptop');
+    await expect(authenticate(rawKey)).resolves.toMatchObject({
+      authentication: { strategy: 'api-key' },
+    });
+
+    state.revalidate = () => Response.json({ error: 'membership_inactive' }, { status: 403 });
+    await expect(all.refresh.create({ refreshToken: signedIn.refreshToken })).rejects.toThrow(
+      /Invalid or expired refresh token/
+    );
+
+    await expect(keys.listByUser(signedIn.user.user_id)).resolves.toEqual([]);
+    await expect(authenticate(rawKey)).rejects.toThrow(/Invalid API key/);
+    await expect(signIn(rawKey)).rejects.toThrow(/Invalid API key/);
   });
 
   it('applies a demotion on refresh instead of re-issuing the old role', async () => {

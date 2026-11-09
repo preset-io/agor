@@ -17,6 +17,7 @@ import {
   sql,
   TenantDisplayRepository,
   type TenantScopeAwareDatabase,
+  UserApiKeysRepository,
   users,
 } from '@agor/core/db';
 import type { Params, User, UserID } from '@agor/core/types';
@@ -357,6 +358,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const inA = await launch(dbA).create({ launchCode: tenantA });
       const inB = await launch(dbB).create({ launchCode: tenantB });
       expect(inA.user.user_id).not.toBe(inB.user.user_id);
+      const createKey = (tenantId: string, userId: string) =>
+        runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+          new UserApiKeysRepository(scoped).create(userId, 'laptop')
+        );
+      await createKey(tenantA, inA.user.user_id);
+      await createKey(tenantB, inB.user.user_id);
 
       issuerRoles.set(tenantA, 'member');
       issuerRoles.set(tenantB, null);
@@ -383,6 +390,15 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         });
       await expect(generationIn(tenantB, inB.user.user_id)).resolves.toBe(1);
       await expect(generationIn(tenantA, inA.user.user_id)).resolves.toBe(0);
+      // Personal keys of the refused tenant's user go; the other tenant's stay.
+      const keyCount = async (tenantId: string, userId: string) =>
+        (
+          await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+            new UserApiKeysRepository(scoped).listByUser(userId)
+          )
+        ).length;
+      await expect(keyCount(tenantB, inB.user.user_id)).resolves.toBe(0);
+      await expect(keyCount(tenantA, inA.user.user_id)).resolves.toBe(1);
     });
   }
 );

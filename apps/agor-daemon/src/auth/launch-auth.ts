@@ -29,6 +29,7 @@ import {
   TenantPublicRoutingRepository,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
+  UserApiKeysRepository,
   UserExternalIdentitiesRepository,
   update,
   userExternalIdentities,
@@ -1236,15 +1237,17 @@ export function createLaunchSessionRevalidator(
         const refusedTenantId = tenantId;
         try {
           // Same fence as a password change: the generation holds against racing refreshes and clock skew.
-          await runWithTenantDatabaseTransaction(options.db, refusedTenantId, (scopedDb) =>
-            update(scopedDb, users)
+          await runWithTenantDatabaseTransaction(options.db, refusedTenantId, async (scopedDb) => {
+            await update(scopedDb, users)
               .set({
                 tokens_valid_after: new Date(now()),
                 credential_generation: sql`${users.credential_generation} + 1`,
               })
               .where(eq(users.user_id, userId))
-              .run()
-          );
+              .run();
+            // Personal keys carry no generation claim, so a refusal has to remove them.
+            await new UserApiKeysRepository(scopedDb).deleteAllForUser(userId);
+          });
         } catch {
           console.warn('[auth.refresh] session_revalidation_fence_failed');
         }
