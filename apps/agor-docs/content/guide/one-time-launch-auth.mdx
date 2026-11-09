@@ -350,8 +350,8 @@ a launch rejects that purpose, so the two assertion kinds can't be swapped.
   refresh still succeeds for up to one hour after the issuer last confirmed the
   session, and the new access token expires no later than that hour. After it, the
   refresh returns `503` and issues nothing. The client keeps its tokens, so the
-  user isn't signed out, but an open tab may need a retry or reload once the check
-  is back. Tokens issued before this
+  user isn't signed out, and an open tab keeps retrying the refresh, at most five
+  minutes apart, until the check is back. Tokens issued before this
   feature, and password or API-key sessions on a linked account that have not yet
   been confirmed, carry no confirmation time, so they get no such hour and go
   straight to the `503`.
