@@ -17,13 +17,19 @@ import {
   sql,
   TenantDisplayRepository,
   type TenantScopeAwareDatabase,
+  users,
 } from '@agor/core/db';
 import type { Params, User, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { authenticatedHealthInstance } from '../health/instance.js';
 import { UsersService } from '../services/users.js';
-import { createLaunchAuthService } from './launch-auth.js';
+import {
+  createLaunchAuthService,
+  createLaunchProjectionSerializer,
+  createLaunchSessionRevalidator,
+} from './launch-auth.js';
+import { createRefreshTokenService } from './refresh-token-service.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -133,6 +139,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         jwtSecret: RUNTIME_SECRET,
         accessTokenTtl: '15m',
         refreshTokenTtl: 2_592_000,
+        sessionMaxLifetimeSeconds: 2_592_000,
         usersService: usersService(db),
       });
     }
@@ -258,6 +265,124 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await expect(healthLabel(tenantA, dbB)).resolves.toBe('Acme');
       await expect(healthLabel(tenantB, dbA)).resolves.toBe('Data team');
       await expect(healthLabel(tenantC, dbB)).resolves.toBe('config-label');
+    });
+
+    it('refresh revalidation is bound to the signed tenant across replicas', async () => {
+      const tenantA = `revalidate-a-${generateId()}`;
+      const tenantB = `revalidate-b-${generateId()}`;
+      const revalidationConfig: AgorConfig = {
+        ...config(),
+        identity: {
+          user_lifecycle: 'external',
+          role_authority: 'claims',
+          local_auth: 'disabled',
+          external: { provider: 'external_launch', provisioning: 'jit' },
+        },
+        external_launch: {
+          ...config().external_launch,
+          session_revalidation_url: 'https://issuer.example.test/revalidate',
+          allow_admin_roles: true,
+        },
+      };
+      const claims = (tenantId: string, role: string, purpose?: string) =>
+        jwt.sign(
+          {
+            ...(purpose ? { purpose } : {}),
+            sub: 'shared-subject',
+            email: 'shared@example.invalid',
+            role,
+            tenant_id: tenantId,
+            instance_id: 'instance-1',
+          },
+          ASSERTION_SECRET,
+          {
+            algorithm: 'HS256',
+            expiresIn: '5m',
+            issuer: 'https://issuer.example.test',
+            audience: 'runtime:test',
+          }
+        );
+      // The issuer knows the subject as an admin of A, demoted to member, and removed from B.
+      const issuerRoles = new Map<string, string | null>([
+        [tenantA, 'admin'],
+        [tenantB, 'admin'],
+      ]);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string, init?: RequestInit) => {
+          const body = JSON.parse(String(init?.body)) as {
+            launch_code?: string;
+            tenant_id?: string;
+          };
+          const revalidating = url.endsWith('/revalidate');
+          const tenantId = revalidating ? body.tenant_id : body.launch_code;
+          const role = issuerRoles.get(tenantId ?? '');
+          if (!tenantId || !role) {
+            return Response.json({ error: 'membership_inactive' }, { status: 403 });
+          }
+          return Response.json({
+            assertion: claims(tenantId, role, revalidating ? 'session_revalidation' : undefined),
+          });
+        })
+      );
+      const { settings } = resolveExternalLaunchSettings(revalidationConfig);
+      const serializeProjection = createLaunchProjectionSerializer();
+      const launch = (db: TenantScopeAwareDatabase) =>
+        createLaunchAuthService({
+          db,
+          config: revalidationConfig,
+          provider: settings,
+          jwtSecret: RUNTIME_SECRET,
+          accessTokenTtl: '15m',
+          refreshTokenTtl: 2_592_000,
+          sessionMaxLifetimeSeconds: 2_592_000,
+          usersService: usersService(db),
+          serializeProjection,
+        });
+      const refresh = (db: TenantScopeAwareDatabase) =>
+        createRefreshTokenService({
+          jwtSecret: RUNTIME_SECRET,
+          accessTokenTtl: '15m',
+          refreshTokenTtl: 2_592_000,
+          sessionMaxLifetimeSeconds: 2_592_000,
+          usersService: usersService(db),
+          revalidateLaunchSession: createLaunchSessionRevalidator({
+            db,
+            config: revalidationConfig,
+            provider: settings,
+            serializeProjection,
+          }),
+        });
+
+      const inA = await launch(dbA).create({ launchCode: tenantA });
+      const inB = await launch(dbB).create({ launchCode: tenantB });
+      expect(inA.user.user_id).not.toBe(inB.user.user_id);
+
+      issuerRoles.set(tenantA, 'member');
+      issuerRoles.set(tenantB, null);
+      // Active membership in A must not keep the B session alive, through either replica.
+      await expect(refresh(dbA).create({ refreshToken: inB.refreshToken })).rejects.toThrow(
+        /Invalid or expired refresh token/
+      );
+      const refreshedA = await refresh(dbB).create({ refreshToken: inA.refreshToken });
+      expect(refreshedA.user.role).toBe('member');
+      // The A demotion never touched B's projection.
+      const roleIn = (tenantId: string, userId: string) =>
+        runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+          const row = await select(scoped).from(users).where(eq(users.user_id, userId)).one();
+          return row?.role ?? null;
+        });
+      await expect(roleIn(tenantB, inB.user.user_id)).resolves.toBe('admin');
+      await expect(roleIn(tenantA, inA.user.user_id)).resolves.toBe('member');
+      await expect(roleIn(tenantA, inB.user.user_id)).resolves.toBeNull();
+      // The refusal fenced only the refused tenant's user.
+      const generationIn = (tenantId: string, userId: string) =>
+        runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+          const row = await select(scoped).from(users).where(eq(users.user_id, userId)).one();
+          return row?.credential_generation ?? null;
+        });
+      await expect(generationIn(tenantB, inB.user.user_id)).resolves.toBe(1);
+      await expect(generationIn(tenantA, inA.user.user_id)).resolves.toBe(0);
     });
   }
 );

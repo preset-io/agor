@@ -439,6 +439,37 @@ function assertValidRefreshTokenTtlSeconds(value: unknown): void {
   }
 }
 
+/** Default absolute launched-session lifetime (30 days) when `daemon.session_max_lifetime_seconds` is unset. */
+export const DEFAULT_SESSION_MAX_LIFETIME_SECONDS = 2_592_000;
+const MIN_SESSION_MAX_LIFETIME_SECONDS = 3_600;
+const MAX_SESSION_MAX_LIFETIME_SECONDS = 7_776_000;
+
+function assertValidSessionMaxLifetimeSeconds(value: unknown): void {
+  if (
+    value !== undefined &&
+    (!Number.isSafeInteger(value) ||
+      (value as number) < MIN_SESSION_MAX_LIFETIME_SECONDS ||
+      (value as number) > MAX_SESSION_MAX_LIFETIME_SECONDS)
+  ) {
+    throw new Error(
+      `Config error: daemon.session_max_lifetime_seconds must be an integer between ${MIN_SESSION_MAX_LIFETIME_SECONDS} and ${MAX_SESSION_MAX_LIFETIME_SECONDS}`
+    );
+  }
+}
+
+/**
+ * Absolute lifetime in seconds of a session signed in through external launch,
+ * counted from the launch. Refresh and JWT re-authentication never extend one past it.
+ * Unset, it is 30 days or the configured refresh lifetime, whichever is longer.
+ */
+export function resolveSessionMaxLifetimeSeconds(config: AgorConfig): number {
+  const value = config.daemon?.session_max_lifetime_seconds;
+  assertValidSessionMaxLifetimeSeconds(value);
+  return (
+    value ?? Math.max(DEFAULT_SESSION_MAX_LIFETIME_SECONDS, resolveRefreshTokenTtlSeconds(config))
+  );
+}
+
 /**
  * Browser refresh-token lifetime in seconds for an effective (env-resolved)
  * config. The single source for every refresh-token issuer. Re-checks bounds so
@@ -866,6 +897,7 @@ function validateConfig(config: AgorConfig): void {
     'externalAppLabel',
     'impersonation_token_expiry_ms',
     'refresh_token_ttl_seconds',
+    'session_max_lifetime_seconds',
     'cors_allow_sandpack',
     'cors_origins',
     'trust_proxy_hops',
@@ -879,11 +911,13 @@ function validateConfig(config: AgorConfig): void {
     throw new Error('Config error: daemon.websocket_compression must be a boolean');
   }
   assertValidRefreshTokenTtlSeconds(config.daemon?.refresh_token_ttl_seconds);
+  assertValidSessionMaxLifetimeSeconds(config.daemon?.session_max_lifetime_seconds);
   only(config.ui, 'ui', ['base_url', 'port', 'host']);
   only(config.uploads, 'uploads', ['location', 'max_age_days', 'max_file_size_mb']);
   only(config.external_launch, 'external_launch', [
     'enabled',
     'exchange_url',
+    'session_revalidation_url',
     'issuer',
     'audience',
     'instance_id',
@@ -1703,6 +1737,12 @@ export function resolveEffectiveConfig(
     MIN_REFRESH_TOKEN_TTL_SECONDS,
     MAX_REFRESH_TOKEN_TTL_SECONDS
   );
+  const sessionMaxLifetimeSeconds = parseOptionalBoundedIntegerEnvironmentValue(
+    env.AGOR_SESSION_MAX_LIFETIME_SECONDS,
+    'AGOR_SESSION_MAX_LIFETIME_SECONDS',
+    MIN_SESSION_MAX_LIFETIME_SECONDS,
+    MAX_SESSION_MAX_LIFETIME_SECONDS
+  );
   const apmTraceServices = parseOptionalApmTraceDepthEnvironmentValue(env.AGOR_APM_TRACE_SERVICES);
   const externalLaunch = resolveEffectiveExternalLaunchConfig(config.external_launch, env);
 
@@ -1788,6 +1828,9 @@ export function resolveEffectiveConfig(
         : {}),
       ...(refreshTokenTtlSeconds !== undefined
         ? { refresh_token_ttl_seconds: refreshTokenTtlSeconds }
+        : {}),
+      ...(sessionMaxLifetimeSeconds !== undefined
+        ? { session_max_lifetime_seconds: sessionMaxLifetimeSeconds }
         : {}),
     },
     ui: { ...defaults.ui, ...config.ui },

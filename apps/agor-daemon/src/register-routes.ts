@@ -33,6 +33,7 @@ import {
   resolvePasswordPolicyRequirements,
   resolveRefreshTokenTtlSeconds,
   resolveSdkWatchdogConfig,
+  resolveSessionMaxLifetimeSeconds,
   resolveTeammateFrameworkRepoUrl,
   resolveTenantContext,
 } from '@agor/core/config';
@@ -154,7 +155,14 @@ import {
   matchesTaskExecutorRuntimeScope,
 } from './auth/executor-runtime-scope.js';
 import { createIssueBrowserTokensHook } from './auth/issue-browser-tokens-hook.js';
-import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './auth/launch-auth.js';
+import {
+  createLaunchAuthService,
+  createLaunchProjectionSerializer,
+  createLaunchSessionRevalidator,
+  launchSessionsAreRevalidated,
+  resolveLaunchConnectionBounds,
+  resolvePublicLaunchAuthSettings,
+} from './auth/launch-auth.js';
 import { createRefreshTokenService } from './auth/refresh-token-service.js';
 import {
   issueRuntimeToken,
@@ -1156,6 +1164,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // AGOR_REFRESH_TOKEN_TTL_SECONDS, validated at config load. All three issuers
   // below MUST use this one value so login, launch and refresh never disagree.
   const REFRESH_TOKEN_TTL_SECONDS = resolveRefreshTokenTtlSeconds(config);
+  // Absolute lifetime of a launched browser session, counted from the launch.
+  const SESSION_MAX_LIFETIME_SECONDS = resolveSessionMaxLifetimeSeconds(config);
 
   app.set('authentication', {
     secret: jwtSecret,
@@ -1189,6 +1199,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       sessionTokenService,
       executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
       multiTenancy,
+      ...resolveLaunchConnectionBounds(externalLaunchProvider, SESSION_MAX_LIFETIME_SECONDS),
     })
   );
   authentication.register('local', new AgorLocalStrategy());
@@ -1273,6 +1284,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           jwtSecret,
           accessTokenTtl: ACCESS_TOKEN_TTL,
           refreshTokenTtl: REFRESH_TOKEN_TTL_SECONDS,
+          sessionMaxLifetimeSeconds: SESSION_MAX_LIFETIME_SECONDS,
+          pinReauthenticatedAccessExpiry: launchSessionsAreRevalidated(externalLaunchProvider),
           tenantClaim: tenantTokenClaim,
           staticTenantId:
             multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
@@ -1286,6 +1299,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // One-time launch-code authentication endpoint
   // ============================================================================
 
+  const onLaunchAuthorizationInvalidated = (tenantId: string, userId: UserID) => {
+    app.emit('realtime:authorization-invalidated', {
+      tenantId,
+      disconnectSockets: true,
+      userId,
+    });
+  };
+  // Launch and refresh-time revalidation project the same identities through one queue.
+  const serializeLaunchProjection = createLaunchProjectionSerializer();
+
   // biome-ignore lint/suspicious/noExplicitAny: Feathers Application vs Express middleware overload
   app.use('/auth/launch', authRateLimiter as any);
   app.use(
@@ -1297,14 +1320,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       jwtSecret,
       accessTokenTtl: ACCESS_TOKEN_TTL,
       refreshTokenTtl: REFRESH_TOKEN_TTL_SECONDS,
+      sessionMaxLifetimeSeconds: SESSION_MAX_LIFETIME_SECONDS,
       usersService,
-      onAuthorizationInvalidated: (tenantId, userId) => {
-        app.emit('realtime:authorization-invalidated', {
-          tenantId,
-          disconnectSockets: true,
-          userId,
-        });
-      },
+      onAuthorizationInvalidated: onLaunchAuthorizationInvalidated,
+      serializeProjection: serializeLaunchProjection,
     })
   );
 
@@ -1325,8 +1344,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       jwtSecret,
       accessTokenTtl: ACCESS_TOKEN_TTL,
       refreshTokenTtl: REFRESH_TOKEN_TTL_SECONDS,
+      sessionMaxLifetimeSeconds: SESSION_MAX_LIFETIME_SECONDS,
       tenantClaim: tenantTokenClaim,
       usersService,
+      revalidateLaunchSession: createLaunchSessionRevalidator({
+        db,
+        config,
+        provider: externalLaunchProvider,
+        serializeProjection: serializeLaunchProjection,
+        onAuthorizationInvalidated: onLaunchAuthorizationInvalidated,
+      }),
     })
   );
 

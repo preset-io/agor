@@ -16,6 +16,7 @@ import {
   ConfigAlreadyExistsError,
   createInitialConfig,
   DEFAULT_REFRESH_TOKEN_TTL_SECONDS,
+  DEFAULT_SESSION_MAX_LIFETIME_SECONDS,
   ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   expandHomePath,
@@ -42,6 +43,7 @@ import {
   resolveEffectiveConfig,
   resolveExecutionSecurityMode,
   resolveRefreshTokenTtlSeconds,
+  resolveSessionMaxLifetimeSeconds,
   resolveTeammateFrameworkRepoUrl,
   rewriteConfigForTests,
   saveConfigForTests,
@@ -224,6 +226,52 @@ describe('resolveEffectiveConfig', () => {
       'Config error: daemon.refresh_token_ttl_seconds must be an integer between 3600 and 7776000'
     );
   });
+
+  it('resolves daemon.session_max_lifetime_seconds with env over YAML and a 30-day default', () => {
+    const lifetime = (config: AgorConfig, env: NodeJS.ProcessEnv) =>
+      resolveSessionMaxLifetimeSeconds(resolveEffectiveConfig(config, env));
+    expect(resolveEffectiveConfig({}, {}).daemon?.session_max_lifetime_seconds).toBeUndefined();
+    expect(DEFAULT_SESSION_MAX_LIFETIME_SECONDS).toBe(2_592_000);
+    expect(lifetime({}, {})).toBe(2_592_000);
+    expect(lifetime({ daemon: { session_max_lifetime_seconds: 604_800 } }, {})).toBe(604_800);
+    expect(lifetime({}, { AGOR_SESSION_MAX_LIFETIME_SECONDS: '86400' })).toBe(86_400);
+    expect(
+      lifetime(
+        { daemon: { session_max_lifetime_seconds: 604_800 } },
+        { AGOR_SESSION_MAX_LIFETIME_SECONDS: '43200' }
+      )
+    ).toBe(43_200);
+    // Unset, it never silently cuts a longer configured refresh lifetime.
+    expect(lifetime({ daemon: { refresh_token_ttl_seconds: 7_776_000 } }, {})).toBe(7_776_000);
+    expect(lifetime({ daemon: { refresh_token_ttl_seconds: 604_800 } }, {})).toBe(2_592_000);
+    for (const value of [3_600, 7_776_000]) {
+      expect(() =>
+        assertValidRawConfig({ daemon: { session_max_lifetime_seconds: value } })
+      ).not.toThrow();
+    }
+  });
+
+  it.each(['7d', '604800', 0, 3_599, 7_776_001, 1.5, Number.NaN, true, null])(
+    'rejects daemon.session_max_lifetime_seconds: %j',
+    (value) => {
+      const message =
+        'Config error: daemon.session_max_lifetime_seconds must be an integer between 3600 and 7776000';
+      const config = { daemon: { session_max_lifetime_seconds: value as unknown as number } };
+      expect(() => assertValidRawConfig(config)).toThrow(message);
+      expect(() => resolveSessionMaxLifetimeSeconds(config)).toThrow(message);
+    }
+  );
+
+  it.each(['7d', '0', '3599', '7776001', '1.5', '-3600', ' 3600'])(
+    'rejects AGOR_SESSION_MAX_LIFETIME_SECONDS=%j',
+    (value) => {
+      expect(() =>
+        resolveEffectiveConfig({}, { AGOR_SESSION_MAX_LIFETIME_SECONDS: value })
+      ).toThrow(
+        'Config error: AGOR_SESSION_MAX_LIFETIME_SECONDS must be an integer between 3600 and 7776000'
+      );
+    }
+  );
 
   it('keeps the fail-safe password profile out of environment-variable override space', () => {
     const resolved = resolveEffectiveConfig(

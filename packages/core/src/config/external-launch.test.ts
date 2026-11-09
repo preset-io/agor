@@ -88,6 +88,24 @@ describe('external launch effective config', () => {
     ).toThrow(/multiple assertion verification methods/);
   });
 
+  it('parses an optional session revalidation URL and rejects unsafe values', () => {
+    const resolve = (session_revalidation_url: unknown) =>
+      resolveValidExternalLaunchProvider(
+        unsafeConfig({ ...completeProvider, session_revalidation_url })
+      );
+    expect(resolve(undefined).sessionRevalidationUrl).toBeUndefined();
+    expect(resolve('https://issuer.example.test/revalidate').sessionRevalidationUrl).toBe(
+      'https://issuer.example.test/revalidate'
+    );
+    expect(() => resolve('ftp://issuer.example.test/revalidate')).toThrow(
+      /session_revalidation_url must be a valid HTTP\(S\) URL/
+    );
+    expect(() => resolve('https://user:secret@issuer.example.test/revalidate')).toThrow(
+      /session_revalidation_url must not include URL credentials/
+    );
+    expect(() => resolve(42)).toThrow(/session_revalidation_url must be a non-empty string/);
+  });
+
   it('accepts one complete effective provider configuration', () => {
     expect(() =>
       resolveValidExternalLaunchProvider({

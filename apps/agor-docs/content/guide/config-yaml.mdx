@@ -205,6 +205,7 @@ Supported environment overrides still win over YAML. Important examples are `AGO
 `AGOR_DATA_HOME`, `PORT`,
 `DAEMON_HOST`, `DAEMON_URL`, `AGOR_JWT_SECRET`, `AGOR_MASTER_SECRET`, `AGOR_TELEMETRY`,
 `AGOR_WEBSOCKET_COMPRESSION`, `AGOR_REFRESH_TOKEN_TTL_SECONDS`,
+`AGOR_SESSION_MAX_LIFETIME_SECONDS`,
 `AGOR_UNIX_USER_MODE`, `AGOR_SANDBOX_HOME_MODE`, and
 `AGOR_SANDBOX_SDK_HOME_MODE`. They are
 resolved in memory and never written back.
@@ -290,14 +291,40 @@ as `7d` stops the daemon at startup with a `Config error`. The daemon never fall
 default.
 
 - Sign-in stays sliding: someone who opens the UI at least once per lifetime stays signed in.
-  There is no absolute limit since the first sign-in.
-- The access token always lasts 15 minutes. This setting doesn't change it.
+  There is no absolute limit since the first sign-in, except for external launch sign-ins (see
+  below).
+- The access token normally lasts 15 minutes, and this setting doesn't change it. With external
+  launch it can be shorter: near the end of a launched session, during an issuer outage, or when
+  re-authenticating with an existing access token.
 - A change applies to tokens issued after the restart. Refresh tokens already issued keep their
   own expiry, so active browsers move to the new lifetime at their next refresh, and an idle
   browser's old token still works until it expires.
 - Signing out of the UI only discards that browser's copy of the tokens. A refresh token copied
   elsewhere stays usable until it expires. Changing a user's password is what invalidates all of
   that user's tokens at once.
+
+### Absolute lifetime of launched sessions
+
+A session signed in through [one-time launch](/guide/one-time-launch-auth) has an absolute lifetime,
+counted from the launch. Refreshing, or re-authenticating with an access token, never moves it: once
+it passes, any socket still open closes and the user launches again. Password and API-key sign-ins have no such limit, with one
+exception: when `external_launch.session_revalidation_url` is set, such a session on an account
+linked to the launch issuer counts as launched from its first refresh.
+
+```yaml
+daemon:
+  session_max_lifetime_seconds: 604800 # default: 2592000 (30 days)
+```
+
+Unset, it is 30 days or `refresh_token_ttl_seconds`, whichever is longer, so a
+longer refresh lifetime is never cut short.
+
+`AGOR_SESSION_MAX_LIFETIME_SECONDS` overrides the file, with the same whole-second range and
+startup checks as `refresh_token_ttl_seconds`. Tokens issued near the end of a launched session
+expire at its deadline instead of their usual lifetime. With `session_revalidation_url` set, a
+launched refresh token issued before this setting existed counts its session from its own issue
+time. Without that URL, such a token isn't recognized as launched and keeps sliding until it
+expires or the user launches again.
 
 ## Local password policy
 

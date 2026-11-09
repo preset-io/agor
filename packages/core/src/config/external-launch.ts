@@ -150,6 +150,7 @@ function publicKeyAlgorithms(
 export interface ResolvedExternalLaunchProvider {
   readonly enabled: boolean;
   readonly exchangeUrl?: string;
+  readonly sessionRevalidationUrl?: string;
   readonly audience?: string;
   readonly issuer?: string;
   readonly instanceId?: string;
@@ -183,6 +184,11 @@ function parseExternalLaunchSettings(
   const exchangeUrl = httpUrl(requiredString(raw, 'exchange_url'), 'external_launch.exchange_url', {
     rejectUserinfo: true,
   });
+  const sessionRevalidationUrl = httpUrl(
+    requiredString(raw, 'session_revalidation_url'),
+    'external_launch.session_revalidation_url',
+    { rejectUserinfo: true }
+  );
   const issuer = requiredString(raw, 'issuer');
   const audience = requiredString(raw, 'audience');
   const instanceId = requiredString(raw, 'instance_id');
@@ -295,6 +301,7 @@ function parseExternalLaunchSettings(
   return {
     enabled,
     exchangeUrl,
+    sessionRevalidationUrl,
     issuer,
     audience,
     instanceId,

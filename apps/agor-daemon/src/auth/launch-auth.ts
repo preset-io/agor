@@ -13,6 +13,7 @@ import {
   TenantResolutionError,
 } from '@agor/core/config';
 import {
+  and,
   eq,
   generateId,
   hash,
@@ -23,17 +24,19 @@ import {
   runWithTenantDatabaseTransaction,
   seedInitialDataInTransaction,
   select,
+  sql,
   TenantDisplayRepository,
   TenantPublicRoutingRepository,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   UserExternalIdentitiesRepository,
   update,
+  userExternalIdentities,
   users,
   validateTenantDisplay,
   validateTenantPublicRouting,
 } from '@agor/core/db';
-import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
+import { BadRequest, NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import type {
   Params,
   TenantDisplay,
@@ -52,11 +55,17 @@ import {
 import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebtoken';
 import { lockTenantAuthorizationFence } from '../services/tenant-authorization-fence.js';
 import { safeLaunchDiagnostic } from './launch-redaction.js';
-import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
+import {
+  issueRuntimeTokenPair,
+  resolveSignedRuntimeTenant,
+  runtimeTenantClaims,
+} from './runtime-tokens.js';
+import { readLaunchSubject, readRevalidatedAtMs, startBrowserSession } from './session-lifetime.js';
 import {
   assertAuthenticationUserAuthMetadata,
   authCredentialGenerationClaim,
   authTokenIssuedAtClaim,
+  type UserAuthTokenPayload,
 } from './token-invalidation.js';
 import { redactUserAuthMetadata } from './user-redaction.js';
 
@@ -115,8 +124,38 @@ export interface LaunchAuthServiceOptions {
   jwtSecret: string;
   accessTokenTtl: SignOptions['expiresIn'];
   refreshTokenTtl: number;
+  /** Absolute lifetime in seconds of a launched session, counted from the launch. */
+  sessionMaxLifetimeSeconds: number;
   usersService: { get(id: UserID, params?: Params): Promise<User> };
   onAuthorizationInvalidated?: (tenantId: string, userId: UserID) => void;
+  /** Shared with the session revalidator so both projections use one queue. */
+  serializeProjection?: LaunchProjectionSerializer;
+}
+
+export type LaunchProjectionSerializer = <T>(key: string, work: () => Promise<T>) => Promise<T>;
+
+/**
+ * SQLite uses one process-local connection and cannot begin two IMMEDIATE
+ * transactions concurrently. PostgreSQL additionally takes the repository's
+ * advisory lock, which extends the same identity serialization across HA
+ * replicas. Failed projections release the queue so a later launch can retry.
+ */
+export function createLaunchProjectionSerializer(): LaunchProjectionSerializer {
+  const projectionTails = new Map<string, Promise<void>>();
+  return async <T>(key: string, work: () => Promise<T>): Promise<T> => {
+    const previous = projectionTails.get(key) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(work);
+    const tail = next.then(
+      () => undefined,
+      () => undefined
+    );
+    projectionTails.set(key, tail);
+    try {
+      return await next;
+    } finally {
+      if (projectionTails.get(key) === tail) projectionTails.delete(key);
+    }
+  };
 }
 
 export function resolvePublicLaunchAuthSettings(
@@ -294,8 +333,10 @@ async function findUserByTrustedEmail(
 
 async function projectLaunchUser(
   db: TenantScopedDatabase,
-  options: LaunchAuthServiceOptions,
-  claims: LaunchClaims
+  options: Pick<LaunchAuthServiceOptions, 'config' | 'provider'>,
+  claims: LaunchClaims,
+  /** Revalidation only reprojects an already-bound user; it never links or creates one. */
+  mode: 'launch' | 'revalidate' = 'launch'
 ): Promise<{ userId: UserID; authorizationChanged: boolean }> {
   const { config } = options;
   const issuer = claims.iss;
@@ -351,7 +392,10 @@ async function projectLaunchUser(
 
   const existing =
     (await findUserByExternalIdentity(db, identityRepository, key)) ??
-    (await findUserByTrustedEmail(db, email, key, settings, claims));
+    (mode === 'launch' ? await findUserByTrustedEmail(db, email, key, settings, claims) : null);
+  if (!existing && mode === 'revalidate') {
+    throw new NotAuthenticated('Invalid external identity binding');
+  }
   if (existing) {
     const role = mapRole(
       claims.role,
@@ -416,7 +460,7 @@ async function projectLaunchUser(
       .where(eq(users.user_id, existing.user_id))
       .run();
     await identityRepository.bind(existing.user_id as UserID, identity, now);
-    await reattributeLegacyAnonymousRows(db, existing.user_id);
+    if (mode === 'launch') await reattributeLegacyAnonymousRows(db, existing.user_id);
 
     return {
       userId: existing.user_id as UserID,
@@ -474,7 +518,7 @@ async function fetchJson(url: string, init: RequestInit, timeoutMs: number): Pro
     if (!response.ok) {
       throw new NotAuthenticated('Invalid or expired one-time launch code');
     }
-    return response.json();
+    return await response.json();
   } finally {
     clearTimeout(timeout);
   }
@@ -553,6 +597,13 @@ async function exchangeLaunchCode(
   return json as LaunchExchangeResponse;
 }
 
+/** The verification key could not be resolved (JWKS unreachable, or no key for this kid yet). */
+class LaunchVerificationKeyUnavailableError extends NotAuthenticated {
+  constructor() {
+    super('Launch assertion verification failed');
+  }
+}
+
 export async function resolveVerificationKey(
   header: JwtHeader,
   settings: ResolvedExternalLaunchProvider
@@ -565,10 +616,15 @@ export async function resolveVerificationKey(
     throw new NotAuthenticated('Launch assertion verification failed');
   }
 
-  const jwks = await fetchJson(settings.jwksUrl, { method: 'GET' }, settings.requestTimeoutMs);
+  let jwks: unknown;
+  try {
+    jwks = await fetchJson(settings.jwksUrl, { method: 'GET' }, settings.requestTimeoutMs);
+  } catch {
+    throw new LaunchVerificationKeyUnavailableError();
+  }
   const keys = (jwks as { keys?: JsonWebKey[] })?.keys;
   const jwk = keys?.find((candidate) => candidate.kid === header.kid);
-  if (!jwk) throw new NotAuthenticated('Launch assertion verification failed');
+  if (!jwk) throw new LaunchVerificationKeyUnavailableError();
   if (jwk.use && jwk.use !== 'sig')
     throw new NotAuthenticated('Launch assertion verification failed');
   if (header.alg && jwk.alg && jwk.alg !== header.alg) {
@@ -577,9 +633,13 @@ export async function resolveVerificationKey(
   return createPublicKey({ key: jwk, format: 'jwk' });
 }
 
+/** Purpose claim the issuer puts on refresh-time revalidation assertions; never a login assertion. */
+export const LAUNCH_SESSION_REVALIDATION_PURPOSE = 'session_revalidation';
+
 async function verifyLaunchAssertion(
   assertion: string,
-  settings: ResolvedExternalLaunchProvider
+  settings: ResolvedExternalLaunchProvider,
+  expectedPurpose?: typeof LAUNCH_SESSION_REVALIDATION_PURPOSE
 ): Promise<LaunchClaims> {
   const decoded = jwt.decode(assertion, { complete: true });
   if (!decoded || typeof decoded !== 'object') {
@@ -604,16 +664,22 @@ async function verifyLaunchAssertion(
     algorithms: algorithms as jwt.Algorithm[],
   }) as LaunchClaims;
 
-  validateLaunchClaims(claims, settings);
+  validateLaunchClaims(claims, settings, expectedPurpose);
   return claims;
 }
 
 function validateLaunchClaims(
   claims: LaunchClaims,
-  settings: ResolvedExternalLaunchProvider
+  settings: ResolvedExternalLaunchProvider,
+  expectedPurpose?: typeof LAUNCH_SESSION_REVALIDATION_PURPOSE
 ): void {
-  // Callback delivery assertions use the launch signing key but are never login assertions.
-  if (claims.purpose === MCP_OAUTH_RELAY.callbackPurpose) {
+  // Callback delivery and revalidation assertions share the launch signing key but are never logins.
+  if (
+    expectedPurpose
+      ? claims.purpose !== expectedPurpose
+      : claims.purpose === MCP_OAUTH_RELAY.callbackPurpose ||
+        claims.purpose === LAUNCH_SESSION_REVALIDATION_PURPOSE
+  ) {
     throw new NotAuthenticated('Invalid one-time launch assertion purpose');
   }
   if (!claims.iss || claims.iss !== settings.issuer) {
@@ -739,18 +805,31 @@ export function classifyLaunchFailure(error: unknown): string {
 
 function issueRuntimeTokens(
   user: User,
-  jwtSecret: string,
-  accessTokenTtl: SignOptions['expiresIn'],
-  refreshTokenTtl: number,
+  options: Pick<
+    LaunchAuthServiceOptions,
+    'jwtSecret' | 'accessTokenTtl' | 'refreshTokenTtl' | 'sessionMaxLifetimeSeconds'
+  >,
+  launchSubject: string,
   tenantClaim = 'tenant_id',
   tenantId?: string
 ): LaunchAuthResult {
   assertAuthenticationUserAuthMetadata(user);
-  const tokens = issueRuntimeTokenPair(user, jwtSecret, accessTokenTtl, refreshTokenTtl, {
-    ...authCredentialGenerationClaim(user),
-    ...authTokenIssuedAtClaim(Date.now(), user),
-    ...runtimeTenantClaims(tenantId ?? (user as { tenant_id?: string }).tenant_id, tenantClaim),
-  });
+  const nowMs = Date.now();
+  // A launch is a new sign-in: it starts a fresh absolute session lifetime.
+  const session = startBrowserSession(options.sessionMaxLifetimeSeconds, { launchSubject, nowMs });
+  const tokens = issueRuntimeTokenPair(
+    user,
+    options.jwtSecret,
+    options.accessTokenTtl,
+    options.refreshTokenTtl,
+    {
+      ...authCredentialGenerationClaim(user),
+      ...authTokenIssuedAtClaim(nowMs, user),
+      ...runtimeTenantClaims(tenantId ?? (user as { tenant_id?: string }).tenant_id, tenantClaim),
+      ...session.claims,
+    },
+    { notAfterSeconds: session.notAfterSeconds }
+  );
 
   return {
     ...tokens,
@@ -762,25 +841,7 @@ function issueRuntimeTokens(
 export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
   const multiTenancy = resolveMultiTenancyConfig(options.config);
   const tenantClaim = multiTenancy.auth_claim ?? 'tenant_id';
-  // SQLite uses one process-local connection and cannot begin two IMMEDIATE
-  // transactions concurrently. PostgreSQL additionally takes the repository's
-  // advisory lock, which extends the same identity serialization across HA
-  // replicas. Failed projections release the queue so a later launch can retry.
-  const projectionTails = new Map<string, Promise<void>>();
-  const serializeProjection = async <T>(key: string, work: () => Promise<T>): Promise<T> => {
-    const previous = projectionTails.get(key) ?? Promise.resolve();
-    const next = previous.catch(() => undefined).then(work);
-    const tail = next.then(
-      () => undefined,
-      () => undefined
-    );
-    projectionTails.set(key, tail);
-    try {
-      return await next;
-    } finally {
-      if (projectionTails.get(key) === tail) projectionTails.delete(key);
-    }
-  };
+  const serializeProjection = options.serializeProjection ?? createLaunchProjectionSerializer();
 
   return {
     async create(data: { launchCode?: string; launch_code?: string }, params?: Params) {
@@ -860,14 +921,7 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
           tenant,
         };
         const user = await options.usersService.get(projection.userId, userLookupParams);
-        const result = issueRuntimeTokens(
-          user,
-          options.jwtSecret,
-          options.accessTokenTtl,
-          options.refreshTokenTtl,
-          tenantClaim,
-          tenant.tenant_id
-        );
+        const result = issueRuntimeTokens(user, options, claims.sub, tenantClaim, tenant.tenant_id);
         // The external provider has succeeded, projection committed, and Agor
         // issued its browser tokens. No provider claims enter analytics.
         runWithTenantContext(tenant.tenant_id, () =>
@@ -904,5 +958,299 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
         throw new NotAuthenticated('Invalid or expired one-time launch code');
       }
     },
+  };
+}
+
+export interface LaunchSessionRevalidatorOptions {
+  db: TenantScopeAwareDatabase;
+  config: AgorConfig;
+  provider: ResolvedExternalLaunchProvider;
+  serializeProjection: LaunchProjectionSerializer;
+  onAuthorizationInvalidated?: (tenantId: string, userId: UserID) => void;
+  now?: () => number;
+}
+
+export interface LaunchSessionRevalidationInput {
+  userId: UserID;
+  /** Verified refresh-token payload; its signed tenant binds the membership check. */
+  payload: UserAuthTokenPayload;
+}
+
+export interface LaunchSessionRevalidationResult {
+  launchSubject: string;
+  /** Last time the issuer confirmed membership; carried by the re-issued tokens. */
+  revalidatedAtMs: number;
+  /** Set while the issuer is unavailable: the re-issued access token may not outlive it. */
+  notAfterSeconds?: number;
+}
+
+/**
+ * Re-checks a launched user's current external membership before a refresh.
+ * Resolves `null` when the user has no launch identity (a local account).
+ * A refusal always rejects; an unavailable issuer is tolerated only inside
+ * {@link LAUNCH_REVALIDATION_OUTAGE_GRACE_SECONDS} of the last confirmation.
+ */
+export type LaunchSessionRevalidator = (
+  input: LaunchSessionRevalidationInput
+) => Promise<LaunchSessionRevalidationResult | null>;
+
+/** The issuer's refusal code: the user is no longer an active member of the session's tenant. */
+export const LAUNCH_SESSION_MEMBERSHIP_INACTIVE = 'membership_inactive';
+
+/** True when refresh re-checks launched sessions with the issuer. */
+export function launchSessionsAreRevalidated(provider: ResolvedExternalLaunchProvider): boolean {
+  return Boolean(provider.enabled && provider.sessionRevalidationUrl);
+}
+
+/** Socket bounds for this install: only external launch ever bounds a user socket. */
+export function resolveLaunchConnectionBounds(
+  provider: ResolvedExternalLaunchProvider,
+  sessionMaxLifetimeSeconds: number
+): { launchedSessionMaxLifetimeSeconds?: number; userConnectionMaxAgeMs?: number } {
+  return {
+    ...(provider.enabled ? { launchedSessionMaxLifetimeSeconds: sessionMaxLifetimeSeconds } : {}),
+    ...(launchSessionsAreRevalidated(provider)
+      ? { userConnectionMaxAgeMs: LAUNCH_REVALIDATION_OUTAGE_GRACE_SECONDS * 1000 }
+      : {}),
+  };
+}
+
+/** How long a session may keep refreshing while the issuer is unreachable or erroring. */
+export const LAUNCH_REVALIDATION_OUTAGE_GRACE_SECONDS = 3_600;
+
+class LaunchRevalidationFailure extends Error {
+  constructor(
+    readonly reason: string,
+    /** Transient failures may fall back to the outage grace. */
+    readonly transient = false
+  ) {
+    super(reason);
+  }
+}
+
+async function requestSessionRevalidation(
+  url: string,
+  body: Record<string, unknown>,
+  settings: ResolvedExternalLaunchProvider
+): Promise<string> {
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  };
+  if (settings.serviceCredential) headers.Authorization = `Bearer ${settings.serviceCredential}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), settings.requestTimeoutMs);
+  try {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+        redirect: 'error',
+      });
+    } catch {
+      throw new LaunchRevalidationFailure('issuer_unavailable', true);
+    }
+    if (!response.ok) {
+      // Only the issuer's own membership answer is a refusal; proxies, origin checks and credential errors are an outage.
+      const error = await response.json().then(
+        (body: unknown) => (body as { error?: unknown } | null)?.error,
+        () => undefined
+      );
+      if (response.status === 403 && error === LAUNCH_SESSION_MEMBERSHIP_INACTIVE) {
+        throw new LaunchRevalidationFailure('membership_refused');
+      }
+      throw new LaunchRevalidationFailure('issuer_unavailable', true);
+    }
+    let json: unknown;
+    try {
+      json = await response.json();
+    } catch {
+      throw new LaunchRevalidationFailure('response_invalid', true);
+    }
+    const assertion = (json as { assertion?: unknown } | null)?.assertion;
+    if (typeof assertion !== 'string' || !assertion) {
+      throw new LaunchRevalidationFailure('response_invalid', true);
+    }
+    return assertion;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Build the refresh-time membership check for launched sessions. Returns
+ * undefined unless external launch is enabled with a session revalidation URL,
+ * so local and self-hosted installs keep their refresh behavior unchanged.
+ */
+export function createLaunchSessionRevalidator(
+  options: LaunchSessionRevalidatorOptions
+): LaunchSessionRevalidator | undefined {
+  const settings = options.provider;
+  const revalidationUrl = settings.sessionRevalidationUrl;
+  if (!settings.enabled || !revalidationUrl || !settings.issuer) return undefined;
+  const issuer = settings.issuer;
+  const multiTenancy = resolveMultiTenancyConfig(options.config);
+  const now = options.now ?? Date.now;
+
+  return async ({ userId, payload }) => {
+    let tenantId: string | undefined;
+    try {
+      const tenant = resolveSignedRuntimeTenant(multiTenancy, payload);
+      if (!tenant) throw new LaunchRevalidationFailure('tenant_unavailable');
+      tenantId = tenant.tenant_id;
+
+      let subject = readLaunchSubject(payload);
+      if (!subject) {
+        // Sessions from before the subject claim, or from API-key sign-in, find the subject from any
+        // identity at this issuer: the binding table or a legacy projection's JSON list.
+        let subjects: Set<string>;
+        try {
+          subjects = await runWithTenantDatabaseTransaction(
+            options.db,
+            tenant.tenant_id,
+            async (scopedDb) => {
+              const bindings: Array<{ subject: string }> = await select(scopedDb)
+                .from(userExternalIdentities)
+                .where(
+                  and(
+                    eq(userExternalIdentities.user_id, userId),
+                    eq(userExternalIdentities.issuer, issuer)
+                  )
+                )
+                .all();
+              const row = await select(scopedDb).from(users).where(eq(users.user_id, userId)).one();
+              const legacy = getExternalIdentities(
+                row?.data as UserDataWithExternalIdentities | null | undefined
+              ).filter((identity) => identity.issuer === issuer);
+              return new Set([...bindings, ...legacy].map((identity) => identity.subject));
+            }
+          );
+        } catch {
+          throw new LaunchRevalidationFailure('identity_lookup_unavailable', true);
+        }
+        if (subjects.size === 0) return null;
+        if (subjects.size > 1) throw new LaunchRevalidationFailure('identity_ambiguous');
+        [subject] = subjects;
+      }
+
+      // Bounded outage tolerance: keep the session until the grace deadline unless the issuer recovers.
+      const deferOrThrow = (error: LaunchRevalidationFailure): LaunchSessionRevalidationResult => {
+        const lastConfirmedMs = readRevalidatedAtMs(payload);
+        if (!error.transient || !lastConfirmedMs || !subject) throw error;
+        const notAfterSeconds =
+          Math.floor(lastConfirmedMs / 1000) + LAUNCH_REVALIDATION_OUTAGE_GRACE_SECONDS;
+        if (Math.floor(now() / 1000) >= notAfterSeconds) throw error;
+        console.warn(`[auth.refresh] session_revalidation_deferred reason=${error.reason}`);
+        return { launchSubject: subject, revalidatedAtMs: lastConfirmedMs, notAfterSeconds };
+      };
+
+      let assertion: string;
+      try {
+        assertion = await requestSessionRevalidation(
+          revalidationUrl,
+          {
+            subject,
+            tenant_id: tenant.tenant_id,
+            audience: settings.audience,
+            ...(settings.instanceId ? { instance_id: settings.instanceId } : {}),
+          },
+          settings
+        );
+      } catch (error) {
+        if (!(error instanceof LaunchRevalidationFailure)) throw error;
+        return deferOrThrow(error);
+      }
+
+      let claims: LaunchClaims;
+      try {
+        claims = await verifyLaunchAssertion(
+          assertion,
+          settings,
+          LAUNCH_SESSION_REVALIDATION_PURPOSE
+        );
+      } catch (error) {
+        // An unreachable JWKS or a key not yet published is an outage; a bad signature or claim is not.
+        if (error instanceof LaunchVerificationKeyUnavailableError) {
+          return deferOrThrow(new LaunchRevalidationFailure('verification_key_unavailable', true));
+        }
+        throw new LaunchRevalidationFailure('assertion_rejected');
+      }
+      if (claims.sub !== subject) throw new LaunchRevalidationFailure('subject_mismatch');
+      let assertionTenant: string;
+      try {
+        assertionTenant = resolveTenantContext(multiTenancy, { authPayload: claims }).tenant_id;
+      } catch {
+        throw new LaunchRevalidationFailure('tenant_mismatch');
+      }
+      if (assertionTenant !== tenant.tenant_id) {
+        throw new LaunchRevalidationFailure('tenant_mismatch');
+      }
+
+      const provider = claims.provider || settings.providerId || claims.iss;
+      const projectionKey = `${tenant.tenant_id}\0${provider}\0${claims.iss}\0${claims.sub}`;
+      try {
+        await options.serializeProjection(projectionKey, async () => {
+          const current = await runWithTenantDatabaseTransaction(
+            options.db,
+            tenant.tenant_id,
+            async (scopedDb) => {
+              let result: { userId: UserID; authorizationChanged: boolean };
+              try {
+                result = await projectLaunchUser(scopedDb, options, claims, 'revalidate');
+              } catch (error) {
+                // Projection rules refuse with NotAuthenticated; database errors stay transient.
+                if (error instanceof NotAuthenticated) {
+                  throw new LaunchRevalidationFailure('projection_rejected');
+                }
+                throw error;
+              }
+              // Throwing here rolls back a projection onto any other local user.
+              if (result.userId !== userId) {
+                throw new LaunchRevalidationFailure('identity_mismatch');
+              }
+              return result;
+            }
+          );
+          if (current.authorizationChanged) {
+            options.onAuthorizationInvalidated?.(tenant.tenant_id, current.userId);
+          }
+          return current;
+        });
+      } catch (error) {
+        if (error instanceof LaunchRevalidationFailure) throw error;
+        return deferOrThrow(new LaunchRevalidationFailure('projection_unavailable', true));
+      }
+      return { launchSubject: subject, revalidatedAtMs: now() };
+    } catch (error) {
+      // Reasons are static literals from this module, so they are safe to log.
+      const reason = error instanceof LaunchRevalidationFailure ? error.reason : 'unexpected_error';
+      console.warn(`[auth.refresh] session_revalidation_failed reason=${reason}`);
+      // An outage past the grace issues nothing but leaves the credential alive, so the client retries.
+      if (error instanceof LaunchRevalidationFailure && error.transient) {
+        throw new Unavailable('Session check is temporarily unavailable');
+      }
+      if (reason === 'membership_refused' && tenantId) {
+        const refusedTenantId = tenantId;
+        try {
+          // Same fence as a password change: the generation holds against racing refreshes and clock skew.
+          await runWithTenantDatabaseTransaction(options.db, refusedTenantId, (scopedDb) =>
+            update(scopedDb, users)
+              .set({
+                tokens_valid_after: new Date(now()),
+                credential_generation: sql`${users.credential_generation} + 1`,
+              })
+              .where(eq(users.user_id, userId))
+              .run()
+          );
+        } catch {
+          console.warn('[auth.refresh] session_revalidation_fence_failed');
+        }
+        options.onAuthorizationInvalidated?.(refusedTenantId, userId);
+      }
+      throw new NotAuthenticated('Invalid or expired refresh token');
+    }
   };
 }

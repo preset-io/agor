@@ -37,6 +37,10 @@ external_launch:
   # Optional daemon-to-provider bearer credential. Prefer env vars for secrets.
   service_credential_env: AGOR_EXTERNAL_LAUNCH_SERVICE_TOKEN
 
+  # Optional: re-check the launched user's membership and role on every refresh.
+  # A refusal ends the session; an unavailable issuer is tolerated for at most an hour.
+  session_revalidation_url: https://launch.example.com/runtime/sessions/revalidate
+
   # Optional: allow role claims above member. Defaults to false.
   allow_admin_roles: false
 
@@ -138,9 +142,11 @@ require `external_launch.allow_admin_roles`; a `superadmin` claim also requires
 being silently downgraded.
 
 Omitting `identity` preserves normal local user, role, and password authority.
-The current contract does not synchronize external deactivation or revoke
-already-issued Agor credentials: the external provider can prevent a new
-launch, while cleanup and revocation remain a separate lifecycle concern.
+A launched session ends `daemon.session_max_lifetime_seconds` after its launch
+(default 30 days, or `refresh_token_ttl_seconds` when that is longer); refresh
+can't move that, and only launched sessions have this limit. Without
+`session_revalidation_url`, a launched session keeps its local role until it next
+launches or reaches that lifetime; see [Session revalidation](#session-revalidation).
 
 Before enabling this profile, apply the external-identity migration and upgrade
 every daemon replica. The migration fails closed if legacy external bindings or
@@ -309,6 +315,64 @@ fail the launch: Agor drops the label and logs only the warning code
 `launch_workspace_display_name_invalid`, never the value. A malformed stored label reads as absent and is replaced by the next
 valid launch. Omitting the claim keeps the last stored label; the badge updates
 on the next launch and page load.
+
+## Session revalidation
+
+When `session_revalidation_url` is set, every `/authentication/refresh` of a
+launched session first asks the issuer whether the user is still allowed in. The
+daemon sends a JSON `POST` with the same bearer credential as the exchange:
+
+```json
+{
+  "subject": "user:123",
+  "tenant_id": "tenant-from-the-signed-refresh-token",
+  "audience": "agor-runtime:my-instance",
+  "instance_id": "my-instance"
+}
+```
+
+`subject` is the launch assertion `sub` the session signed in with, and
+`tenant_id` comes only from the daemon's signed refresh token. `instance_id` is
+sent only when configured. A current member gets a `200` with
+`{ "assertion": "<signed JWT>" }`, built from current membership. It is verified
+like a launch assertion and must also carry `purpose: "session_revalidation"`;
+a launch rejects that purpose, so the two assertion kinds can't be swapped.
+
+- A `403` with `{ "error": "membership_inactive" }` is a refusal: the refresh
+  fails, every browser token the user already holds on any device stops working
+  (the same fence a password change uses), and their sockets are disconnected. A later
+  launch signs them in again normally.
+- A timeout, network error, redirect, any other status or error code, an
+  unreadable body, a verification key that can't be fetched, or a runtime
+  database error while applying the answer means the check is unavailable. The
+  refresh still succeeds for up to one hour after the issuer last confirmed the
+  session, and the new access token expires no later than that hour. After it, the
+  refresh returns `503` and issues nothing. The client keeps its tokens, so the
+  user isn't signed out, but an open tab may need a retry or reload once the check
+  is back. Tokens issued before this
+  feature, and password or API-key sessions on a linked account that have not yet
+  been confirmed, carry no confirmation time, so they get no such hour and go
+  straight to the `503`.
+
+On success the daemon checks that the assertion names the same subject and
+tenant, reprojects the user (role, email, name, execution home) under the same
+rules as a launch, and disconnects that user's sockets when the role changed.
+Revalidation never creates or links a local user. Accounts with no launch
+identity for this issuer keep the normal refresh rules, except that re-authenticating
+with an access token on this install no longer extends that token's expiry.
+
+With revalidation on, a user socket also closes one hour after it connected; the
+UI reconnects with its current, revalidated token. So a removal or suspension
+ends the session at its next refresh, at most one 15-minute access-token
+lifetime later while the issuer is reachable. A socket that never refreshes
+lasts at most that hour after it connected, and the last access token can still
+open one until it expires, so about 75 minutes in all. During an issuer outage a
+removal can't be seen: refreshes continue for up to the hour of grace, and a
+socket opened at its end lasts one more hour, so about two hours at worst. With `identity.role_authority: claims`, a demotion applies at the next refresh.
+On an install that also allows local sign-in, a refused member can still sign in
+with a password, and each such session lasts until its first refresh is refused. The
+absolute lifetime still applies to every launched session, and closes any socket
+still open at that deadline.
 
 ## Compatibility and upgrade notes
 

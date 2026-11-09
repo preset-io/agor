@@ -10,7 +10,12 @@ import { createRestClient } from '@agor-live/client';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
 import { isDefiniteAuthFailure, isTransientConnectionError } from '../utils/authErrors';
-import { isExpiringSoon, msUntilExpiry } from '../utils/jwtExpiry';
+import {
+  autoRefreshDelayMs,
+  decodeJwtExpMs,
+  isExpiringSoon,
+  msUntilExpiry,
+} from '../utils/jwtExpiry';
 import {
   exchangeLaunchCode,
   getLaunchCodeFromSearch,
@@ -155,6 +160,8 @@ export function useAuth(): UseAuthReturn {
     error: null,
   });
   const authStateRef = useRef(state);
+  // `exp` of the access token the last auto-refresh started from.
+  const lastRefreshedExpMsRef = useRef<number | null>(null);
   authStateRef.current = state;
   const previousDraftAuthorityRef = useRef<{ userId: string; role: string } | null>(null);
   // Only the latest local-login attempt may install credentials or own the
@@ -658,13 +665,11 @@ export function useAuth(): UseAuthReturn {
   useEffect(() => {
     if (!state.authenticated || !state.accessToken) return;
 
-    const REFRESH_BUFFER_MS = 60_000; // refresh this many ms before exp
-    const MIN_DELAY_MS = 1_000; // never schedule tighter than this
-    const FALLBACK_DELAY_MS = 5 * 60_000; // if we can't decode exp
-
-    const untilExp = msUntilExpiry(state.accessToken);
-    const delay =
-      untilExp === null ? FALLBACK_DELAY_MS : Math.max(MIN_DELAY_MS, untilExp - REFRESH_BUFFER_MS);
+    const accessExpMs = decodeJwtExpMs(state.accessToken);
+    const delay = autoRefreshDelayMs(
+      msUntilExpiry(state.accessToken),
+      accessExpMs !== null && lastRefreshedExpMsRef.current === accessExpMs
+    );
 
     const timer = setTimeout(async () => {
       const isTabAuthorityCurrent = captureTokenAuthority();
@@ -678,6 +683,7 @@ export function useAuth(): UseAuthReturn {
       try {
         const client = await createRestClient(getDaemonUrl());
         await refreshTokensSingleFlight(client, refreshToken);
+        lastRefreshedExpMsRef.current = accessExpMs;
         // State sync happens via TOKENS_REFRESHED_EVENT listener below.
       } catch (error) {
         // A superseded refresh is a no-op only when this tab's own
