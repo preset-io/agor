@@ -1253,7 +1253,7 @@ describe('OnboardingWizard', () => {
     expect(tip.closest('[aria-live]')).toBeNull();
     expect(
       screen.getByText(
-        'Connect a Slack channel and your team can ask your teammate for help right there.'
+        'Connect a Slack channel and give your team Collaborator access to your teammate so they can ask for help right there. Under the filesystem sandbox or delegated execution, they also need file access.'
       )
     ).toBeInTheDocument();
 

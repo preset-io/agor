@@ -341,6 +341,10 @@ export async function loadDemoFixtures(
       color: '#722ed1',
       created_by: alice.user_id,
       objects: initialObjects,
+      // The multiplayer demo shares on purpose; new boards are private by default.
+      access_mode: 'shared',
+      default_others_can: 'session',
+      default_others_fs_access: 'read',
     });
     const boardId = board.board_id as BoardID;
     if (options.userId && options.userId !== alice.user_id) {

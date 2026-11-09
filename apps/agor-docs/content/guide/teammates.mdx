@@ -26,7 +26,7 @@ An AI teammate is a special branch backed by the **framework repository**, a tem
 
 1. Creates a home from your selected persona. Start from scratch and prompt-only personas (such as Personal assistant, Researcher and Engineering assistant) use your chosen repository’s default branch; prompt-only personas add their remit to the first session.
 2. Tags the branch with teammate metadata (name, framework version)
-3. Creates a dedicated board for the teammate's work
+3. Creates a dedicated board for the teammate's work. The board starts private. To let colleagues see it, set **Board access** to Shared in its permission settings and give **Others** Viewer, or add people. To let them prompt the teammate, set **Branch defaults** to Shared and give **Others** Collaborator, with at least read file access under the filesystem sandbox or delegated execution
 4. Launches your first session, beginning the guided experience in `ONBOARDING.md`
 
 From there, every session in that branch picks up the teammate's accumulated memory and context.

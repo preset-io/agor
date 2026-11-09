@@ -20,7 +20,7 @@ A Message Gateway channel opens an external pathway (Slack DM, GitHub `@mention`
 
 Things working in your favor:
 
-- **Email-based user matching.** Inbound Slack messages are aligned to Agor users via the `users:read.email` scope; GitHub and Shortcut mentions are aligned via an explicit `user_map` or the sender's platform email. When a match exists, the spawned session is attributed to that real Agor user, so prompts run under their identity and audit trail, not as a generic bot. Unmatched senders are rejected (or surfaced to admins).
+- **Email-based user matching.** Inbound Slack messages are aligned to Agor users via the `users:read.email` scope; GitHub and Shortcut mentions are aligned via an explicit `user_map` or the sender's platform email. When a match exists, the spawned session is attributed to that real Agor user, so prompts run under their identity and audit trail, not as a generic bot. Unmatched senders are rejected (or surfaced to admins). A matched user also needs Collaborator access on the channel's target branch, plus file access under the filesystem sandbox or delegated execution. New boards, including teammate boards, give other members no branch access until the owner grants it in **Branch defaults**.
 - **Encrypted credentials at rest.** Bot tokens, app tokens, and private keys are stored encrypted in the daemon database.
 - **Outbound-only transport.** Slack uses Socket Mode; Discord uses its Gateway connection; GitHub and Shortcut use API polling. None of these connectors require a public webhook URL.
 - **Per-channel agent config.** Permission modes, model, and MCP server attachments are scoped to the channel, not global.

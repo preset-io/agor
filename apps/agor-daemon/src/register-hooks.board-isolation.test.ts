@@ -52,7 +52,11 @@ dbTest(
       access_mode: 'private',
     });
     // Stored policy shared: Others are Viewers, one named Editor.
-    const shared = await boards.create({ name: 'Shared', created_by: owner.user_id });
+    const shared = await boards.create({
+      name: 'Shared',
+      created_by: owner.user_id,
+      access_mode: 'shared',
+    });
     const policies = new CapabilityPolicyRepository(rawDb);
     const sharedPolicy = await policies.getBoardPolicies(shared.board_id);
     await policies.replaceBoardPolicies(
@@ -109,7 +113,11 @@ dbTest(
     const workspaceViewer = await users.create({ email: 'ws-viewer@example.test', role: 'viewer' });
     const workspaceViewerKey = await keyFor(workspaceViewer.user_id as UserID);
     // Others are Editors here, so only the workspace role can stop a mutation.
-    const open = await boards.create({ name: 'Open', created_by: owner.user_id });
+    const open = await boards.create({
+      name: 'Open',
+      created_by: owner.user_id,
+      access_mode: 'shared',
+    });
     const openPolicy = await policies.getBoardPolicies(open.board_id);
     await policies.replaceBoardPolicies(
       open.board_id,
@@ -413,9 +421,58 @@ dbTest(
         (await call(otherKey, 'agor_boards_get', { boardId: privateBoard.board_id })).isError
       ).toBe(true);
 
-      // defaultOthersCan is the default branch permission; the response shows the stored board policy.
+      // Without accessMode, defaultOthersCan none leaves Others with nothing on the board either.
+      const noneResult = await call(creatorKey, 'agor_boards_create', {
+        name: 'None via MCP',
+        defaultOthersCan: 'none',
+      });
+      const noneBoard = JSON.parse(noneResult.content[0].text);
+      expect(noneBoard.permissions).toMatchObject({
+        board_access: { sharing_mode: 'private', others: { preset: 'none' } },
+        branch_template: { access: { others: { preset: 'none', fs_access: 'none' } } },
+      });
+      expect(
+        (await call(otherKey, 'agor_boards_get', { boardId: noneBoard.board_id })).isError
+      ).toBe(true);
+
+      // A board created with no permission inputs is private on both policies.
+      const plainResult = await call(creatorKey, 'agor_boards_create', { name: 'Plain via MCP' });
+      const plainBoard = JSON.parse(plainResult.content[0].text);
+      expect(plainBoard.permissions).toMatchObject({
+        board_access: { others: { preset: 'none' } },
+        branch_template: { access: { others: { preset: 'none', fs_access: 'none' } } },
+      });
+      expect(
+        (await call(otherKey, 'agor_boards_get', { boardId: plainBoard.board_id })).isError
+      ).toBe(true);
+      // A colleague cannot read a branch that inherits the plain board's defaults.
+      const repo = await new RepoRepository(rawDb).create({
+        repo_type: 'remote',
+        remote_url: 'https://example.test/plain-board.git',
+        slug: 'plain-board',
+        local_path: '/tmp/plain-board',
+        default_branch: 'main',
+      });
+      const inherited = await new BranchRepository(rawDb).create({
+        repo_id: repo.repo_id,
+        board_id: plainBoard.board_id,
+        name: 'inherited',
+        ref: 'inherited',
+        branch_unique_id: 1,
+        created_by: creator.user_id,
+        permission_binding: 'inherit',
+      });
+      expect(
+        (await call(creatorKey, 'agor_branches_get', { branchId: inherited.branch_id })).isError
+      ).not.toBe(true);
+      expect(
+        (await call(otherKey, 'agor_branches_get', { branchId: inherited.branch_id })).isError
+      ).toBe(true);
+
+      // An explicitly shared board shows Others the canvas; branch defaults stay as requested.
       const sharedResult = await call(creatorKey, 'agor_boards_create', {
         name: 'Shared via MCP',
+        accessMode: 'shared',
         defaultOthersCan: 'none',
       });
       const sharedBoard = JSON.parse(sharedResult.content[0].text);
@@ -423,6 +480,9 @@ dbTest(
         board_access: { sharing_mode: 'shared', others: { preset: 'viewer' } },
         branch_template: { access: { others: { preset: 'none' } } },
       });
+      expect(
+        (await call(otherKey, 'agor_boards_get', { boardId: sharedBoard.board_id })).isError
+      ).not.toBe(true);
       expect(sharedBoard).not.toHaveProperty('access_mode');
       expect(sharedBoard).not.toHaveProperty('default_others_can');
     } finally {

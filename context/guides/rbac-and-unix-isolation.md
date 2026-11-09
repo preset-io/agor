@@ -65,6 +65,13 @@ Board roles are cumulative:
 | Editor  | Viewer + `board.edit`, `board.attach_branch` |
 | Manager | Editor + `board.policy.manage`               |
 
+Creation maps the create-only legacy inputs (`access_mode`, `default_others_can`,
+`default_others_fs_access`) once. Omitted inputs grant Others nothing: no role,
+no file access, and a private board unless `access_mode: shared` or a non-`none`
+`default_others_can` is given. Board reads never return those fields and branch
+reads never return `others_can` or `others_fs_access`, so they cannot contradict
+the stored policy.
+
 Board listing and canvas delivery consult `board_access` only. Seeing any
 branch on a board no longer makes the board visible. Within a visible board,
 branch objects are returned only when the caller can also view that branch.

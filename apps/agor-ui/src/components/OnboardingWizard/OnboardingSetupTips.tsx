@@ -10,13 +10,16 @@ import { Card, Carousel, ConfigProvider, Flex, Typography, theme } from 'antd';
 import { useState } from 'react';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 
+const FILE_ACCESS_NOTE =
+  'Under the filesystem sandbox or delegated execution, they also need file access.';
+
 /** Shown while completion runs. `name` is mid-sentence, `Name` starts a sentence. */
 const SETUP_TIPS = [
   {
     icon: SlackOutlined,
     title: 'Chat in Slack',
     line: (name: string) =>
-      `Connect a Slack channel and your team can ask ${name} for help right there.`,
+      `Connect a Slack channel and give your team Collaborator access to ${name} so they can ask for help right there. ${FILE_ACCESS_NOTE}`,
   },
   {
     icon: BarChartOutlined,
@@ -45,7 +48,8 @@ const SETUP_TIPS = [
   {
     icon: TeamOutlined,
     title: 'Work as a team',
-    line: (name: string) => `Share your board so everyone can work with ${name}.`,
+    line: (name: string) =>
+      `Share your board and give your team Collaborator access so they can work with ${name}. ${FILE_ACCESS_NOTE}`,
   },
 ];
 

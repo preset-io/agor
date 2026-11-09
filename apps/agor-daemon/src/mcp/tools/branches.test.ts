@@ -1223,6 +1223,11 @@ describe('agor_branches_create', () => {
       expect.objectContaining({ name: 'Siebel CRM', icon: '🤖', created_by: 'user-a' }),
       {}
     );
+    // No sharing inputs, so the board is created private with no Others branch access.
+    const boardData = boardsCreate.mock.calls[0][0];
+    for (const field of ['access_mode', 'default_others_can', 'default_others_fs_access']) {
+      expect(boardData).not.toHaveProperty(field);
+    }
     expect(createBranch).toHaveBeenCalledWith(
       'repo-1',
       expect.objectContaining({ boardId: 'board-auto' }),

@@ -1,4 +1,4 @@
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { Form } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import { renderWithApp } from '../BranchModal/testUtils';
@@ -52,6 +52,93 @@ describe('BoardFormFields permissions', () => {
     expect(onRead).toHaveBeenLastCalledWith(
       expect.objectContaining({ default_others_can: 'view' })
     );
+  });
+});
+
+function FreshBoardFormHarness({
+  onRead,
+}: {
+  onRead: (values: ReturnType<typeof extractBoardFormValues>) => void;
+}) {
+  const [form] = Form.useForm();
+  return (
+    <Form form={form}>
+      <BoardFormFields form={form} />
+      <button type="button" onClick={() => onRead(extractBoardFormValues(form))}>
+        Read values
+      </button>
+    </Form>
+  );
+}
+
+describe('BoardFormFields create defaults', () => {
+  it('creates a private board that grants Others nothing unless the creator shares it', () => {
+    const onRead = vi.fn();
+    renderWithApp(<FreshBoardFormHarness onRead={onRead} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Read values' }));
+    expect(onRead).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        access_mode: 'private',
+        default_others_can: 'none',
+        default_others_fs_access: 'none',
+      })
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Shared' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Read values' }));
+    expect(onRead).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        access_mode: 'shared',
+        default_others_can: 'none',
+        default_others_fs_access: 'none',
+      })
+    );
+  });
+
+  it('does not bring back a Shared grant after switching to Private and back', async () => {
+    const onRead = vi.fn();
+    const pick = (combobox: HTMLElement, option: string) => {
+      fireEvent.mouseDown(combobox);
+      fireEvent.click(screen.getByText(option, { selector: '.ant-select-item-option-content' }));
+    };
+    const readValues = () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Read values' }));
+      return onRead.mock.lastCall?.[0];
+    };
+    renderWithApp(<FreshBoardFormHarness onRead={onRead} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }));
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Shared' }));
+    const fsAccessLabel = await screen.findByText('Default filesystem access');
+    pick(screen.getByRole('combobox', { name: 'Default others can' }), 'Own Sessions');
+    pick(
+      within(fsAccessLabel.closest('.ant-form-item') as HTMLElement).getByRole('combobox'),
+      'Read'
+    );
+    expect(readValues()).toMatchObject({
+      access_mode: 'shared',
+      default_others_can: 'session',
+      default_others_fs_access: 'read',
+    });
+
+    fireEvent.click(screen.getByRole('radio', { name: /^Private/ }));
+    await waitFor(() =>
+      expect(screen.queryByText('Default filesystem access')).not.toBeInTheDocument()
+    );
+    expect(readValues()).toMatchObject({
+      access_mode: 'private',
+      default_others_can: 'none',
+      default_others_fs_access: 'none',
+    });
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Shared' }));
+    await screen.findByText('Default filesystem access');
+    expect(readValues()).toMatchObject({
+      access_mode: 'shared',
+      default_others_can: 'none',
+      default_others_fs_access: 'none',
+    });
   });
 });
 
