@@ -14,6 +14,7 @@ describe('getModelDisplayName', () => {
     expect(getModelDisplayName('claude-opus-4-8')).toBe('opus-4.8');
     expect(getModelDisplayName('claude-sonnet-4-6')).toBe('sonnet-4.6');
     expect(getModelDisplayName('claude-haiku-5-5')).toBe('haiku-5.5');
+    expect(getModelDisplayName('claude-fable-5-2')).toBe('fable-5.2');
     expect(getModelDisplayName('claude-haiku-4-5')).toBe('haiku-4.5');
   });
 

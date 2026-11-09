@@ -54,10 +54,17 @@ export function getClaudeContextWindowLimit(modelId?: string): number | undefine
  */
 export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
   {
+    id: 'claude-fable-5-2',
+    displayName: 'Claude Fable 5.2 · 1M',
+    family: 'claude-5',
+    description: 'Most capable model for demanding reasoning and long-horizon agentic work',
+    contextWindow: CLAUDE_EXTENDED_CONTEXT_WINDOW,
+  },
+  {
     id: 'claude-fable-5-1',
     displayName: 'Claude Fable 5.1 · 1M',
     family: 'claude-5',
-    description: 'Most capable model for demanding reasoning and long-horizon agentic work',
+    description: 'Previous Fable model for demanding reasoning and long-horizon agentic work',
     contextWindow: CLAUDE_EXTENDED_CONTEXT_WINDOW,
   },
   {

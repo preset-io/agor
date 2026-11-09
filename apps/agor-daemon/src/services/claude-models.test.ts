@@ -65,12 +65,23 @@ describe('Claude model discovery materialization', () => {
     ]);
   });
 
+  it('materializes the Claude Fable 5.2 alias as native 1M without a suffixed variant', () => {
+    expect(toModelOptions([model('claude-fable-5-2', 'Claude Fable 5.2')])).toEqual([
+      {
+        id: 'claude-fable-5-2',
+        displayName: 'Claude Fable 5.2 · 1M',
+        description: 'Most capable model for demanding reasoning and long-horizon agentic work',
+        source: 'dynamic',
+      },
+    ]);
+  });
+
   it('materializes the verified Claude Fable 5.1 alias as native 1M', () => {
     expect(toModelOptions([model('claude-fable-5-1', 'Claude Fable 5.1')])).toEqual([
       {
         id: 'claude-fable-5-1',
         displayName: 'Claude Fable 5.1 · 1M',
-        description: 'Most capable model for demanding reasoning and long-horizon agentic work',
+        description: 'Previous Fable model for demanding reasoning and long-horizon agentic work',
         source: 'dynamic',
       },
     ]);

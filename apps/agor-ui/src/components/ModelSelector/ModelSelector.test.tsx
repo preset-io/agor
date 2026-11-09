@@ -468,7 +468,7 @@ describe('ModelSelector (Claude)', () => {
     fireEvent.keyDown(input, { key: 'Enter', keyCode: 13, which: 13 });
 
     expect(onCommit).toHaveBeenCalledOnce();
-    expect(onCommit).toHaveBeenCalledWith({ mode: 'alias', model: 'claude-fable-5' });
+    expect(onCommit).toHaveBeenCalledWith({ mode: 'alias', model: 'claude-fable-5-1' });
   });
 
   it('wraps option descriptions instead of truncating them', () => {
