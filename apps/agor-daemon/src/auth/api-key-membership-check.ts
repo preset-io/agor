@@ -7,7 +7,7 @@ import { AUTH_LAUNCH_SUBJECT_CLAIM, AUTH_REVALIDATED_AT_MS_CLAIM } from './sessi
 
 /** How long a confirmed membership lets personal API keys skip the issuer; matches the access-token lifetime. */
 export const API_KEY_MEMBERSHIP_CHECK_INTERVAL_MS = 15 * 60 * 1000;
-/** How long a failed or deferred check waits, so a request burst can't hammer a struggling issuer. */
+/** How long a check the issuer couldn't answer waits, so a request burst can't hammer a struggling issuer. */
 export const API_KEY_MEMBERSHIP_RETRY_MS = 60 * 1000;
 /** Evicting a user only costs one extra issuer call and any outage grace on this replica. */
 export const API_KEY_MEMBERSHIP_MAX_TRACKED_USERS = 10_000;
@@ -55,7 +55,8 @@ export function createApiKeyMembershipCheck(options: {
     tenantId: string | undefined,
     userId: UserID
   ): Promise<ApiKeyMembershipOutcome> => {
-    const { confirmedAtMs, launchSubject } = tracked.get(key) ?? {};
+    const previous = tracked.get(key);
+    const { confirmedAtMs, launchSubject } = previous ?? {};
     try {
       const result = await options.revalidate({
         userId,
@@ -86,11 +87,20 @@ export function createApiKeyMembershipCheck(options: {
         launchSubject: result?.launchSubject,
       });
     } catch (error) {
-      const nextCheckAtMs = now() + API_KEY_MEMBERSHIP_RETRY_MS;
       if (error instanceof NotAuthenticated) {
-        return remember(key, { outcome: 'rejected', nextCheckAtMs });
+        // A refusal repeats its side effects, so it waits as long as a confirmation does.
+        return remember(key, {
+          outcome: 'rejected',
+          nextCheckAtMs: now() + API_KEY_MEMBERSHIP_CHECK_INTERVAL_MS,
+        });
       }
-      return remember(key, { outcome: 'unavailable', nextCheckAtMs, confirmedAtMs, launchSubject });
+      return remember(key, {
+        // An outage can't overturn a refusal; only the issuer's next answer can.
+        outcome: previous?.outcome === 'rejected' ? 'rejected' : 'unavailable',
+        nextCheckAtMs: now() + API_KEY_MEMBERSHIP_RETRY_MS,
+        confirmedAtMs: previous?.confirmedAtMs,
+        launchSubject: previous?.launchSubject,
+      });
     }
   };
 

@@ -59,17 +59,32 @@ describe('API key membership check', () => {
     expect(revalidate).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects after a refusal and asks again only after the retry delay', async () => {
+  it('rejects after a refusal and asks again only after a full interval', async () => {
     const revalidate = vi.fn(async () => {
       throw new NotAuthenticated('refused');
     });
     const { clock, check } = harness(revalidate);
     await expect(check({ tenantId, userId })).resolves.toBe('rejected');
+    clock.nowMs += API_KEY_MEMBERSHIP_CHECK_INTERVAL_MS - 1;
     await expect(check({ tenantId, userId })).resolves.toBe('rejected');
     expect(revalidate).toHaveBeenCalledTimes(1);
-    clock.nowMs += API_KEY_MEMBERSHIP_RETRY_MS;
+    clock.nowMs += 1;
     await check({ tenantId, userId });
     expect(revalidate).toHaveBeenCalledTimes(2);
+  });
+
+  it('stays rejected when an outage follows a refusal, until the issuer answers', async () => {
+    const revalidate = vi
+      .fn()
+      .mockRejectedValueOnce(new NotAuthenticated('refused'))
+      .mockRejectedValueOnce(new Unavailable('down'))
+      .mockResolvedValue(confirmed(1_000_000));
+    const { clock, check } = harness(revalidate);
+    await check({ tenantId, userId });
+    clock.nowMs += API_KEY_MEMBERSHIP_CHECK_INTERVAL_MS;
+    await expect(check({ tenantId, userId })).resolves.toBe('rejected');
+    clock.nowMs += API_KEY_MEMBERSHIP_RETRY_MS;
+    await expect(check({ tenantId, userId })).resolves.toBe('allowed');
   });
 
   it('drops the remembered confirmation after a rejection', async () => {
@@ -82,7 +97,7 @@ describe('API key membership check', () => {
     await check({ tenantId, userId });
     clock.nowMs += API_KEY_MEMBERSHIP_CHECK_INTERVAL_MS;
     await check({ tenantId, userId });
-    clock.nowMs += API_KEY_MEMBERSHIP_RETRY_MS;
+    clock.nowMs += API_KEY_MEMBERSHIP_CHECK_INTERVAL_MS;
     await check({ tenantId, userId });
     expect(revalidate.mock.calls[2][0].payload).not.toHaveProperty(AUTH_REVALIDATED_AT_MS_CLAIM);
   });

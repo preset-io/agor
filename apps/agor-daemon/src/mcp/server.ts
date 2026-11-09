@@ -778,7 +778,7 @@ export function setupMCPRoutes(
         userId = context.userId;
         sessionId = context.sessionId;
 
-        // An outage leaves this short-lived token working, so a running agent keeps its tools.
+        // An outage leaves a token nobody refused working until it expires, so a running agent keeps its tools.
         const membership = await options.apiKeyMembershipCheck?.({
           tenantId: tenant.tenant_id,
           userId,
