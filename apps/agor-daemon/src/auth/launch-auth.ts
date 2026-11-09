@@ -381,13 +381,73 @@ async function projectLaunchUser(
     last_login_at: nowIso,
   };
 
+  const planExistingUser = (existing: typeof users.$inferSelect) => {
+    const data = (existing.data ?? {}) as UserDataWithExternalIdentities;
+    const stored = getExternalIdentities(data).find((candidate) => candidate.key === key);
+    return {
+      data,
+      stored,
+      // A refresh is not a sign-in: only a launch moves last_login_at.
+      identity:
+        mode === 'revalidate' && stored?.last_login_at
+          ? { ...identity, last_login_at: stored.last_login_at }
+          : identity,
+      role: mapRole(
+        claims.role,
+        settings,
+        config.execution?.allow_superadmin,
+        normalizeRole(existing.role ?? undefined),
+        identityAuthority.roleAuthority
+      ),
+      email:
+        identityAuthority.userLifecycle === AgorUserLifecycleAuthority.EXTERNAL &&
+        email !== undefined
+          ? email
+          : existing.email,
+      name: name ?? existing.name,
+      unixUsername:
+        identityAuthority.userLifecycle === AgorUserLifecycleAuthority.EXTERNAL &&
+        claims.unix_username !== undefined
+          ? unixUsername
+          : (unixUsername ?? existing.unix_username),
+      clearsForcedPasswordChange:
+        !identityAuthority.capabilities.users.passwordWrite && existing.must_change_password,
+    };
+  };
+
+  const identityRepository = new UserExternalIdentitiesRepository(db);
+
+  if (mode === 'revalidate') {
+    // The usual refresh changes nothing: confirm that without the tenant lock or a write.
+    const binding = await identityRepository.findByKey(key);
+    const bound = binding
+      ? await select(db).from(users).where(eq(users.user_id, binding.user_id)).one()
+      : null;
+    if (binding && bound) {
+      const plan = planExistingUser(bound);
+      const unchanged =
+        bound.role === plan.role &&
+        bound.email === plan.email &&
+        (bound.name ?? null) === (plan.name ?? null) &&
+        (bound.unix_username ?? null) === (plan.unixUsername ?? null) &&
+        !plan.clearsForcedPasswordChange &&
+        (!avatar ||
+          (plan.data.avatar_url === avatar && plan.data.avatar_source === 'launch-auth')) &&
+        plan.stored !== undefined &&
+        plan.stored.email === email &&
+        plan.stored.name === name &&
+        (binding.email ?? undefined) === email &&
+        (binding.name ?? undefined) === name;
+      if (unchanged) return { userId: bound.user_id as UserID, authorizationChanged: false };
+    }
+  }
+
   // Role projection is an authority mutation. Take the same tenant fence as
   // policy, group, prompt, terminal, and user-role commands before reading the
   // current row so a launch assertion cannot interleave a stale authorization
   // decision on another replica.
   await lockTenantAuthorizationFence(db);
 
-  const identityRepository = new UserExternalIdentitiesRepository(db);
   await identityRepository.lockProvisioningKey(`identity:${key}`);
   if (email) await identityRepository.lockProvisioningKey(`email:${email}`);
 
@@ -398,44 +458,29 @@ async function projectLaunchUser(
     throw new NotAuthenticated('Invalid external identity binding');
   }
   if (existing) {
-    const role = mapRole(
-      claims.role,
-      settings,
-      config.execution?.allow_superadmin,
-      normalizeRole(existing.role ?? undefined),
-      identityAuthority.roleAuthority
-    );
-    const data = (existing.data ?? {}) as UserDataWithExternalIdentities;
+    const plan = planExistingUser(existing);
+    const { data, role } = plan;
     const identities = getExternalIdentities(data);
     const nextIdentities = identities.map((existingIdentity) =>
-      existingIdentity.key === key ? { ...existingIdentity, ...identity } : existingIdentity
+      existingIdentity.key === key ? { ...existingIdentity, ...plan.identity } : existingIdentity
     );
     if (!nextIdentities.some((existingIdentity) => existingIdentity.key === key)) {
-      nextIdentities.push(identity);
+      nextIdentities.push(plan.identity);
     }
 
-    const nextUnixUsername =
-      identityAuthority.userLifecycle === AgorUserLifecycleAuthority.EXTERNAL &&
-      claims.unix_username !== undefined
-        ? unixUsername
-        : (unixUsername ?? existing.unix_username);
     if (
-      nextUnixUsername &&
-      !(await isExecutionHomeKeyAvailable(db, nextUnixUsername, existing.user_id))
+      plan.unixUsername &&
+      !(await isExecutionHomeKeyAvailable(db, plan.unixUsername, existing.user_id))
     ) {
       throw new NotAuthenticated('External execution home is already assigned');
     }
 
     await update(db, users)
       .set({
-        email:
-          identityAuthority.userLifecycle === AgorUserLifecycleAuthority.EXTERNAL &&
-          email !== undefined
-            ? email
-            : existing.email,
-        name: name ?? existing.name,
+        email: plan.email,
+        name: plan.name,
         role,
-        unix_username: nextUnixUsername,
+        unix_username: plan.unixUsername,
         // Once identity authority is external there is no authoritative local
         // password-write path. Clear stale seed/manual flags while projecting
         // the linked account so the user cannot be trapped behind an
@@ -460,7 +505,7 @@ async function projectLaunchUser(
       })
       .where(eq(users.user_id, existing.user_id))
       .run();
-    await identityRepository.bind(existing.user_id as UserID, identity, now);
+    await identityRepository.bind(existing.user_id as UserID, plan.identity, now);
     if (mode === 'launch') await reattributeLegacyAnonymousRows(db, existing.user_id);
 
     return {

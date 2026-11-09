@@ -12,6 +12,7 @@ import {
   select,
   sql,
   UserApiKeysRepository,
+  userExternalIdentities,
   users,
 } from '@agor/core/db';
 import type { InternalUser, User, UserID } from '@agor/core/types';
@@ -283,6 +284,68 @@ describe('refresh-time launch membership revalidation', () => {
     await expect(keys.listByUser(signedIn.user.user_id)).resolves.toEqual([]);
     await expect(authenticate(rawKey)).rejects.toThrow(/Invalid API key/);
     await expect(signIn(rawKey)).rejects.toThrow(/Invalid API key/);
+  });
+
+  it('skips the user write when the assertion changes nothing and keeps last_login_at', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const start = Date.parse('2026-06-01T10:00:00Z');
+      vi.setSystemTime(start);
+      const state = {
+        exchange: assertion({ picture: 'https://cdn.example.test/a.png' }),
+        revalidate: (() =>
+          Response.json({
+            assertion: revalidation({ picture: 'https://cdn.example.test/a.png' }),
+          })) as RevalidationHandler,
+      };
+      stubIssuer(state);
+      const config = cloudConfig();
+      const { launch, refresh } = services(config);
+      const signedIn = await launch.create({ launchCode: 'code' });
+      const readRows = async () => {
+        const row = await select(db)
+          .from(users)
+          .where(eq(users.user_id, signedIn.user.user_id))
+          .one();
+        const binding = await select(db)
+          .from(userExternalIdentities)
+          .where(eq(userExternalIdentities.user_id, signedIn.user.user_id))
+          .one();
+        return { row, binding };
+      };
+      const before = await readRows();
+
+      vi.setSystemTime(start + 3_600_000);
+      await refresh.create({ refreshToken: signedIn.refreshToken });
+      const unchanged = await readRows();
+      expect(unchanged.row?.updated_at).toEqual(before.row?.updated_at);
+      expect(unchanged.row?.data).toEqual(before.row?.data);
+      expect(unchanged.binding?.updated_at).toEqual(before.binding?.updated_at);
+
+      // A real change is written, but a refresh still isn't a sign-in.
+      state.revalidate = () => Response.json({ assertion: revalidation({ name: 'New Name' }) });
+      vi.setSystemTime(start + 7_200_000);
+      await refresh.create({ refreshToken: signedIn.refreshToken });
+      const changed = await readRows();
+      expect(changed.row?.name).toBe('New Name');
+      expect(changed.row?.updated_at).not.toEqual(before.row?.updated_at);
+      expect(changed.binding?.name).toBe('New Name');
+      expect(changed.binding?.last_login_at).toEqual(before.binding?.last_login_at);
+      const identityLogin = (row: typeof before.row) =>
+        (row?.data as { external_identities?: Array<{ last_login_at: string }> })
+          ?.external_identities?.[0]?.last_login_at;
+      expect(identityLogin(changed.row)).toBe(identityLogin(before.row));
+
+      // A launch is a sign-in and moves it.
+      vi.setSystemTime(start + 10_800_000);
+      state.exchange = assertion({ name: 'New Name' });
+      await launch.create({ launchCode: 'code-2' });
+      const relaunched = await readRows();
+      expect(relaunched.binding?.last_login_at).not.toEqual(before.binding?.last_login_at);
+      expect(identityLogin(relaunched.row)).not.toBe(identityLogin(before.row));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('applies a demotion on refresh instead of re-issuing the old role', async () => {
