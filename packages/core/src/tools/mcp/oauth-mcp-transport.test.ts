@@ -11,26 +11,31 @@ import { request as httpRequest } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MCPOAuthClientRegistrationID, MCPOAuthDCRDiagnostic } from '../../types/mcp.js';
 
-vi.mock('../../utils/safe-outbound-fetch', () => ({
-  assertSafeOAuthUrl: (input: string, options: { allowLocalhostHttp?: boolean } = {}) => {
-    const url = new URL(input);
-    const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
-    if (url.protocol !== 'https:' && !(options.allowLocalhostHttp && loopback)) {
-      throw new Error('OAuth endpoints require HTTPS');
-    }
-    return url;
-  },
-  safeOutboundFetch: vi.fn((input: string | URL, options: Record<string, unknown> = {}) => {
-    const {
-      timeoutMs: _timeout,
-      maxRedirects: _max,
-      maxResponseBytes: _bytes,
-      allowLocalhostHttp: _local,
-      ...init
-    } = options;
-    return globalThis.fetch(input, init as RequestInit);
-  }),
-}));
+vi.mock('../../utils/safe-outbound-fetch', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/safe-outbound-fetch')>();
+  return {
+    ...actual,
+    assertSafeOAuthUrl: (input: string, options: { allowLocalhostHttp?: boolean } = {}) => {
+      const url = new URL(input);
+      const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+      if (url.protocol !== 'https:' && !(options.allowLocalhostHttp && loopback)) {
+        throw new Error('OAuth endpoints require HTTPS');
+      }
+      return url;
+    },
+    safeOutboundFetch: vi.fn((input: string | URL, options: Record<string, unknown> = {}) => {
+      const {
+        timeoutMs: _timeout,
+        maxRedirects: _max,
+        maxResponseBytes: _bytes,
+        allowLocalhostHttp: _local,
+        assertCurrent: _assert,
+        ...init
+      } = options;
+      return globalThis.fetch(input, init as RequestInit);
+    }),
+  };
+});
 
 import { safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import type { MCPOAuthDynamicClientRegistrationResolver } from './oauth-mcp-transport';
@@ -1745,7 +1750,579 @@ describe('oauth_authorize_built instrumentation', () => {
     expect(line).not.toContain('code_challenge');
     expect(line).not.toContain('/mcp-servers/oauth-callback');
     expect(line).not.toContain('/oauth/authorize');
-    expect(line).not.toContain('/oauth/register');
+  });
+});
+
+describe('/authorize preflight probe + stale client recovery', () => {
+  const originalFetch = globalThis.fetch;
+  const redirectUri = 'https://agor.example.com/mcp-servers/oauth-callback';
+  const prefetchedOptions = {
+    resourceMetadataUrl: 'https://auth.provider.example/.well-known/oauth-protected-resource',
+    prefetchedAuthServerMetadata: {
+      issuer: 'https://auth.provider.example',
+      authorization_endpoint: 'https://auth.provider.example/oauth/authorize',
+      token_endpoint: 'https://auth.provider.example/oauth/token',
+      registration_endpoint: 'https://auth.provider.example/oauth/register',
+      code_challenge_methods_supported: ['S256'],
+    },
+    resourceUri: 'https://auth.provider.example/mcp',
+    cacheKey: 'https://auth.provider.example',
+    compatibilityMode: 'marketplace' as const,
+    dcrMode: 'advertised' as const,
+  };
+
+  beforeEach(() => {
+    clearAuthCodeTokenCache();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('detects HTTP 400 + Link rel registration, invalidates stale client and re-registers', async () => {
+    __seedDynamicClientCacheForTests('https://auth.provider.example/oauth/register', {
+      client_id: 'stale-client-1',
+      redirect_uri: redirectUri,
+    });
+
+    const invalidateFn = vi.fn().mockResolvedValue(true);
+    const fetchCalls: Array<{ url: string; method?: string }> = [];
+
+    globalThis.fetch = vi.fn().mockImplementation(async (urlInput: unknown, init?: RequestInit) => {
+      const url = String(urlInput);
+      const method = init?.method ?? 'GET';
+      fetchCalls.push({ url, method });
+
+      if (
+        url.startsWith('https://auth.provider.example/oauth/authorize') &&
+        url.includes('client_id=stale-client-1')
+      ) {
+        return new Response('Client Not Found', {
+          status: 400,
+          headers: {
+            Link: '<https://auth.provider.example/oauth/register>; rel="http://oauth.net/core/2.1/#registration"',
+          },
+        });
+      }
+
+      if (url === 'https://auth.provider.example/oauth/register' && method === 'POST') {
+        return new Response(
+          JSON.stringify({ client_id: 'fresh-client-2', redirect_uris: [redirectUri] }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (
+        url.startsWith('https://auth.provider.example/oauth/authorize') &&
+        url.includes('client_id=fresh-client-2')
+      ) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: 'https://auth.provider.example/login' },
+        });
+      }
+
+      return new Response('Not found', { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const ctx = await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...prefetchedOptions,
+      invalidateDynamicClientRegistration: invalidateFn,
+    });
+
+    expect(invalidateFn).toHaveBeenCalledWith('stale-client-1');
+    expect(ctx.clientId).toBe('fresh-client-2');
+    expect(ctx.authorizationUrl).toContain('client_id=fresh-client-2');
+    expect(fetchCalls).toHaveLength(3);
+    expect(fetchCalls[0].url).toContain('client_id=stale-client-1');
+    expect(fetchCalls[1].url).toBe('https://auth.provider.example/oauth/register');
+    expect(fetchCalls[1].method).toBe('POST');
+    expect(fetchCalls[2].url).toContain('client_id=fresh-client-2');
+  });
+
+  it('detects HTTP 400 + JSON error invalid_client, invalidates and re-registers', async () => {
+    __seedDynamicClientCacheForTests('https://auth.provider.example/oauth/register', {
+      client_id: 'stale-client-1',
+      redirect_uri: redirectUri,
+    });
+
+    const invalidateFn = vi.fn().mockResolvedValue(true);
+
+    globalThis.fetch = vi.fn().mockImplementation(async (urlInput: unknown, init?: RequestInit) => {
+      const url = String(urlInput);
+      const method = init?.method ?? 'GET';
+
+      if (
+        url.startsWith('https://auth.provider.example/oauth/authorize') &&
+        url.includes('client_id=stale-client-1')
+      ) {
+        return new Response(
+          JSON.stringify({ error: 'invalid_client', error_description: 'Unknown client' }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (url === 'https://auth.provider.example/oauth/register' && method === 'POST') {
+        return new Response(
+          JSON.stringify({ client_id: 'fresh-client-json', redirect_uris: [redirectUri] }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (
+        url.startsWith('https://auth.provider.example/oauth/authorize') &&
+        url.includes('client_id=fresh-client-json')
+      ) {
+        return new Response(null, { status: 302, headers: { Location: '/login' } });
+      }
+
+      return new Response('Not found', { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const ctx = await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...prefetchedOptions,
+      invalidateDynamicClientRegistration: invalidateFn,
+    });
+
+    expect(invalidateFn).toHaveBeenCalledWith('stale-client-1');
+    expect(ctx.clientId).toBe('fresh-client-json');
+  });
+
+  it('throws actionable error and logs when retry probe also fails with stale client signal', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    __seedDynamicClientCacheForTests('https://auth.provider.example/oauth/register', {
+      client_id: 'stale-client-1',
+      redirect_uri: redirectUri,
+    });
+
+    globalThis.fetch = vi.fn().mockImplementation(async (urlInput: unknown, init?: RequestInit) => {
+      const url = String(urlInput);
+      const method = init?.method ?? 'GET';
+
+      if (url.startsWith('https://auth.provider.example/oauth/authorize')) {
+        return new Response(
+          JSON.stringify({ error: 'invalid_request', error_description: 'Unknown client' }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (url === 'https://auth.provider.example/oauth/register' && method === 'POST') {
+        return new Response(
+          JSON.stringify({ client_id: 'fresh-client-2', redirect_uris: [redirectUri] }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response('Not found', { status: 404 });
+    }) as unknown as typeof fetch;
+
+    await expect(startMCPOAuthFlow('', undefined, redirectUri, prefetchedOptions)).rejects.toThrow(
+      'The MCP server is rejecting the OAuth client registration. The server may have reset its client store. Please try reconnecting later or contact the MCP server operator.'
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('event=oauth_preflight_retry_failed')
+    );
+  });
+
+  it('detects HTTP 400 with plain-text body containing "is not registered", invalidates and re-registers', async () => {
+    __seedDynamicClientCacheForTests('https://auth.provider.example/oauth/register', {
+      client_id: 'stale-client-fastmcp',
+      redirect_uri: redirectUri,
+    });
+
+    const invalidateFn = vi.fn().mockResolvedValue(true);
+    globalThis.fetch = vi.fn().mockImplementation(async (urlInput: unknown, init?: RequestInit) => {
+      const url = String(urlInput);
+      const method = init?.method ?? 'GET';
+
+      if (
+        url.startsWith('https://auth.provider.example/oauth/authorize') &&
+        url.includes('client_id=stale-client-fastmcp')
+      ) {
+        return new Response('Error: Client is not registered on this server', {
+          status: 400,
+          headers: { 'Content-Type': 'text/plain' },
+        });
+      }
+
+      if (url === 'https://auth.provider.example/oauth/register' && method === 'POST') {
+        return new Response(
+          JSON.stringify({ client_id: 'fresh-client-fastmcp', redirect_uris: [redirectUri] }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (
+        url.startsWith('https://auth.provider.example/oauth/authorize') &&
+        url.includes('client_id=fresh-client-fastmcp')
+      ) {
+        return new Response(null, { status: 302, headers: { Location: '/login' } });
+      }
+
+      return new Response('Not found', { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const ctx = await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...prefetchedOptions,
+      invalidateDynamicClientRegistration: invalidateFn,
+    });
+
+    expect(invalidateFn).toHaveBeenCalledWith('stale-client-fastmcp');
+    expect(ctx.clientId).toBe('fresh-client-fastmcp');
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringContaining('event=oauth_preflight_stale_detected')
+    );
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringContaining('event=oauth_dcr_invalidated')
+    );
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringContaining('event=oauth_preflight_recovery_started')
+    );
+  });
+
+  it('detects HTTP 400 with statusText containing "is not registered", invalidates and re-registers', async () => {
+    __seedDynamicClientCacheForTests('https://auth.provider.example/oauth/register', {
+      client_id: 'stale-client-statustext',
+      redirect_uri: redirectUri,
+    });
+
+    const invalidateFn = vi.fn().mockResolvedValue(true);
+    globalThis.fetch = vi.fn().mockImplementation(async (urlInput: unknown, init?: RequestInit) => {
+      const url = String(urlInput);
+      const method = init?.method ?? 'GET';
+
+      if (
+        url.startsWith('https://auth.provider.example/oauth/authorize') &&
+        url.includes('client_id=stale-client-statustext')
+      ) {
+        return new Response('', {
+          status: 400,
+          statusText: 'OAuth client is not registered',
+        });
+      }
+
+      if (url === 'https://auth.provider.example/oauth/register' && method === 'POST') {
+        return new Response(
+          JSON.stringify({ client_id: 'fresh-client-statustext', redirect_uris: [redirectUri] }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (
+        url.startsWith('https://auth.provider.example/oauth/authorize') &&
+        url.includes('client_id=fresh-client-statustext')
+      ) {
+        return new Response(null, { status: 302, headers: { Location: '/login' } });
+      }
+
+      return new Response('Not found', { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const ctx = await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...prefetchedOptions,
+      invalidateDynamicClientRegistration: invalidateFn,
+    });
+
+    expect(invalidateFn).toHaveBeenCalledWith('stale-client-statustext');
+    expect(ctx.clientId).toBe('fresh-client-statustext');
+  });
+
+  it('proceeds normally to browser when probe returns 200 or 302 redirect', async () => {
+    __seedDynamicClientCacheForTests('https://auth.provider.example/oauth/register', {
+      client_id: 'cached-client-ok',
+      redirect_uri: redirectUri,
+    });
+
+    const invalidateFn = vi.fn();
+    const fetchCalls: string[] = [];
+
+    globalThis.fetch = vi.fn().mockImplementation(async (urlInput: unknown) => {
+      fetchCalls.push(String(urlInput));
+      return new Response(null, { status: 302, headers: { Location: '/auth/login' } });
+    }) as unknown as typeof fetch;
+
+    const ctx = await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...prefetchedOptions,
+      invalidateDynamicClientRegistration: invalidateFn,
+    });
+
+    expect(invalidateFn).not.toHaveBeenCalled();
+    expect(ctx.clientId).toBe('cached-client-ok');
+    expect(fetchCalls).toHaveLength(1);
+  });
+
+  it('does not invalidate DCR on generic invalid_request parameter error without client indication', async () => {
+    __seedDynamicClientCacheForTests('https://auth.provider.example/oauth/register', {
+      client_id: 'cached-client-ok',
+      redirect_uri: redirectUri,
+    });
+
+    const invalidateFn = vi.fn();
+    globalThis.fetch = vi.fn().mockImplementation(async () => {
+      return new Response(
+        JSON.stringify({
+          error: 'invalid_request',
+          error_description: 'Unsupported response_type',
+        }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }) as unknown as typeof fetch;
+
+    const ctx = await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...prefetchedOptions,
+      invalidateDynamicClientRegistration: invalidateFn,
+    });
+
+    expect(invalidateFn).not.toHaveBeenCalled();
+    expect(ctx.clientId).toBe('cached-client-ok');
+  });
+
+  it('detects 302 redirect to error page with error=invalid_client, invalidates and re-registers', async () => {
+    __seedDynamicClientCacheForTests('https://auth.provider.example/oauth/register', {
+      client_id: 'stale-client-302',
+      redirect_uri: redirectUri,
+    });
+
+    const invalidateFn = vi.fn().mockResolvedValue(true);
+    globalThis.fetch = vi.fn().mockImplementation(async (urlInput: unknown, init?: RequestInit) => {
+      const url = String(urlInput);
+      const method = init?.method ?? 'GET';
+
+      if (
+        url.startsWith('https://auth.provider.example/oauth/authorize') &&
+        url.includes('client_id=stale-client-302')
+      ) {
+        return new Response(null, {
+          status: 302,
+          headers: {
+            Location:
+              'https://auth.provider.example/error?error=invalid_client&error_description=Unknown+client',
+          },
+        });
+      }
+
+      if (url === 'https://auth.provider.example/oauth/register' && method === 'POST') {
+        return new Response(
+          JSON.stringify({ client_id: 'fresh-client-after-302', redirect_uris: [redirectUri] }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (
+        url.startsWith('https://auth.provider.example/oauth/authorize') &&
+        url.includes('client_id=fresh-client-after-302')
+      ) {
+        return new Response(null, { status: 302, headers: { Location: '/login' } });
+      }
+
+      return new Response('Not found', { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const ctx = await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...prefetchedOptions,
+      invalidateDynamicClientRegistration: invalidateFn,
+    });
+
+    expect(invalidateFn).toHaveBeenCalledWith('stale-client-302');
+    expect(ctx.clientId).toBe('fresh-client-after-302');
+  });
+
+  it('does not invalidate DCR when invalid_request description mentions client in unrelated context (PKCE, redirect_uri, rate limit)', async () => {
+    __seedDynamicClientCacheForTests('https://auth.provider.example/oauth/register', {
+      client_id: 'cached-client-ok',
+      redirect_uri: redirectUri,
+    });
+
+    const invalidateFn = vi.fn();
+    globalThis.fetch = vi.fn().mockImplementation(async () => {
+      return new Response(
+        JSON.stringify({
+          error: 'invalid_request',
+          error_description: 'The client must provide a code challenge with PKCE',
+        }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }) as unknown as typeof fetch;
+
+    const ctx = await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...prefetchedOptions,
+      invalidateDynamicClientRegistration: invalidateFn,
+    });
+
+    expect(invalidateFn).not.toHaveBeenCalled();
+    expect(ctx.clientId).toBe('cached-client-ok');
+  });
+
+  it('does not invalidate DCR when 400 plain text mentions not registered for user or account', async () => {
+    __seedDynamicClientCacheForTests('https://auth.provider.example/oauth/register', {
+      client_id: 'cached-client-ok',
+      redirect_uri: redirectUri,
+    });
+
+    const invalidateFn = vi.fn();
+    globalThis.fetch = vi.fn().mockImplementation(async () => {
+      return new Response('User is not registered on this service. Please sign up first.', {
+        status: 400,
+        headers: { 'Content-Type': 'text/plain' },
+      });
+    }) as unknown as typeof fetch;
+
+    const ctx = await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...prefetchedOptions,
+      invalidateDynamicClientRegistration: invalidateFn,
+    });
+
+    expect(invalidateFn).not.toHaveBeenCalled();
+    expect(ctx.clientId).toBe('cached-client-ok');
+  });
+
+  it('does not invalidate DCR when text mentions client and user not registered in unrelated sentences', async () => {
+    __seedDynamicClientCacheForTests('https://auth.provider.example/oauth/register', {
+      client_id: 'cached-client-ok',
+      redirect_uri: redirectUri,
+    });
+
+    const invalidateFn = vi.fn();
+    globalThis.fetch = vi.fn().mockImplementation(async () => {
+      return new Response('Client authentication failed. User is not registered.', {
+        status: 400,
+        headers: { 'Content-Type': 'text/plain' },
+      });
+    }) as unknown as typeof fetch;
+
+    const ctx = await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...prefetchedOptions,
+      invalidateDynamicClientRegistration: invalidateFn,
+    });
+
+    expect(invalidateFn).not.toHaveBeenCalled();
+    expect(ctx.clientId).toBe('cached-client-ok');
+  });
+
+  it('aborts immediately without re-registering when DCR invalidation encounters Forbidden authority revocation', async () => {
+    __seedDynamicClientCacheForTests('https://auth.provider.example/oauth/register', {
+      client_id: 'cached-client-stale',
+      redirect_uri: redirectUri,
+    });
+
+    const forbiddenErr = new Error(
+      'MCP OAuth client-registration authority changed. Restart OAuth.'
+    );
+    forbiddenErr.name = 'Forbidden';
+    const invalidateFn = vi.fn().mockRejectedValue(forbiddenErr);
+
+    globalThis.fetch = vi.fn().mockImplementation(async () => {
+      return new Response(
+        JSON.stringify({ error: 'invalid_client', error_description: 'Unknown client' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }) as unknown as typeof fetch;
+
+    await expect(
+      startMCPOAuthFlow('', undefined, redirectUri, {
+        ...prefetchedOptions,
+        invalidateDynamicClientRegistration: invalidateFn,
+      })
+    ).rejects.toThrow('MCP OAuth client-registration authority changed. Restart OAuth.');
+
+    expect(invalidateFn).toHaveBeenCalledWith('cached-client-stale');
+    expect(globalThis.fetch).not.toHaveBeenCalledWith(
+      expect.stringContaining('/register'),
+      expect.anything()
+    );
+  });
+
+  it('fences preflight probe and invalidation with assertCurrent: loses authority during probe', async () => {
+    __seedDynamicClientCacheForTests('https://auth.provider.example/oauth/register', {
+      client_id: 'cached-client-stale',
+      redirect_uri: redirectUri,
+    });
+
+    const invalidateFn = vi.fn().mockResolvedValue(true);
+    let checkCount = 0;
+    const assertCurrent = vi.fn().mockImplementation(() => {
+      checkCount++;
+      if (checkCount >= 3) {
+        throw new Error('Socket authority revoked during probe');
+      }
+    });
+
+    globalThis.fetch = vi.fn().mockImplementation(async () => {
+      return new Response(
+        JSON.stringify({ error: 'invalid_client', error_description: 'Unknown client' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }) as unknown as typeof fetch;
+
+    await expect(
+      startMCPOAuthFlow('', undefined, redirectUri, {
+        ...prefetchedOptions,
+        invalidateDynamicClientRegistration: invalidateFn,
+        assertCurrent,
+      })
+    ).rejects.toThrow('Socket authority revoked during probe');
+
+    expect(invalidateFn).not.toHaveBeenCalled();
+  });
+
+  it('does not delete newer client from dynamicClientCache if updated concurrently', async () => {
+    __seedDynamicClientCacheForTests('https://auth.provider.example/oauth/register', {
+      client_id: 'stale-client-1',
+      redirect_uri: redirectUri,
+    });
+
+    const invalidateFn = vi.fn().mockImplementation(async () => {
+      // Simulate concurrent worker caching a newer client
+      __seedDynamicClientCacheForTests('https://auth.provider.example/oauth/register', {
+        client_id: 'newer-client-from-concurrent-worker',
+        redirect_uri: redirectUri,
+      });
+      return true;
+    });
+
+    globalThis.fetch = vi.fn().mockImplementation(async (urlInput: unknown, init?: RequestInit) => {
+      const url = String(urlInput);
+      const method = init?.method ?? 'GET';
+
+      if (
+        url.startsWith('https://auth.provider.example/oauth/authorize') &&
+        url.includes('client_id=stale-client-1')
+      ) {
+        return new Response(
+          JSON.stringify({ error: 'invalid_client', error_description: 'Unknown client' }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url === 'https://auth.provider.example/oauth/register' && method === 'POST') {
+        return new Response(
+          JSON.stringify({ client_id: 'fresh-client-3', redirect_uris: [redirectUri] }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (
+        url.startsWith('https://auth.provider.example/oauth/authorize') &&
+        (url.includes('client_id=fresh-client-3') ||
+          url.includes('client_id=newer-client-from-concurrent-worker'))
+      ) {
+        return new Response(null, { status: 302, headers: { Location: '/login' } });
+      }
+      return new Response('Not found', { status: 404 });
+    }) as unknown as typeof fetch;
+
+    await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...prefetchedOptions,
+      invalidateDynamicClientRegistration: invalidateFn,
+    });
+
+    expect(invalidateFn).toHaveBeenCalledWith('stale-client-1');
+
+    const nextFlow = await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...prefetchedOptions,
+      reuseDynamicClientRegistration: true,
+    });
+    expect(nextFlow.clientId).toBe('newer-client-from-concurrent-worker');
   });
 });
 

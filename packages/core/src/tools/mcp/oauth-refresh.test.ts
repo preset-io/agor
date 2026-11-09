@@ -295,13 +295,14 @@ describe('refreshMCPToken', () => {
       { status: 400 }
     );
 
-    await expect(
-      refreshMCPToken({
-        tokenEndpoint: 'https://auth.example.com/token',
-        refreshToken: 'refresh-secret-marker-that-must-not-be-logged',
-        clientId: 'client-marker-that-must-not-be-logged',
-      })
-    ).rejects.toBeInstanceOf(InvalidGrantError);
+    const error = await refreshMCPToken({
+      tokenEndpoint: 'https://auth.example.com/token',
+      refreshToken: 'refresh-secret-marker-that-must-not-be-logged',
+      clientId: 'client-marker-that-must-not-be-logged',
+    }).catch((e) => e);
+
+    expect(error).toBeInstanceOf(InvalidGrantError);
+    expect(error.invalidClientRegistration).toBe(false);
 
     const logged = [console.log, console.warn, console.error]
       .flatMap((logger) => vi.mocked(logger).mock.calls)
@@ -311,6 +312,43 @@ describe('refreshMCPToken', () => {
     expect(logged).not.toContain('refresh-secret-marker');
     expect(logged).not.toContain('client-marker');
     expect(logged).not.toContain('auth.example.com');
+  });
+
+  it('surfaces invalid_client as InvalidGrantError with invalidClientRegistration=true', async () => {
+    mockFetchOnce(
+      {
+        error: 'invalid_client',
+        error_description: 'provider-body-marker-that-must-not-be-logged',
+      },
+      { status: 400 }
+    );
+
+    const error = await refreshMCPToken({
+      tokenEndpoint: 'https://auth.example.com/token',
+      refreshToken: 'refresh-secret-marker-that-must-not-be-logged',
+      clientId: 'client-marker-that-must-not-be-logged',
+    }).catch((e) => e);
+
+    expect(error).toBeInstanceOf(InvalidGrantError);
+    expect(error.invalidClientRegistration).toBe(true);
+  });
+
+  it('surfaces unauthorized_client as InvalidGrantError with invalidClientRegistration=true', async () => {
+    mockFetchOnce(
+      {
+        error: 'unauthorized_client',
+      },
+      { status: 400 }
+    );
+
+    const error = await refreshMCPToken({
+      tokenEndpoint: 'https://auth.example.com/token',
+      refreshToken: 'refresh-secret-marker-that-must-not-be-logged',
+      clientId: 'client-marker-that-must-not-be-logged',
+    }).catch((e) => e);
+
+    expect(error).toBeInstanceOf(InvalidGrantError);
+    expect(error.invalidClientRegistration).toBe(true);
   });
 
   it('throws generic Error for other OAuth errors', async () => {
@@ -598,6 +636,42 @@ describe('refreshAndPersistToken', () => {
       auth: { oauth_token_url: 'https://auth.example.com/token' },
     });
     mockFetchJson({ error: 'invalid_grant' }, 400);
+    mockDeleteGrantVersion.mockResolvedValue(true);
+
+    const onInvalidGrant = vi.fn();
+
+    await expect(
+      refreshAndPersistToken({
+        db: { run: () => undefined } as any,
+        userId: USER_ID,
+        mcpServerId: SERVER_ID,
+        observedRefreshVersion: observedVersion(),
+        validateGrant: async () => true,
+        onInvalidGrant,
+      })
+    ).rejects.toBeInstanceOf(InvalidGrantError);
+
+    expect(mockDeleteGrantVersion).toHaveBeenCalledWith(USER_ID, SERVER_ID, 0, undefined);
+    expect(onInvalidGrant).toHaveBeenCalledWith({
+      userId: USER_ID,
+      mcpServerId: SERVER_ID,
+    });
+    expect(mockCompleteStandaloneRefresh).not.toHaveBeenCalled();
+  });
+
+  it('deletes token row on invalid_client and invokes onInvalidGrant hook', async () => {
+    mockGetToken.mockResolvedValue({
+      user_id: USER_ID,
+      mcp_server_id: SERVER_ID,
+      oauth_access_token: 'old-a',
+      oauth_refresh_token: 'rt-revoked',
+      oauth_client_id: 'cid',
+    });
+    mockFindById.mockResolvedValue({
+      url: 'https://srv.example.com/mcp',
+      auth: { oauth_token_url: 'https://auth.example.com/token' },
+    });
+    mockFetchJson({ error: 'invalid_client' }, 400);
     mockDeleteGrantVersion.mockResolvedValue(true);
 
     const onInvalidGrant = vi.fn();

@@ -8,6 +8,7 @@ import {
   initializeDatabase,
   isPostgresDatabase,
   MCPOAuthClientRegistrationRepository,
+  MCPOAuthPendingFlowRepository,
   MCPServerRepository,
   type RawDatabase,
   rawRows,
@@ -38,6 +39,7 @@ const oauthFixture = vi.hoisted(() => ({
   exchanges: 0,
   registrations: 0,
   exchangeFailure: undefined as undefined | 'invalid_client',
+  authorizeProbeFailure: undefined as undefined | 'invalid_client',
   afterDcrResolved: undefined as undefined | ((registrationId: string) => Promise<void>),
   beforeGrantLock: undefined as undefined | (() => Promise<void>),
   beforeExchangeReturn: undefined as undefined | (() => Promise<void>),
@@ -144,6 +146,33 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
           clientRegistrationId = resolved.registrationId;
           if (clientRegistrationId) {
             await oauthFixture.afterDcrResolved?.(clientRegistrationId);
+          }
+        }
+        if (oauthFixture.authorizeProbeFailure === 'invalid_client' && clientRegistrationId) {
+          oauthFixture.authorizeProbeFailure = undefined;
+          if (options?.invalidateDynamicClientRegistration) {
+            await options.invalidateDynamicClientRegistration(resolvedClientId!);
+          }
+          if (options?.resolveDynamicClientRegistration) {
+            const reResolved = await options.resolveDynamicClientRegistration(
+              {
+                registrationEndpoint: 'https://provider.example.test/register',
+                registrationEndpointSource: 'metadata',
+                metadataUrl: 'https://provider.example.test/.well-known/oauth-authorization-server',
+                resourceUri: 'https://mcp.provider.example.test/mcp',
+                issuer: 'https://provider.example.test',
+                authorizationEndpoint: 'https://provider.example.test/authorize',
+                tokenEndpoint: 'https://provider.example.test/token',
+                redirectUri,
+                clientName: 'Agor MCP Client',
+                applicationType: 'web',
+                compatibilityMode: 'strict',
+                dcrMode: 'advertised',
+              },
+              async () => ({ client_id: `fixture-dcr-client-${++oauthFixture.registrations}` })
+            );
+            resolvedClientId = reResolved.registration.client_id;
+            clientRegistrationId = reResolved.registrationId;
           }
         }
         if (!resolvedClientId) throw new Error('Fixture OAuth client was not resolved');
@@ -912,6 +941,188 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           }),
         ]);
       });
+
+      // Next oauth-start registers a replacement client instead of reusing the stale one
+      const restarted = (await replicaA.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: tokenRejectedServerId }, params(user))) as {
+        authorizationUrl: string;
+      };
+      expect(restarted.authorizationUrl).toBeDefined();
+      const afterRestart = await runWithTenantDatabaseScope(replicaA.db, tenantId, (scoped) =>
+        new MCPOAuthClientRegistrationRepository(scoped).getCurrent(tenantId, tokenRejectedServerId)
+      );
+      expect(afterRestart).toMatchObject({ status: 'registered', isCurrent: true });
+      expect(afterRestart?.registrationId).not.toBe(before?.registrationId);
+    });
+
+    it('invalidates DCR registration during token refresh on invalid_client and next reconnect creates replacement client', async () => {
+      const serverId = await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
+        const server = await new MCPServerRepository(scoped).create({
+          name: `ha-refresh-invalid-client-${crypto.randomUUID()}`,
+          transport: 'http',
+          url: 'https://mcp.provider.example.test/mcp',
+          scope: 'global',
+          enabled: true,
+          source: 'user',
+          owner_user_id: user.user_id,
+          auth: {
+            type: 'oauth',
+            oauth_mode: 'per_user',
+            oauth_dcr_mode: 'advertised',
+            oauth_compatibility_mode: 'strict',
+          },
+        });
+        return server.mcp_server_id as MCPServerID;
+      });
+
+      // 1. Initial OAuth start performs DCR
+      const started = (await replicaA.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: serverId }, params(user))) as {
+        authorizationUrl: string;
+      };
+      expect(started.authorizationUrl).toBeDefined();
+      const initialDcr = await runWithTenantDatabaseScope(replicaA.db, tenantId, (scoped) =>
+        new MCPOAuthClientRegistrationRepository(scoped).getCurrent(tenantId, serverId)
+      );
+      expect(initialDcr).toMatchObject({ status: 'registered', isCurrent: true });
+
+      // 2. Save a user token using that DCR client
+      const initialClientId = `fixture-dcr-client-${oauthFixture.registrations}`;
+      await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
+        const gen = await new MCPOAuthPendingFlowRepository(scoped).allocateGrantGeneration({
+          tenantId,
+          mcpServerId: serverId,
+          oauthMode: 'per_user',
+          subjectUserId: user.user_id as UserID,
+        });
+        await new UserMCPOAuthTokenRepository(scoped, masterSecret).saveToken(
+          user.user_id as UserID,
+          serverId,
+          {
+            accessToken: 'expired-access-token',
+            refreshToken: 'refresh-token-1',
+            clientId: initialClientId,
+            expiresAt: new Date(Date.now() - 60_000),
+            grantBinding: {
+              generation: gen,
+              version: 1,
+              fingerprint: 'a'.repeat(64),
+              metadataUri: 'https://mcp.provider.example.test/.well-known/oauth-protected-resource',
+              resourceUri: 'https://mcp.provider.example.test/mcp',
+              issuer: 'https://provider.example.test',
+              authorizationEndpoint: 'https://provider.example.test/authorize',
+              tokenEndpoint: 'https://provider.example.test/token',
+              redirectUri: 'https://agor.example.test/mcp-servers/oauth-callback',
+            },
+          }
+        );
+      });
+
+      // 3. Invalidate client registration using the matching client ID (as executed on refresh invalid_client)
+      await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
+        const invalidated = await new MCPOAuthClientRegistrationRepository(
+          scoped
+        ).invalidateIfCurrentMatchesClientId({
+          tenantId,
+          serverId,
+          clientId: initialClientId,
+          masterSecret,
+        });
+        expect(invalidated).toBe(true);
+      });
+
+      // 4. Assert initial registration is now superseded and no current registration exists
+      await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
+        const current = await new MCPOAuthClientRegistrationRepository(scoped).getCurrent(
+          tenantId,
+          serverId
+        );
+        expect(current).toBeNull();
+      });
+
+      // 5. Next reconnect (oauth-start) runs DCR again, creating a fresh client
+      const restarted = (await replicaA.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: serverId }, params(user))) as {
+        authorizationUrl: string;
+      };
+      expect(restarted.authorizationUrl).toBeDefined();
+
+      const replacementDcr = await runWithTenantDatabaseScope(replicaA.db, tenantId, (scoped) =>
+        new MCPOAuthClientRegistrationRepository(scoped).getCurrent(tenantId, serverId)
+      );
+      expect(replacementDcr).toMatchObject({ status: 'registered', isCurrent: true });
+      expect(replacementDcr?.registrationId).not.toBe(initialDcr?.registrationId);
+    });
+
+    it('recovers with a new registrationId when /authorize preflight probe detects stale client', async () => {
+      const serverId = await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
+        const server = await new MCPServerRepository(scoped).create({
+          name: `ha-authorize-preflight-stale-${crypto.randomUUID()}`,
+          transport: 'http',
+          url: 'https://mcp.provider.example.test/mcp',
+          scope: 'global',
+          enabled: true,
+          source: 'user',
+          owner_user_id: user.user_id,
+          auth: {
+            type: 'oauth',
+            oauth_mode: 'per_user',
+            oauth_dcr_mode: 'advertised',
+            oauth_compatibility_mode: 'strict',
+          },
+        });
+        return server.mcp_server_id as MCPServerID;
+      });
+
+      // 1. Initial OAuth start performs DCR on replicaA
+      const started = (await replicaA.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: serverId }, params(user))) as {
+        authorizationUrl: string;
+      };
+      expect(started.authorizationUrl).toBeDefined();
+      const initialDcr = await runWithTenantDatabaseScope(replicaA.db, tenantId, (scoped) =>
+        new MCPOAuthClientRegistrationRepository(scoped).getCurrent(tenantId, serverId)
+      );
+      expect(initialDcr).toMatchObject({ status: 'registered', isCurrent: true });
+
+      // 2. Simulate authorization server rejecting the cached client on next start
+      oauthFixture.authorizeProbeFailure = 'invalid_client';
+
+      // 3. Next OAuth start on replicaB detects stale client in preflight, invalidates it, and re-registers
+      const recovered = (await replicaB.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: serverId }, params(user))) as {
+        authorizationUrl: string;
+      };
+      expect(recovered.authorizationUrl).toBeDefined();
+
+      // 4. Assert initial registration is now superseded with provider_invalidated_client
+      const [initialRow] = rawRows(
+        await runWithTenantDatabaseScope(replicaA.db, tenantId, (scoped) =>
+          executeRaw(
+            scoped,
+            sql`SELECT status, is_current, failure_code FROM mcp_oauth_client_registrations
+                  WHERE registration_id = ${initialDcr?.registrationId}`
+          )
+        )
+      ) as Array<{ status: string; is_current: boolean; failure_code: string }>;
+      expect(initialRow).toEqual({
+        status: 'superseded',
+        is_current: false,
+        failure_code: 'provider_invalidated_client',
+      });
+
+      // 5. Assert current registration is the replacement with a new registrationId
+      const replacementDcr = await runWithTenantDatabaseScope(replicaB.db, tenantId, (scoped) =>
+        new MCPOAuthClientRegistrationRepository(scoped).getCurrent(tenantId, serverId)
+      );
+      expect(replacementDcr).toMatchObject({ status: 'registered', isCurrent: true });
+      expect(replacementDcr?.registrationId).not.toBe(initialDcr?.registrationId);
+      expect(recovered.authorizationUrl).not.toBe(started.authorizationUrl);
     });
 
     it('lets only a current-tenant admin reset DCR authority before callback completion', async () => {
