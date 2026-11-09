@@ -379,12 +379,15 @@ still open at that deadline.
 
 Direct use of a personal API key (REST, CLI, or MCP) is checked against the same
 endpoint. For an account with a launch identity at this issuer, each daemon asks
-at most once every 15 minutes per user before accepting the key. A refusal has
-the same effect as one at refresh, so a removal stops the key within 15 minutes
-while the issuer is reachable, and a role change applies at the same check. If
-the check is unavailable, the key keeps working for up to one hour after that
-daemon last confirmed the user; after that, requests return a retryable `503`
-and the key is kept. That confirmation is held in memory, so a daemon that
+once the user's last check is 15 minutes old, or after a minute if the last check
+failed. A refusal has the same effect as one at refresh, so a removal stops the
+key within 15 minutes while the issuer is reachable, and a role change applies at
+the same check. A request running in a database transaction, which includes most
+REST writes on PostgreSQL, doesn't wait for a due check: it uses the last known
+answer (or proceeds, if there is none), so it can still succeed while the check
+runs. If the issuer can't answer, the key keeps working for up to one hour after
+that daemon last confirmed the user; after that, requests return a retryable
+`503` and the key is kept. That confirmation is held in memory, so a daemon that
 restarts during an outage returns the `503` straight away. Keys on accounts with
 no launch identity at this issuer are never checked.
 

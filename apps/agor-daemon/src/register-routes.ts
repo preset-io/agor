@@ -1353,14 +1353,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       );
     },
   });
-  apiKeyStrategy.setMembershipCheck(
-    revalidateLaunchSession
-      ? createApiKeyMembershipCheck({
-          revalidate: revalidateLaunchSession,
-          tenantClaim: tenantTokenClaim,
-        })
-      : undefined
-  );
+  const apiKeyMembershipCheck = revalidateLaunchSession
+    ? createApiKeyMembershipCheck({
+        revalidate: revalidateLaunchSession,
+        tenantClaim: tenantTokenClaim,
+      })
+    : undefined;
+  apiKeyStrategy.setMembershipCheck(apiKeyMembershipCheck);
 
   app.use(
     '/authentication/refresh',
@@ -7162,7 +7161,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   if (config.daemon?.mcpEnabled !== false) {
     const { setupMCPRoutes } = await import('./mcp/server.js');
     const toolSearchEnabled = config.daemon?.mcpToolSearch !== false;
-    setupMCPRoutes(app, db, toolSearchEnabled, config, { serverVersion: AGOR_VERSION });
+    setupMCPRoutes(app, db, toolSearchEnabled, config, {
+      serverVersion: AGOR_VERSION,
+      apiKeyMembershipCheck,
+    });
     console.log(
       `✅ MCP server enabled at POST /mcp${toolSearchEnabled ? ' (tool search mode)' : ''}`
     );

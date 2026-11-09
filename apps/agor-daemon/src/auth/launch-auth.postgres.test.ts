@@ -492,10 +492,20 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await expect(authenticate(keyA.rawKey, tenantA)).resolves.toMatchObject({
         user: { user_id: inA.user.user_id },
       });
-      // An ordinary request owns a transaction here; the rejection rolls that one back.
+      // An ordinary request owns a transaction here; it doesn't wait, and rolling it back can't undo the refusal.
       await expect(
-        runWithTenantDatabaseScope(dbB, tenantB, () => authenticate(keyB.rawKey, tenantB))
-      ).rejects.toThrow(/Invalid API key/);
+        runWithTenantDatabaseScope(dbB, tenantB, async () => {
+          await authenticate(keyB.rawKey, tenantB);
+          throw new Error('request failed after authentication');
+        })
+      ).rejects.toThrow(/request failed after authentication/);
+      await vi.waitFor(async () => {
+        const remaining = await runWithTenantDatabaseScope(dbA, tenantB, (scoped) =>
+          new UserApiKeysRepository(scoped).listByUser(inB.user.user_id)
+        );
+        expect(remaining).toEqual([]);
+      });
+      await expect(authenticate(keyB.rawKey, tenantB)).rejects.toThrow(/Invalid API key/);
 
       const keyCount = async (tenantId: string, userId: string) =>
         (
@@ -513,5 +523,84 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await expect(generationIn(tenantB, inB.user.user_id)).resolves.toBe(1);
       await expect(generationIn(tenantA, inA.user.user_id)).resolves.toBe(0);
     });
+
+    it('does not starve the pool when a burst of request transactions finds a check due', async () => {
+      const tenantId = `api-key-burst-${generateId()}`;
+      const revalidationConfig: AgorConfig = {
+        ...config(),
+        external_launch: {
+          ...config().external_launch,
+          session_revalidation_url: 'https://issuer.example.test/revalidate',
+        },
+      };
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string) =>
+          Response.json({
+            assertion: url.endsWith('/revalidate')
+              ? jwt.sign(
+                  {
+                    purpose: 'session_revalidation',
+                    sub: 'burst-subject',
+                    email: 'burst@example.invalid',
+                    role: 'member',
+                    tenant_id: tenantId,
+                    instance_id: 'instance-1',
+                  },
+                  ASSERTION_SECRET,
+                  {
+                    algorithm: 'HS256',
+                    expiresIn: '5m',
+                    issuer: 'https://issuer.example.test',
+                    audience: 'runtime:test',
+                  }
+                )
+              : signClaims({
+                  subject: 'burst-subject',
+                  email: 'burst@example.invalid',
+                  tenantId,
+                }),
+          })
+        )
+      );
+      const { settings } = resolveExternalLaunchSettings(revalidationConfig);
+      const serializeProjection = createLaunchProjectionSerializer();
+      const signedIn = await createLaunchAuthService({
+        db: dbA,
+        config: revalidationConfig,
+        provider: settings,
+        jwtSecret: RUNTIME_SECRET,
+        accessTokenTtl: '15m',
+        refreshTokenTtl: 2_592_000,
+        sessionMaxLifetimeSeconds: 2_592_000,
+        usersService: usersService(dbA),
+        serializeProjection,
+      }).create({ launchCode: tenantId });
+      const { rawKey } = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+        new UserApiKeysRepository(scoped).create(signedIn.user.user_id, 'burst')
+      );
+      const strategy = new ApiKeyStrategy();
+      strategy.setDependencies(new UserApiKeysRepository(dbB), usersService(dbB), dbB);
+      strategy.setMembershipCheck(
+        createApiKeyMembershipCheck({
+          revalidate: createLaunchSessionRevalidator({
+            db: dbB,
+            config: revalidationConfig,
+            provider: settings,
+            serializeProjection,
+          })!,
+        })
+      );
+      // More concurrent transactions than the pool has connections.
+      const requests = Array.from({ length: 16 }, () =>
+        runWithTenantDatabaseScope(dbB, tenantId, () =>
+          strategy.authenticate(
+            { apiKey: rawKey },
+            { tenant: { tenant_id: tenantId, source: 'host' } }
+          )
+        )
+      );
+      await expect(Promise.all(requests)).resolves.toHaveLength(16);
+    }, 20_000);
   }
 );

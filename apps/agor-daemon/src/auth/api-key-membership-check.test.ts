@@ -3,6 +3,7 @@ import {
   createTenantScopedDatabaseProxy,
   getCurrentTenantDatabaseScope,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
 } from '@agor/core/db';
 import { NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import type { UserID } from '@agor/core/types';
@@ -171,5 +172,39 @@ describe('API key membership check', () => {
       await expect(check({ tenantId, userId })).resolves.toBe('allowed');
     });
     expect(revalidate).toHaveBeenCalledTimes(1);
+  });
+
+  describe('inside a request transaction', () => {
+    const db = createTenantScopedDatabaseProxy(createDatabase({ url: ':memory:' }));
+    const inTransaction = <T>(work: () => Promise<T>) =>
+      runWithTenantDatabaseTransaction(db, tenantId, async () => {
+        expect(getCurrentTenantDatabaseScope()).toMatchObject({ transactionActive: true });
+        return work();
+      });
+
+    it('never waits for the issuer, and applies the answer to the next request', async () => {
+      let refuse: (error: Error) => void = () => undefined;
+      const revalidate = vi.fn(() => new Promise((_resolve, reject) => (refuse = reject)));
+      const { check } = harness(revalidate);
+      await expect(inTransaction(() => check({ tenantId, userId }))).resolves.toBe('allowed');
+      await expect(inTransaction(() => check({ tenantId, userId }))).resolves.toBe('allowed');
+      expect(revalidate).toHaveBeenCalledTimes(1);
+      refuse(new NotAuthenticated('refused'));
+      await vi.waitFor(async () =>
+        expect(await inTransaction(() => check({ tenantId, userId }))).toBe('rejected')
+      );
+    });
+
+    it('keeps a known failure closed while the next check runs', async () => {
+      const revalidate = vi
+        .fn()
+        .mockRejectedValueOnce(new Unavailable('down'))
+        .mockReturnValue(new Promise(() => undefined));
+      const { clock, check } = harness(revalidate);
+      await check({ tenantId, userId });
+      clock.nowMs += API_KEY_MEMBERSHIP_RETRY_MS;
+      await expect(inTransaction(() => check({ tenantId, userId }))).resolves.toBe('unavailable');
+      expect(revalidate).toHaveBeenCalledTimes(2);
+    });
   });
 });

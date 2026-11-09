@@ -1,4 +1,4 @@
-import { runWithoutTenantDatabaseScope } from '@agor/core/db';
+import { getCurrentTenantDatabaseScope, runWithoutTenantDatabaseScope } from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
 import type { UserID } from '@agor/core/types';
 import type { LaunchSessionRevalidator } from './launch-auth.js';
@@ -95,11 +95,16 @@ export function createApiKeyMembershipCheck(options: {
     if (membership && now() < membership.nextCheckAtMs) return membership.outcome;
     let pending = inFlight.get(key);
     if (!pending) {
-      // Leave any request transaction: the issuer call must not hold it open, and a refusal must survive the rejected request.
+      // Keep the issuer call and any refusal out of the request's transaction, so a rejected request can't undo the refusal.
       pending = runWithoutTenantDatabaseScope(() => check(key, tenantId, userId)).finally(() => {
         inFlight.delete(key);
       });
       inFlight.set(key, pending);
+    }
+    // A request transaction pins a pool connection the check also needs, so waiting here could starve the pool.
+    const scope = getCurrentTenantDatabaseScope();
+    if (scope?.kind === 'tenant' && scope.transactionActive) {
+      return membership?.outcome ?? 'allowed';
     }
     return pending;
   };
