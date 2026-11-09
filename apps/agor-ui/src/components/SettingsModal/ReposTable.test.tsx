@@ -17,6 +17,10 @@ function makeRepo(overrides: Partial<Repo>): Repo {
   } as Repo;
 }
 
+// DOM query: role queries trip jsdom's border-shorthand parser on disabled antd buttons.
+const rowAction = (icon: string) =>
+  document.querySelector(`.anticon-${icon}`)?.closest('button') as HTMLElement;
+
 describe('ReposTable search', () => {
   it('filters repositories by URL/path fields and highlights visible matches', () => {
     const repoById = new Map<string, Repo>([
@@ -126,7 +130,55 @@ describe('ReposTable authority fencing', () => {
 // Full drill-in edit flows (table, form, shell footer): 6-8s alone, so the
 // 15s default trips under full-suite load.
 describe('ReposTable cleanup configuration authority', { timeout: 30_000 }, () => {
-  it.each([false, true])('omits unchanged policy from metadata saves (admin=%s)', async (admin) => {
+  it('shows a member the settings read-only with no cleanup policy or Save', async () => {
+    const repo = makeRepo({
+      cleanup_policy: { enabled: true, command: './cleanup.sh', allow_branch_protection: true },
+    });
+    const onUpdate = vi.fn();
+    renderWithSettingsShell(
+      <ReposTable
+        repoById={new Map([[repo.repo_id, repo]])}
+        identityKey="member:member"
+        operationScope={['member:member', 1]}
+        onUpdate={onUpdate}
+      />
+    );
+    fireEvent.click(rowAction('edit'));
+    await waitFor(() => expect(screen.getByLabelText('Default Branch')).toHaveValue('main'));
+    expect(screen.getByLabelText('Default Branch')).toBeDisabled();
+    expect(screen.getByText('Only administrators can change repository settings.')).toBeVisible();
+    expect(screen.queryByRole('button', { name: /Branch cleanup/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Save$/ })).not.toBeInTheDocument();
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('offers repository deletion only to admins (admin=%s)', async (admin) => {
+    const repo = makeRepo({});
+    const onDelete = vi.fn();
+    render(
+      <ReposTable
+        repoById={new Map([[repo.repo_id, repo]])}
+        identityKey={admin ? 'admin:admin' : 'member:member'}
+        operationScope={[admin ? 'admin:admin' : 'member:member', 1]}
+        canEditRepos={admin}
+        onDelete={onDelete}
+      />
+    );
+    const deleteButton = rowAction('delete');
+    if (!admin) {
+      expect(deleteButton).toBeDisabled();
+      fireEvent.click(deleteButton);
+      expect(screen.queryByText('Delete Repository')).not.toBeInTheDocument();
+      return;
+    }
+    fireEvent.click(deleteButton);
+    fireEvent.click(await screen.findByRole('button', { name: /Keep Files/ }));
+    await waitFor(() =>
+      expect(onDelete).toHaveBeenCalledWith(repo.repo_id, false, expect.any(Function))
+    );
+  });
+
+  it('omits unchanged policy from administrator metadata saves', async () => {
     const repo = makeRepo({
       cleanup_policy: { enabled: true, command: './cleanup.sh', allow_branch_protection: true },
     });
@@ -134,16 +186,14 @@ describe('ReposTable cleanup configuration authority', { timeout: 30_000 }, () =
     const view = (row: Repo) => (
       <ReposTable
         repoById={new Map([[row.repo_id, row]])}
-        identityKey={admin ? 'admin:admin' : 'member:member'}
-        operationScope={[admin ? 'admin:admin' : 'member:member', 1]}
-        canConfigureCleanup={admin}
+        identityKey="admin:admin"
+        operationScope={['admin:admin', 1]}
+        canEditRepos
         onUpdate={onUpdate}
       />
     );
     const rendered = renderWithSettingsShell(view(repo));
     fireEvent.click(screen.getByRole('button', { name: /edit/i }));
-    if (!admin)
-      expect(screen.queryByRole('button', { name: /Branch cleanup/ })).not.toBeInTheDocument();
     // A concurrent policy update must not be replaced by this metadata-only draft.
     rendered.rerender(
       view({
@@ -167,7 +217,7 @@ describe('ReposTable cleanup configuration authority', { timeout: 30_000 }, () =
         repoById={new Map([[repo.repo_id, repo]])}
         identityKey="admin:admin"
         operationScope={['admin:admin', 1]}
-        canConfigureCleanup
+        canEditRepos
         onUpdate={onUpdate}
       />
     );
@@ -195,7 +245,7 @@ describe('ReposTable cleanup configuration authority', { timeout: 30_000 }, () =
         repoById={new Map([[row.repo_id, row]])}
         identityKey="admin:admin"
         operationScope={['admin:admin', 1]}
-        canConfigureCleanup
+        canEditRepos
         onUpdate={onUpdate}
       />
     );
@@ -258,7 +308,7 @@ describe('repository setup status', () => {
     );
     // The list flags the row; the edit drill-in carries the detail and retry.
     expect(screen.getByText('Failed')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /edit/i }));
+    fireEvent.click(rowAction('edit'));
     expect(screen.getByText('Repository setup failed')).toBeVisible();
     expect(screen.queryByText('credential-redacted synthetic diagnostic')).not.toBeInTheDocument();
     fireEvent.click(screen.getByText('Setup diagnostics'));
@@ -283,6 +333,7 @@ describe('ReposTable live updates', () => {
         repoById={new Map([[row.repo_id, row]])}
         identityKey="admin:admin"
         operationScope={['admin:admin', 1]}
+        canEditRepos
         onUpdate={onUpdate}
       />
     );
@@ -308,6 +359,7 @@ describe('ReposTable live updates', () => {
         repoById={new Map([[repo.repo_id, repo]])}
         identityKey="admin:admin"
         operationScope={['admin:admin', 1]}
+        canEditRepos
       />,
       'repos'
     );

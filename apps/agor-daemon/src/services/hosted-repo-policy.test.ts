@@ -144,6 +144,11 @@ describe('hosted repository storage policy canonical boundaries', () => {
       },
       tenant: { tenant_id: 'attacker' as TenantID, source: 'auth_claim' },
     };
+    // Repository settings writes are admin-only, so confinement must hold for a tenant admin.
+    const attackerAdminParams: RepoParams = {
+      ...attackerParams,
+      user: { ...attackerParams.user!, role: 'admin' },
+    };
     const victimRepo = '/home/agor/.agor/tenants/victim/repos/acme/private-source';
     const victimCheckout = '/home/agor/.agor/tenants/victim/worktrees/acme/private-source/main';
 
@@ -212,14 +217,14 @@ describe('hosted repository storage policy canonical boundaries', () => {
         service.patch(
           'repo-1',
           { local_path: victimCheckout, remote_url: 'https://attacker.example/drop.git' },
-          attackerParams
+          attackerAdminParams
         )
       ).rejects.toThrow(/local_path is managed by Agor/);
       await expect(
-        service.update('repo-1', { local_path: victimCheckout }, attackerParams)
+        service.update('repo-1', { local_path: victimCheckout }, attackerAdminParams)
       ).rejects.toThrow(/local_path is managed by Agor/);
       await expect(
-        service.patch(null, { local_path: victimCheckout }, attackerParams)
+        service.patch(null, { local_path: victimCheckout }, attackerAdminParams)
       ).rejects.toThrow(/local_path is managed by Agor/);
       expect(adapterPatch).not.toHaveBeenCalled();
       expect(adapterUpdate).not.toHaveBeenCalled();
@@ -230,7 +235,7 @@ describe('hosted repository storage policy canonical boundaries', () => {
         hostedService().patch(
           'repo-1',
           { remote_url: 'file:///home/agor/.agor/tenants/attacker/drop.git' },
-          attackerParams
+          attackerAdminParams
         )
       ).rejects.toThrow(/HTTPS or SSH/);
     });
@@ -248,11 +253,18 @@ describe('hosted repository storage policy canonical boundaries', () => {
 
       await expect(
         service.patch('repo-1', { local_path: localPath, clone_status: 'cloning' }, attackerParams)
-      ).rejects.toThrow(/setup status is managed by the Git executor/);
+      ).rejects.toThrow(/Admin access is required/);
       await expect(
         service.patch(
           'repo-1',
           { local_path: localPath, clone_status: 'cloning' },
+          attackerAdminParams
+        )
+      ).rejects.toThrow(/setup status is managed by the Git executor/);
+      await expect(
+        service.patch(
+          'repo-1',
+          { local_path: localPath, clone_status: 'cloning', clone_generation: 1 },
           {
             ...attackerParams,
             authentication: {
@@ -261,6 +273,8 @@ describe('hosted repository storage policy canonical boundaries', () => {
                 type: EXECUTOR_SESSION_TOKEN_TYPE,
                 purpose: EXECUTOR_COMMAND_TOKEN_PURPOSE,
                 session_id: 'git.clone',
+                repo_id: 'repo-1',
+                clone_generation: 1,
               },
             },
           }

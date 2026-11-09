@@ -161,6 +161,13 @@ describe('repository bootstrap (real SQLite, guarded tenant scope)', () => {
           { clone_status: 'failed', clone_generation: 1 },
           { ...params, provider: 'rest' }
         )
+      ).rejects.toThrow('Admin access is required');
+      await expect(
+        service.patch(
+          'untrusted-id',
+          { clone_status: 'failed', clone_generation: 1 },
+          { ...params, provider: 'rest', user: { ...params.user!, role: 'admin' } }
+        )
       ).rejects.toThrow('managed by the Git executor');
       expect(mocks.spawn).not.toHaveBeenCalled();
       expect(await new RepoRepository(db).count()).toBe(0);

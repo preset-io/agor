@@ -6,7 +6,7 @@ import {
   runWithTenantDatabaseScope,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { BranchID, UUID } from '@agor/core/types';
+import type { BranchID, RepoSlug, UUID } from '@agor/core/types';
 import { vi } from 'vitest';
 import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { BranchesService } from './branches';
@@ -76,5 +76,54 @@ dbTest(
       expect(await branchRepository.findById(branchId)).not.toBeNull();
     }
     expect(branchEmit).not.toHaveBeenCalled();
+  }
+);
+
+dbTest(
+  'only an admin may remove a shared repository, checked before any lookup',
+  async ({ db }) => {
+    const repoRepository = new RepoRepository(db);
+    const repo = await repoRepository.create({
+      repo_id: generateId() as UUID,
+      slug: 'acme/shared' as RepoSlug,
+      name: 'Shared',
+      repo_type: 'remote',
+      remote_url: 'https://github.com/acme/shared.git',
+      local_path: '/tmp/repo-removal-admin',
+      default_branch: 'main',
+    });
+    const app = {
+      get: vi.fn(() => ({})),
+      service: vi.fn((path: string) => {
+        if (path === 'branches') return {};
+        throw new Error(`Unexpected service: ${path}`);
+      }),
+    } as unknown as Application;
+    const serviceDb = createTenantScopedDatabaseProxy(db);
+    const reposService = new ReposService(serviceDb, app);
+    reposService.emit = vi.fn();
+    const get = vi.spyOn(reposService, 'get');
+    const caller = (role: string, provider = 'rest') =>
+      ({
+        provider,
+        user: { user_id: 'caller', role },
+        tenant: { tenant_id: 'tenant-a', source: 'explicit' },
+      }) as never;
+    const remove = (id: string, params: never) =>
+      runWithTenantDatabaseScope(serviceDb, 'tenant-a', () => reposService.remove(id, params));
+    const denied = 'Admin access is required to change repository settings';
+
+    for (const params of [caller('member'), caller('member', 'socketio'), caller('viewer')]) {
+      await expect(remove(repo.repo_id, params)).rejects.toThrow(denied);
+    }
+    // A missing repository answers the same, so the denial is no existence oracle.
+    await expect(remove(generateId(), caller('member'))).rejects.toThrow(denied);
+    expect(get).not.toHaveBeenCalled();
+    expect(await repoRepository.findById(repo.repo_id)).toEqual(repo);
+
+    await expect(remove(repo.repo_id, caller('admin'))).resolves.toMatchObject({
+      repo_id: repo.repo_id,
+    });
+    expect(await repoRepository.findById(repo.repo_id)).toBeNull();
   }
 );
