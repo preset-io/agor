@@ -1018,7 +1018,7 @@ export interface LaunchSessionRevalidatorOptions {
 
 export interface LaunchSessionRevalidationInput {
   userId: UserID;
-  /** Verified refresh-token payload; its signed tenant binds the membership check. */
+  /** Trusted claims binding the check's tenant: a verified refresh token's, or a verified API key's tenant. */
   payload: UserAuthTokenPayload;
 }
 

@@ -332,7 +332,8 @@ daemon sends a JSON `POST` with the same bearer credential as the exchange:
 ```
 
 `subject` is the launch assertion `sub` the session signed in with, and
-`tenant_id` comes only from the daemon's signed refresh token. `instance_id` is
+`tenant_id` comes only from the daemon's signed refresh token, or from the tenant
+a personal API key verified under. `instance_id` is
 sent only when configured. A current member gets a `200` with
 `{ "assertion": "<signed JWT>" }`, built from current membership. It is verified
 like a launch assertion and must also carry `purpose: "session_revalidation"`;
@@ -376,10 +377,16 @@ with a password, and each such session lasts until its first refresh is refused.
 absolute lifetime still applies to every launched session, and closes any socket
 still open at that deadline.
 
-These bounds cover browser sessions. A request that authenticates directly with
-a personal API key (REST, CLI, or MCP) doesn't contact the issuer, so direct key use
-by someone who never refreshes isn't covered: the key keeps working until a refresh
-for that user is refused or its owner deletes it.
+Direct use of a personal API key (REST, CLI, or MCP) is checked against the same
+endpoint. For an account with a launch identity at this issuer, each daemon asks
+at most once every 15 minutes per user before accepting the key. A refusal has
+the same effect as one at refresh, so a removal stops the key within 15 minutes
+while the issuer is reachable, and a role change applies at the same check. If
+the check is unavailable, the key keeps working for up to one hour after that
+daemon last confirmed the user; after that, requests return a retryable `503`
+and the key is kept. That confirmation is held in memory, so a daemon that
+restarts during an outage returns the `503` straight away. Keys on accounts with
+no launch identity at this issuer are never checked.
 
 ## Compatibility and upgrade notes
 

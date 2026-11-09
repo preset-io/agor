@@ -144,6 +144,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
+import { createApiKeyMembershipCheck } from './auth/api-key-membership-check.js';
 import {
   gatewaySlackUploadExecutorCommandId,
   uploadMaterializeExecutorCommandId,
@@ -1339,6 +1340,28 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Refresh token endpoint
   // ============================================================================
 
+  const revalidateLaunchSession = createLaunchSessionRevalidator({
+    db,
+    config,
+    provider: externalLaunchProvider,
+    serializeProjection: serializeLaunchProjection,
+    // A refusal or a role change found at revalidation only concerns that user's sockets.
+    onAuthorizationInvalidated: (tenantId, userId) => {
+      app.emit(
+        'realtime:authorization-invalidated',
+        userScopedAuthorizationInvalidation(tenantId, userId)
+      );
+    },
+  });
+  apiKeyStrategy.setMembershipCheck(
+    revalidateLaunchSession
+      ? createApiKeyMembershipCheck({
+          revalidate: revalidateLaunchSession,
+          tenantClaim: tenantTokenClaim,
+        })
+      : undefined
+  );
+
   app.use(
     '/authentication/refresh',
     createRefreshTokenService({
@@ -1348,19 +1371,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       sessionMaxLifetimeSeconds: SESSION_MAX_LIFETIME_SECONDS,
       tenantClaim: tenantTokenClaim,
       usersService,
-      revalidateLaunchSession: createLaunchSessionRevalidator({
-        db,
-        config,
-        provider: externalLaunchProvider,
-        serializeProjection: serializeLaunchProjection,
-        // A refusal or refresh-detected role change only concerns that user's sockets.
-        onAuthorizationInvalidated: (tenantId, userId) => {
-          app.emit(
-            'realtime:authorization-invalidated',
-            userScopedAuthorizationInvalidation(tenantId, userId)
-          );
-        },
-      }),
+      revalidateLaunchSession,
     })
   );
 
