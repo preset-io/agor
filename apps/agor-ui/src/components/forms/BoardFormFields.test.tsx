@@ -55,6 +55,48 @@ describe('BoardFormFields permissions', () => {
   });
 });
 
+function FreshBoardFormHarness({
+  onRead,
+}: {
+  onRead: (values: ReturnType<typeof extractBoardFormValues>) => void;
+}) {
+  const [form] = Form.useForm();
+  return (
+    <Form form={form}>
+      <BoardFormFields form={form} />
+      <button type="button" onClick={() => onRead(extractBoardFormValues(form))}>
+        Read values
+      </button>
+    </Form>
+  );
+}
+
+describe('BoardFormFields create defaults', () => {
+  it('creates a private board that grants Others nothing unless the creator shares it', () => {
+    const onRead = vi.fn();
+    renderWithApp(<FreshBoardFormHarness onRead={onRead} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Read values' }));
+    expect(onRead).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        access_mode: 'private',
+        default_others_can: 'none',
+        default_others_fs_access: 'none',
+      })
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Shared' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Read values' }));
+    expect(onRead).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        access_mode: 'shared',
+        default_others_can: 'none',
+        default_others_fs_access: 'none',
+      })
+    );
+  });
+});
+
 describe('BoardFormFields general-settings permission gating', () => {
   it('disables name and description when the caller lacks board.edit', () => {
     renderWithApp(<BoardFormHarness onRead={vi.fn()} canEditGeneral={false} />);

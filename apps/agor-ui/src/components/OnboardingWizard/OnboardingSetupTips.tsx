@@ -16,7 +16,7 @@ const SETUP_TIPS = [
     icon: SlackOutlined,
     title: 'Chat in Slack',
     line: (name: string) =>
-      `Connect a Slack channel and your team can ask ${name} for help right there.`,
+      `Connect a Slack channel and give your team Collaborator and file access to ${name} so they can ask for help right there.`,
   },
   {
     icon: BarChartOutlined,
@@ -45,7 +45,8 @@ const SETUP_TIPS = [
   {
     icon: TeamOutlined,
     title: 'Work as a team',
-    line: (name: string) => `Share your board so everyone can work with ${name}.`,
+    line: (name: string) =>
+      `Share your board and give your team Collaborator and file access so they can work with ${name}.`,
   },
 ];
 

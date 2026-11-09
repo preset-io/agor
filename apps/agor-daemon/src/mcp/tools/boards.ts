@@ -32,17 +32,6 @@ import { runWithMcpTenantDatabaseWrite } from '../tenant-scope.js';
 const BOARD_ENTITY_TYPES = ['branch', 'card'] as const satisfies readonly BoardEntityType[];
 const BOARD_ACCESS_MODES = ['private', 'shared'] as const satisfies readonly BoardAccessMode[];
 
-/** Drop the legacy permission fields: rows carry fail-closed sentinels, not the stored policy. */
-function withoutLegacyPermissionFields(board: Board): Board {
-  const {
-    access_mode: _accessMode,
-    default_others_can: _defaultOthersCan,
-    default_others_fs_access: _defaultOthersFsAccess,
-    ...rest
-  } = board;
-  return rest;
-}
-
 function filterBoardCanvasObjects(board: Board, objectTypes?: BoardObjectType[]): Board {
   if (!objectTypes) return board;
 
@@ -114,9 +103,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       const boardId = coerceString(args.boardId);
       if (!boardId) throw new Error('boardId is required');
       const board = filterBoardCanvasObjects(
-        withoutLegacyPermissionFields(
-          await ctx.app.service('boards').get(boardId, ctx.baseServiceParams)
-        ),
+        await ctx.app.service('boards').get(boardId, ctx.baseServiceParams),
         args.objectTypes as BoardObjectType[] | undefined
       );
       const permissions = await ctx.app
@@ -194,7 +181,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       }
       const boards = await ctx.app.service('boards').find({ query, ...ctx.baseServiceParams });
       const page = mcpPageResult<Board>(boards, limit, offset);
-      return textResult({ ...page, data: page.data.map(withoutLegacyPermissionFields) });
+      return textResult(page);
     }
   );
 
@@ -289,7 +276,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
 
       const board = await ctx.app.service('boards').get(boardId, ctx.baseServiceParams);
       return textResult({
-        board: withoutLegacyPermissionFields(board),
+        board,
         note: 'Board updated successfully.',
       });
     }
@@ -351,8 +338,9 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
     {
       description:
         'Create a new board. Returns the created board object with its ID, URL, and stored permissions. ' +
-        'accessMode controls who can see the board: "shared" (default) lets other workspace members view it; "private" limits it to you and admins. ' +
-        'defaultOthersCan/defaultOthersFsAccess set the default branch permissions for others on a shared board; they do not hide the board.',
+        'accessMode controls who can see the board: "shared" lets other workspace members view it; "private" limits it to you and admins. ' +
+        'defaultOthersCan/defaultOthersFsAccess set the default branch permissions for others on a shared board (default none, no filesystem access). ' +
+        'Without accessMode, the board is shared only when defaultOthersCan grants something other than none.',
       inputSchema: z.object({
         name: mcpRequiredString('name', 'Board name (required)'),
         slug: mcpOptionalString(
@@ -376,7 +364,9 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         accessMode: z
           .enum(BOARD_ACCESS_MODES)
           .optional()
-          .describe('Board visibility: "shared" (default, others can view) or "private".'),
+          .describe(
+            'Board visibility: "shared" (others can view) or "private". Defaults to private unless defaultOthersCan grants access.'
+          ),
         defaultOthersCan: z
           .enum(BRANCH_PERMISSION_LEVELS)
           .optional()
@@ -386,7 +376,9 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         defaultOthersFsAccess: z
           .enum(['none', 'read', 'write'])
           .optional()
-          .describe('Default branch filesystem access for others on a shared board.'),
+          .describe(
+            'Default branch filesystem access for others on a shared board (default none).'
+          ),
       }),
     },
     async (args) => {
@@ -417,7 +409,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         .service('boards/:id/permissions')
         .find({ ...ctx.baseServiceParams, route: { id: board.board_id } })
         .catch(() => null);
-      return textResult({ ...withoutLegacyPermissionFields(board), permissions });
+      return textResult({ ...board, permissions });
     }
   );
 

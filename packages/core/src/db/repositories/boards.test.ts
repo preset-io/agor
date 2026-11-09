@@ -5,7 +5,14 @@
  * board object management (zones/text), and JSON field handling.
  */
 
-import type { Board, BoardID, BoardImportSkipReason, BoardObject, UUID } from '@agor/core/types';
+import type {
+  Board,
+  BoardID,
+  BoardImportSkipReason,
+  BoardObject,
+  UserID,
+  UUID,
+} from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it, vi } from 'vitest';
 import { generateId, shortId, toShortId } from '../../lib/ids';
@@ -2138,36 +2145,28 @@ describe('BoardRepository slug uniqueness', () => {
 });
 
 describe('BoardRepository normalized permission boundary', () => {
-  dbTest(
-    'maps legacy create defaults once but exposes only the fail-closed compatibility view',
-    async ({ db }) => {
-      const repo = new BoardRepository(db);
-      const board = await repo.create(
-        createBoardData({
-          name: 'Compatibility Board',
-          access_mode: 'shared',
-          default_others_can: 'prompt',
-          default_others_fs_access: 'write',
-        })
-      );
-      const permissions = await new CapabilityPolicyRepository(db).getBoardPolicies(board.board_id);
+  dbTest('maps legacy create defaults once into the stored policy', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(
+      createBoardData({
+        name: 'Compatibility Board',
+        access_mode: 'shared',
+        default_others_can: 'prompt',
+        default_others_fs_access: 'write',
+      })
+    );
+    const permissions = await new CapabilityPolicyRepository(db).getBoardPolicies(board.board_id);
 
-      expect(board).toMatchObject({
-        access_mode: 'private',
-        default_others_can: 'none',
-        default_others_fs_access: 'none',
-      });
-      expect(permissions).toMatchObject({
-        board_access: { sharing_mode: 'shared', others: { preset: 'viewer' } },
-        branch_template: {
-          access: {
-            sharing_mode: 'shared',
-            others: { preset: 'collaborator', fs_access: 'write' },
-          },
+    expect(permissions).toMatchObject({
+      board_access: { sharing_mode: 'shared', others: { preset: 'viewer' } },
+      branch_template: {
+        access: {
+          sharing_mode: 'shared',
+          others: { preset: 'collaborator', fs_access: 'write' },
         },
-      });
-    }
-  );
+      },
+    });
+  });
 
   dbTest('rejects permission changes through generic board updates', async ({ db }) => {
     const repo = new BoardRepository(db);
@@ -2232,4 +2231,305 @@ describe('BoardRepository normalized permission boundary', () => {
       expect(otherAccess.capabilities).toEqual([]);
     }
   );
+});
+
+describe('BoardRepository create-time Others defaults', () => {
+  async function createMember(db: Database): Promise<UUID> {
+    const userId = generateId() as UUID;
+    await new UsersRepository(db).create({
+      user_id: userId,
+      email: `member-${userId}@agor.test`,
+      role: 'member',
+    });
+    return userId;
+  }
+
+  async function createInheritedBranch(db: Database, boardId: UUID, ownerId: UUID) {
+    const repo = await new RepoRepository(db).create(
+      createRepoData({ slug: `repo-${branchUniqueId}` })
+    );
+    const name = `branch-${generateId().slice(0, 8)}`;
+    return new BranchRepository(db).create({
+      branch_id: generateId(),
+      repo_id: repo.repo_id,
+      name,
+      ref: name,
+      branch_unique_id: branchUniqueId++,
+      path: `/tmp/boards/${generateId()}/${name}`,
+      board_id: boardId,
+      created_by: ownerId,
+      permission_binding: 'inherit',
+    });
+  }
+
+  async function othersPresets(db: Database, boardId: UUID) {
+    const policies = await new CapabilityPolicyRepository(db).getBoardPolicies(boardId as BoardID);
+    return {
+      board: policies.board_access.others.preset,
+      branch: policies.branch_template.access.others.preset,
+      branchFs: policies.branch_template.access.others.fs_access,
+    };
+  }
+
+  dbTest(
+    'a board created without permission inputs grants a colleague nothing on it or its inherited branches',
+    async ({ db }) => {
+      const ownerId = await createMember(db);
+      const colleagueId = await createMember(db);
+      const repo = new BoardRepository(db);
+      const board = await repo.create(createBoardData({ name: 'Plain', created_by: ownerId }));
+      const branch = await createInheritedBranch(db, board.board_id, ownerId);
+      const policies = new CapabilityPolicyRepository(db);
+
+      await expect(othersPresets(db, board.board_id)).resolves.toEqual({
+        board: 'none',
+        branch: 'none',
+        branchFs: 'none',
+      });
+      const boardAccess = await policies.resolveBoardAccess(
+        board.board_id as BoardID,
+        colleagueId as UserID
+      );
+      expect(boardAccess.capabilities).toEqual([]);
+      const branchAccess = await policies.resolveBranchAccess(
+        branch.branch_id,
+        colleagueId as UserID
+      );
+      expect(branchAccess.capabilities).toEqual([]);
+      expect(branchAccess.fs_access).toBe('none');
+      const ownerAccess = await policies.resolveBranchAccess(branch.branch_id, ownerId as UserID);
+      expect(ownerAccess.capabilities).toEqual(
+        expect.arrayContaining(['branch.view', 'sessions.create', 'terminal.open'])
+      );
+    }
+  );
+
+  dbTest(
+    'an explicit none for Others reaches both board access and branch defaults',
+    async ({ db }) => {
+      const board = await new BoardRepository(db).create(
+        createBoardData({ name: 'None Board', default_others_can: 'none' })
+      );
+
+      await expect(othersPresets(db, board.board_id)).resolves.toEqual({
+        board: 'none',
+        branch: 'none',
+        branchFs: 'none',
+      });
+    }
+  );
+
+  dbTest('a private board ignores branch defaults for Others', async ({ db }) => {
+    const board = await new BoardRepository(db).create(
+      createBoardData({
+        name: 'Private Board',
+        access_mode: 'private',
+        default_others_can: 'session',
+        default_others_fs_access: 'write',
+      })
+    );
+
+    await expect(othersPresets(db, board.board_id)).resolves.toEqual({
+      board: 'none',
+      branch: 'none',
+      branchFs: 'none',
+    });
+  });
+
+  dbTest(
+    'a shared board without branch defaults shows Others the canvas but not its branches',
+    async ({ db }) => {
+      const board = await new BoardRepository(db).create(
+        createBoardData({ name: 'Shared Canvas', access_mode: 'shared' })
+      );
+
+      await expect(othersPresets(db, board.board_id)).resolves.toEqual({
+        board: 'viewer',
+        branch: 'none',
+        branchFs: 'none',
+      });
+    }
+  );
+
+  dbTest(
+    'a branch default for Others never adds file or terminal access implicitly',
+    async ({ db }) => {
+      const ownerId = await createMember(db);
+      const colleagueId = await createMember(db);
+      const board = await new BoardRepository(db).create(
+        createBoardData({
+          name: 'Sessions Only',
+          created_by: ownerId,
+          default_others_can: 'session',
+        })
+      );
+      const branch = await createInheritedBranch(db, board.board_id, ownerId);
+
+      await expect(othersPresets(db, board.board_id)).resolves.toEqual({
+        board: 'viewer',
+        branch: 'collaborator',
+        branchFs: 'none',
+      });
+      const access = await new CapabilityPolicyRepository(db).resolveBranchAccess(
+        branch.branch_id,
+        colleagueId as UserID
+      );
+      expect(access.capabilities).toContain('sessions.create');
+      expect(access.capabilities).not.toContain('terminal.open');
+      expect(access.fs_access).toBe('none');
+    }
+  );
+
+  dbTest(
+    'an override branch shared with Others gets no file or terminal access unless asked',
+    async ({ db }) => {
+      const ownerId = await createMember(db);
+      const colleagueId = await createMember(db);
+      const board = await new BoardRepository(db).create(
+        createBoardData({ name: 'Override Host', created_by: ownerId })
+      );
+      const repo = await new RepoRepository(db).create(
+        createRepoData({ slug: `repo-${branchUniqueId}` })
+      );
+      const name = `override-${generateId().slice(0, 8)}`;
+      const branch = await new BranchRepository(db).create({
+        branch_id: generateId(),
+        repo_id: repo.repo_id,
+        name,
+        ref: name,
+        branch_unique_id: branchUniqueId++,
+        path: `/tmp/boards/${generateId()}/${name}`,
+        board_id: board.board_id,
+        created_by: ownerId,
+        permission_binding: 'override',
+        others_can: 'session',
+      });
+
+      const access = await new CapabilityPolicyRepository(db).resolveBranchAccess(
+        branch.branch_id,
+        colleagueId as UserID
+      );
+      expect(access.capabilities).toContain('sessions.create');
+      expect(access.capabilities).not.toContain('terminal.open');
+      expect(access.fs_access).toBe('none');
+    }
+  );
+
+  dbTest('an import without sharing fields creates a private board', async ({ db }) => {
+    const board = await new BoardRepository(db).fromBlob({ name: 'Bare import' }, 'test-user');
+
+    await expect(othersPresets(db, board.board_id)).resolves.toEqual({
+      board: 'none',
+      branch: 'none',
+      branchFs: 'none',
+    });
+  });
+
+  dbTest('explicit sharing with file access is still honored', async ({ db }) => {
+    const board = await new BoardRepository(db).create(
+      createBoardData({
+        name: 'Team Board',
+        access_mode: 'shared',
+        default_others_can: 'session',
+        default_others_fs_access: 'read',
+      })
+    );
+
+    await expect(othersPresets(db, board.board_id)).resolves.toEqual({
+      board: 'viewer',
+      branch: 'collaborator',
+      branchFs: 'read',
+    });
+  });
+
+  dbTest(
+    'board and branch reads omit legacy permission fields instead of contradicting policy',
+    async ({ db }) => {
+      const ownerId = await createMember(db);
+      const repo = new BoardRepository(db);
+      const created = await repo.create(
+        createBoardData({
+          name: 'Read View',
+          created_by: ownerId,
+          access_mode: 'shared',
+          default_others_can: 'session',
+          default_others_fs_access: 'read',
+        })
+      );
+      const branch = await createInheritedBranch(db, created.board_id, ownerId);
+      const read = await repo.findById(created.board_id);
+      const readBranch = await new BranchRepository(db).findById(branch.branch_id);
+
+      for (const board of [created, read]) {
+        expect(board).not.toHaveProperty('access_mode');
+        expect(board).not.toHaveProperty('default_others_can');
+        expect(board).not.toHaveProperty('default_others_fs_access');
+      }
+      for (const value of [branch, readBranch]) {
+        expect(value).not.toHaveProperty('others_can');
+        expect(value).not.toHaveProperty('others_fs_access');
+      }
+
+      // Older rows still store migration tombstones in data; reads must not surface them.
+      await update(db, boardsTable)
+        .set({
+          data: {
+            access_mode: 'private',
+            default_others_can: 'none',
+            default_others_fs_access: 'none',
+          },
+        })
+        .where(eq(boardsTable.board_id, created.board_id))
+        .run();
+      const tombstoned = await repo.findById(created.board_id);
+      expect(tombstoned).not.toHaveProperty('access_mode');
+      expect(tombstoned).not.toHaveProperty('default_others_can');
+      expect(tombstoned).not.toHaveProperty('default_others_fs_access');
+    }
+  );
+
+  dbTest('cloning a board whose Others have no board access does not widen it', async ({ db }) => {
+    const ownerId = await createMember(db);
+    const colleagueId = await createMember(db);
+    const repo = new BoardRepository(db);
+    const policies = new CapabilityPolicyRepository(db);
+    const source = await repo.create(
+      createBoardData({
+        name: 'Named Only',
+        created_by: ownerId,
+        access_mode: 'shared',
+        default_others_can: 'session',
+        default_others_fs_access: 'read',
+      })
+    );
+    const current = await policies.getBoardPolicies(source.board_id as BoardID);
+    await policies.replaceBoardPolicies(
+      source.board_id as BoardID,
+      {
+        ...current,
+        board_access: {
+          ...current.board_access,
+          entries: [
+            {
+              entry_id: generateId(),
+              principal: { principal_type: 'user', user_id: colleagueId as UserID },
+              preset: 'viewer',
+              capabilities: ['board.view'],
+              fs_access: 'none',
+            },
+          ],
+          others: { preset: 'none', capabilities: [], fs_access: 'none' },
+        },
+      },
+      ownerId as UserID
+    );
+
+    const clone = await repo.clone(source.board_id, 'Named Only copy', ownerId);
+
+    await expect(othersPresets(db, clone.board_id)).resolves.toEqual({
+      board: 'none',
+      branch: 'none',
+      branchFs: 'none',
+    });
+  });
 });

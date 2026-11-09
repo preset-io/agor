@@ -744,7 +744,8 @@ export async function seedInitialDataInTransaction(
       db,
       boardId as import('@agor/core/types').BoardID,
       createdBy as import('@agor/core/types').UserID,
-      { shared: true, defaultOthersCan: 'session', defaultOthersFsAccess: 'read' }
+      // Members see the shared canvas; branch access for Others is granted explicitly.
+      { shared: true }
     );
   }
   return inserted.rowsAffected;

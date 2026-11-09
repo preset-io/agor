@@ -34,6 +34,20 @@ function normalizeBackgroundColor(value: unknown): string | null {
   return null;
 }
 
+/** New boards are private and grant Others nothing until the creator shares them. */
+function createPermissionValues(values: Record<string, unknown>): Partial<Board> {
+  const accessMode = values.access_mode === 'shared' ? 'shared' : 'private';
+  if (accessMode === 'private') {
+    return { access_mode: 'private', default_others_can: 'none', default_others_fs_access: 'none' };
+  }
+  return {
+    access_mode: 'shared',
+    default_others_can: (values.default_others_can as Board['default_others_can']) || 'none',
+    default_others_fs_access:
+      (values.default_others_fs_access as Board['default_others_fs_access']) || 'none',
+  };
+}
+
 /**
  * Extract board form values from the form instance.
  * Uses getFieldsValue(true) to include values from collapsed/unmounted fields.
@@ -61,14 +75,7 @@ export function extractBoardFormValues(
     // toHexString when it's actually present; otherwise clear the field.
     background_color: normalizeBackgroundColor(bgColor),
     custom_css: values.custom_css || null,
-    ...(options.includeLegacyPermissions === false
-      ? {}
-      : {
-          access_mode: values.access_mode || 'shared',
-          default_others_can:
-            values.access_mode === 'private' ? 'none' : values.default_others_can || 'session',
-          default_others_fs_access: values.default_others_fs_access || 'read',
-        }),
+    ...(options.includeLegacyPermissions === false ? {} : createPermissionValues(values)),
     custom_context: values.custom_context ? JSON.parse(values.custom_context) : null,
   } as unknown as Partial<Board>;
 }
@@ -151,12 +158,12 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
 
   const watchOptions = { form, preserve: true };
   const boardVisibility = (Form.useWatch('access_mode', watchOptions) ||
-    'shared') as RbacVisibility;
+    'private') as RbacVisibility;
   const ownerIds = (Form.useWatch('owner_ids', watchOptions) || []) as string[];
   const groupGrants = (Form.useWatch('board_group_grants', watchOptions) ||
     []) as RbacPermissionValue['groupGrants'];
-  const defaultOthersCan = Form.useWatch('default_others_can', watchOptions) || 'session';
-  const defaultOthersFsAccess = Form.useWatch('default_others_fs_access', watchOptions) || 'read';
+  const defaultOthersCan = Form.useWatch('default_others_can', watchOptions) || 'none';
+  const defaultOthersFsAccess = Form.useWatch('default_others_fs_access', watchOptions) || 'none';
 
   const permissionValue: RbacPermissionValue = {
     visibility: boardVisibility,
@@ -195,7 +202,7 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
         canEditGroups={false}
         ownerHelp="Manage board owners"
         groupsHelp="Inherited by aligned branches"
-        visibilityLabel="Default branch permissions"
+        visibilityLabel="Board visibility"
         othersCanLabel="Default others can"
         othersFsAccessLabel="Default filesystem access"
       />

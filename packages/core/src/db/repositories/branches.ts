@@ -199,8 +199,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         // RBAC fields
         permission_source: row.permission_binding === 'inherit' ? 'board' : 'override',
         permission_binding: row.permission_binding ?? 'override',
-        others_can: row.others_can ?? undefined,
-        others_fs_access: row.others_fs_access ?? undefined,
+        // Legacy others_can/others_fs_access columns are tombstones; effective access lives in policy.
         // Branch storage mode
         storage_mode: row.storage_mode ?? 'worktree',
         clone_depth: row.clone_depth ?? undefined,

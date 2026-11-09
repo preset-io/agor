@@ -1303,8 +1303,17 @@ try {
   });
   assert.equal(created.status, 201, `board create failed: ${created.status}`);
   const board = await created.json();
-  assert.equal(board.access_mode, 'private', 'same-tenant RBAC checks require a private board');
   cleanupBoards.set(board.board_id, accessToken);
+  const policyResponse = await fetch(`${daemonA}/boards/${board.board_id}/permissions`, {
+    headers: { authorization: `Bearer ${accessToken}` },
+  });
+  assert.equal(policyResponse.status, 200, `board policy read failed: ${policyResponse.status}`);
+  const policy = await policyResponse.json();
+  assert.equal(
+    policy.board_access.others.preset,
+    'none',
+    'same-tenant RBAC checks require a private board'
+  );
   await waitUntil(() => boardEvents.length > 0, 'cross-replica Feathers board event');
   await delay(EXACTLY_ONCE_SETTLE_MS);
   assert.deepEqual(
