@@ -1385,7 +1385,11 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       // intentionally tenant-local security state and never leave with a
       // board template.
       // A board Others cannot see exports as private, which deliberately drops its branch defaults.
-      access_mode: permissions.board_access.others.preset === 'none' ? 'private' : 'shared',
+      access_mode:
+        permissions.board_access.sharing_mode === 'private' ||
+        permissions.board_access.others.preset === 'none'
+          ? 'private'
+          : 'shared',
       default_others_can: defaultOthersCan,
       default_others_fs_access: templateOthers.fs_access,
       objects: board.objects,

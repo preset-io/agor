@@ -19,7 +19,7 @@ import { generateId, shortId, toShortId } from '../../lib/ids';
 import { summarizeBoardImportSkips } from '../../types/board';
 import type { Database } from '../client';
 import { select, update } from '../database-wrapper';
-import { boards as boardsTable } from '../schema';
+import { boardAccessPolicies, boards as boardsTable } from '../schema';
 import { ownedDbTest as dbTest } from '../test-helpers';
 import { ArtifactRepository } from './artifacts';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
@@ -2532,4 +2532,20 @@ describe('BoardRepository create-time Others defaults', () => {
       branchFs: 'none',
     });
   });
+
+  dbTest(
+    'exports a private board as private even if a stored Others role remains',
+    async ({ db }) => {
+      const repo = new BoardRepository(db);
+      const board = await repo.create(
+        createBoardData({ name: 'Inconsistent', access_mode: 'shared', default_others_can: 'view' })
+      );
+      await update(db, boardAccessPolicies)
+        .set({ sharing_mode: 'private' })
+        .where(eq(boardAccessPolicies.board_id, board.board_id))
+        .run();
+
+      await expect(repo.toBlob(board.board_id)).resolves.toMatchObject({ access_mode: 'private' });
+    }
+  );
 });
