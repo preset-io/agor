@@ -130,6 +130,16 @@ export interface AgorDaemonSettings {
    */
   refresh_token_ttl_seconds?: number;
 
+  /**
+   * Absolute lifetime of a session signed in through external launch, in whole
+   * seconds, counted from the launch. Refresh never extends one past it; the user
+   * launches again. Other sign-ins are not limited by it, unless
+   * `external_launch.session_revalidation_url` treats them as launched at refresh. Must be an integer from 3600 (1 hour) to 7776000 (90 days).
+   * Default: 2592000 (30 days), or `refresh_token_ttl_seconds` when that is longer.
+   * Env override: `AGOR_SESSION_MAX_LIFETIME_SECONDS`.
+   */
+  session_max_lifetime_seconds?: number;
+
   /** Allow CORS from Sandpack/CodeSandbox bundler origins (default: true).
    * Enables artifacts on the hosted bundler to call the Agor API. */
   cors_allow_sandpack?: boolean;
@@ -206,6 +216,14 @@ export interface AgorExternalLaunchSettings {
 
   /** Server-to-server exchange endpoint that consumes one-time launch codes. */
   exchange_url?: string;
+
+  /**
+   * Optional server-to-server endpoint that re-checks a launched user's current
+   * membership and role on every browser refresh. A refusal ends the session; if
+   * the issuer is unavailable, refresh continues for at most one hour after it
+   * last confirmed the session.
+   */
+  session_revalidation_url?: string;
 
   /** Expected JWT issuer for returned launch assertions. */
   issuer?: string;

@@ -10,7 +10,13 @@ import { createRestClient } from '@agor-live/client';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
 import { isDefiniteAuthFailure, isTransientConnectionError } from '../utils/authErrors';
-import { isExpiringSoon, msUntilExpiry } from '../utils/jwtExpiry';
+import {
+  autoRefreshDelayMs,
+  autoRefreshRetryDelayMs,
+  decodeJwtExpMs,
+  isExpiringSoon,
+  msUntilExpiry,
+} from '../utils/jwtExpiry';
 import {
   exchangeLaunchCode,
   getLaunchCodeFromSearch,
@@ -155,6 +161,8 @@ export function useAuth(): UseAuthReturn {
     error: null,
   });
   const authStateRef = useRef(state);
+  // `exp` of the access token the last auto-refresh started from.
+  const lastRefreshedExpMsRef = useRef<number | null>(null);
   authStateRef.current = state;
   const previousDraftAuthorityRef = useRef<{ userId: string; role: string } | null>(null);
   // Only the latest local-login attempt may install credentials or own the
@@ -172,6 +180,8 @@ export function useAuth(): UseAuthReturn {
   const reconciliationRef = useRef<Promise<CredentialReconciliation> | null>(null);
   // Bumped to re-arm proactive refresh when reconciliation keeps the same token.
   const [refreshScheduleNonce, setRefreshScheduleNonce] = useState(0);
+  // Transient auto-refresh failures for the current access token; a new token starts clean.
+  const autoRefreshRetryRef = useRef<{ accessToken: string; attempt: number } | null>(null);
 
   // Publish auth state synchronously to the ref as well as to React, so a
   // continuation (e.g. credential reconciliation) observes what was committed.
@@ -658,13 +668,17 @@ export function useAuth(): UseAuthReturn {
   useEffect(() => {
     if (!state.authenticated || !state.accessToken) return;
 
-    const REFRESH_BUFFER_MS = 60_000; // refresh this many ms before exp
-    const MIN_DELAY_MS = 1_000; // never schedule tighter than this
-    const FALLBACK_DELAY_MS = 5 * 60_000; // if we can't decode exp
-
-    const untilExp = msUntilExpiry(state.accessToken);
+    const scheduledAccessToken = state.accessToken;
+    const accessExpMs = decodeJwtExpMs(scheduledAccessToken);
+    const retry = autoRefreshRetryRef.current;
+    const retryAttempt = retry?.accessToken === scheduledAccessToken ? retry.attempt : 0;
     const delay =
-      untilExp === null ? FALLBACK_DELAY_MS : Math.max(MIN_DELAY_MS, untilExp - REFRESH_BUFFER_MS);
+      retryAttempt > 0
+        ? autoRefreshRetryDelayMs(retryAttempt)
+        : autoRefreshDelayMs(
+            msUntilExpiry(scheduledAccessToken),
+            accessExpMs !== null && lastRefreshedExpMsRef.current === accessExpMs
+          );
 
     const timer = setTimeout(async () => {
       const isTabAuthorityCurrent = captureTokenAuthority();
@@ -678,6 +692,8 @@ export function useAuth(): UseAuthReturn {
       try {
         const client = await createRestClient(getDaemonUrl());
         await refreshTokensSingleFlight(client, refreshToken);
+        lastRefreshedExpMsRef.current = accessExpMs;
+        autoRefreshRetryRef.current = null;
         // State sync happens via TOKENS_REFRESHED_EVENT listener below.
       } catch (error) {
         // A superseded refresh is a no-op only when this tab's own
@@ -697,6 +713,12 @@ export function useAuth(): UseAuthReturn {
             ...prev,
             error: 'Connection lost - waiting for daemon...',
           }));
+          // Keep the one-shot timer alive: the token hasn't changed, so nothing else re-arms it.
+          autoRefreshRetryRef.current = {
+            accessToken: scheduledAccessToken,
+            attempt: retryAttempt + 1,
+          };
+          setRefreshScheduleNonce((nonce) => nonce + 1);
         } else {
           // Definite refresh/auth failure: token refresh failed, user must login again.
           clearTokens();

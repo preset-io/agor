@@ -667,6 +667,22 @@ describe('attachment lifecycle', () => {
     });
   });
 
+  it("user authorization eviction retires only that user's terminals in that tenant", async () => {
+    const app = makeApp();
+    const service = new TerminalsService(app as never, {} as never);
+    const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
+
+    service.closeUser('tenant-b', 'user-1');
+    service.closeUser('tenant-x', 'someone-else');
+    expect(app.emit).not.toHaveBeenCalledWith('terminal:shutdown-local', expect.anything());
+
+    service.closeUser('tenant-x', 'user-1');
+    expect(app.emit).toHaveBeenCalledWith('terminal:shutdown-local', {
+      terminalId: terminal.terminalId,
+      userId: 'user-1',
+    });
+  });
+
   it('tenant authorization invalidation retires every stale terminal capability', async () => {
     const app = makeApp();
     const service = new TerminalsService(app as never, {} as never);

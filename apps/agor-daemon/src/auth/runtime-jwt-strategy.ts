@@ -57,6 +57,10 @@ export interface RuntimeJWTStrategyOptions {
   sessionTokenService?: SessionTokenService;
   multiTenancy?: ResolvedMultiTenancyConfig;
   executorRevocationFence?: ExecutorConnectionRevocationFence;
+  /** Set when external launch revalidates membership on refresh. */
+  userConnectionMaxAgeMs?: number;
+  /** Absolute lifetime of a launched session; its sockets close at that deadline. */
+  launchedSessionMaxLifetimeSeconds?: number;
 }
 
 /**
@@ -69,12 +73,16 @@ export class RuntimeJWTStrategy extends JWTStrategy {
   private readonly sessionTokenService?: SessionTokenService;
   private readonly executorRevocationFence?: ExecutorConnectionRevocationFence;
   private readonly multiTenancy?: ResolvedMultiTenancyConfig;
+  private readonly userConnectionMaxAgeMs?: number;
+  private readonly launchedSessionMaxLifetimeSeconds?: number;
 
   constructor(options: RuntimeJWTStrategyOptions = {}) {
     super();
     this.sessionTokenService = options.sessionTokenService;
     this.multiTenancy = options.multiTenancy;
     this.executorRevocationFence = options.executorRevocationFence;
+    this.userConnectionMaxAgeMs = options.userConnectionMaxAgeMs;
+    this.launchedSessionMaxLifetimeSeconds = options.launchedSessionMaxLifetimeSeconds;
   }
 
   /**
@@ -115,6 +123,8 @@ export class RuntimeJWTStrategy extends JWTStrategy {
         authResult,
         multiTenancy: this.multiTenancy,
         executorRevocationFence: this.executorRevocationFence,
+        userConnectionMaxAgeMs: this.userConnectionMaxAgeMs,
+        launchedSessionMaxLifetimeSeconds: this.launchedSessionMaxLifetimeSeconds,
       });
       return;
     }

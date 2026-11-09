@@ -157,6 +157,7 @@ function createAuthApp(
           jwtSecret: JWT_SECRET,
           accessTokenTtl: ACCESS_TOKEN_TTL,
           refreshTokenTtl: REFRESH_TOKEN_TTL,
+          sessionMaxLifetimeSeconds: 2_592_000,
           tenantClaim: 'tenant_id',
           now: options.now,
         }),
@@ -238,6 +239,7 @@ dbTest('rejects a refresh token issued before the password change marker', async
     jwtSecret: JWT_SECRET,
     accessTokenTtl: ACCESS_TOKEN_TTL,
     refreshTokenTtl: REFRESH_TOKEN_TTL,
+    sessionMaxLifetimeSeconds: 2_592_000,
     usersService,
   });
   const user = await createUser(usersService, 'stale-refresh@example.test');
@@ -350,6 +352,7 @@ test('a refresh racing a password change can mint only an already-stale generati
     jwtSecret: JWT_SECRET,
     accessTokenTtl: ACCESS_TOKEN_TTL,
     refreshTokenTtl: REFRESH_TOKEN_TTL,
+    sessionMaxLifetimeSeconds: 2_592_000,
     usersService,
   });
   const refreshToken = issueRuntimeToken(
@@ -387,6 +390,7 @@ test('refresh reissues a full pair using the configured refresh lifetime in seco
     jwtSecret: JWT_SECRET,
     accessTokenTtl: ACCESS_TOKEN_TTL,
     refreshTokenTtl: 604_800,
+    sessionMaxLifetimeSeconds: 2_592_000,
     usersService: { get: async () => user },
   });
   // A token minted under the old 30-day lifetime is still honored until its
@@ -428,6 +432,7 @@ test('refresh token lookup is scoped to the tenant claim and reissues tenant-bea
     jwtSecret: JWT_SECRET,
     accessTokenTtl: ACCESS_TOKEN_TTL,
     refreshTokenTtl: REFRESH_TOKEN_TTL,
+    sessionMaxLifetimeSeconds: 2_592_000,
     tenantClaim: 'tenant_id',
     usersService,
   });
@@ -458,6 +463,7 @@ test('refresh rejects a verified token with contradictory canonical and configur
     jwtSecret: JWT_SECRET,
     accessTokenTtl: ACCESS_TOKEN_TTL,
     refreshTokenTtl: REFRESH_TOKEN_TTL,
+    sessionMaxLifetimeSeconds: 2_592_000,
     tenantClaim: 'org_id',
     usersService: usersService as never,
   });
@@ -486,6 +492,7 @@ dbTest(
       jwtSecret: JWT_SECRET,
       accessTokenTtl: ACCESS_TOKEN_TTL,
       refreshTokenTtl: REFRESH_TOKEN_TTL,
+      sessionMaxLifetimeSeconds: 2_592_000,
       usersService,
     });
     const target = await createUser(usersService, 'admin-reset-target@example.test');
@@ -549,6 +556,7 @@ dbTest('fresh login after forced password change gets usable tokens', async ({ d
     jwtSecret: JWT_SECRET,
     accessTokenTtl: ACCESS_TOKEN_TTL,
     refreshTokenTtl: REFRESH_TOKEN_TTL,
+    sessionMaxLifetimeSeconds: 2_592_000,
     usersService,
   }).create({ refreshToken: loginResult.refreshToken });
   expect(refreshResult.user.email).toBe(user.email);
@@ -589,6 +597,7 @@ dbTest(
       jwtSecret: JWT_SECRET,
       accessTokenTtl: ACCESS_TOKEN_TTL,
       refreshTokenTtl: REFRESH_TOKEN_TTL,
+      sessionMaxLifetimeSeconds: 2_592_000,
       usersService,
     }).create({ refreshToken: loginResult.refreshToken });
     expect(refreshResult.user.email).toBe(user.email);

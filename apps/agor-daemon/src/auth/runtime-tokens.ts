@@ -1,4 +1,5 @@
 import { type ResolvedMultiTenancyConfig, resolveTenantContext } from '@agor/core/config';
+import { NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import type { TenantContext, User, UserID } from '@agor/core/types';
 import jwt, { type SignOptions } from 'jsonwebtoken';
 
@@ -94,24 +95,64 @@ export function issueRuntimeToken(
   });
 }
 
+export interface RuntimeTokenPairLimits {
+  /** Epoch seconds no token of the pair may outlive (the session deadline). */
+  notAfterSeconds?: number;
+  /** Additional epoch-seconds cap for the access token only. */
+  accessNotAfterSeconds?: number;
+}
+
+/** Sign a token whose `exp` never passes `notAfterSeconds`; fails closed when nothing remains. */
+function issueCappedRuntimeToken(
+  payload: RuntimeTokenPayload,
+  jwtSecret: string,
+  expiresIn: SignOptions['expiresIn'],
+  notAfterSeconds: number | undefined,
+  retryableWhenExhausted = false
+): string {
+  const token = issueRuntimeToken(payload, jwtSecret, expiresIn);
+  if (notAfterSeconds === undefined) return token;
+  const { exp, iat } = jwt.decode(token) as { exp: number; iat: number };
+  if (exp <= notAfterSeconds) return token;
+  if (notAfterSeconds <= iat) {
+    if (retryableWhenExhausted) throw new Unavailable('Session check is temporarily unavailable');
+    throw new NotAuthenticated('Session expired, please login again');
+  }
+  // Pin exp to the deadline itself so a second boundary during signing can't push it past.
+  return jwt.sign({ ...payload, iat, exp: notAfterSeconds }, jwtSecret, {
+    issuer: RUNTIME_JWT_ISSUER,
+    audience: RUNTIME_JWT_AUDIENCE,
+  });
+}
+
 export function issueRuntimeTokenPair(
   user: Pick<User, 'user_id'>,
   jwtSecret: string,
   accessTokenTtl: SignOptions['expiresIn'],
   /** Refresh-token lifetime in whole seconds (jsonwebtoken reads a number as seconds). */
   refreshTokenTtl: number,
-  extraClaims: Record<string, unknown> = {}
+  extraClaims: Record<string, unknown> = {},
+  limits: RuntimeTokenPairLimits = {}
 ): RuntimeTokenPair {
+  const accessNotAfter =
+    limits.accessNotAfterSeconds === undefined
+      ? limits.notAfterSeconds
+      : Math.min(limits.accessNotAfterSeconds, limits.notAfterSeconds ?? Number.POSITIVE_INFINITY);
   return {
-    accessToken: issueRuntimeToken(
+    accessToken: issueCappedRuntimeToken(
       { sub: user.user_id, type: 'access', ...extraClaims },
       jwtSecret,
-      accessTokenTtl
+      accessTokenTtl,
+      accessNotAfter,
+      // Only the session deadline ends a session; an access-only cap running out is retryable.
+      limits.accessNotAfterSeconds !== undefined &&
+        limits.accessNotAfterSeconds < (limits.notAfterSeconds ?? Number.POSITIVE_INFINITY)
     ),
-    refreshToken: issueRuntimeToken(
+    refreshToken: issueCappedRuntimeToken(
       { sub: user.user_id, type: 'refresh', ...extraClaims },
       jwtSecret,
-      refreshTokenTtl
+      refreshTokenTtl,
+      limits.notAfterSeconds
     ),
   };
 }

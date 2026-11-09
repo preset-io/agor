@@ -63,7 +63,7 @@ test('lean transcript releases old turn payloads beyond the recent-turn budget',
       await page.evaluate(() => window.transcriptRetentionFixture.addTurn());
       await page.waitForTimeout(20);
     }
-    await page.getByText('Answer 29').waitFor();
+    await page.getByText('Answer 29', { exact: true }).waitFor();
     assert.deepEqual(
       await liveTurns(page, cdp),
       both([0, ...range(20, 29)]),
@@ -75,7 +75,11 @@ test('lean transcript releases old turn payloads beyond the recent-turn budget',
     await reasoning.click(); // collapse reasoning: the last pin is released
     await disengage(page); // the collapsed trigger keeps its turn while focused
     assert.deepEqual(await liveTurns(page, cdp), both(range(20, 29)), 'collapsed turn is released');
-    assert.equal(await page.getByText('Answer 0').count(), 1, 'lean history stays visible');
+    assert.equal(
+      await page.getByText('Answer 0', { exact: true }).count(),
+      1,
+      'lean history stays visible'
+    );
 
     // Re-expanding an evicted turn reloads its detail from persisted history.
     await page.evaluate(() => window.transcriptRetentionFixture.delayDetailReads(500));
@@ -105,12 +109,12 @@ test('lean transcript releases turns that were already full when the reader open
       await page.evaluate(() => window.transcriptRetentionFixture.addTurn());
     }
     await page.evaluate(() => window.transcriptRetentionFixture.mount());
-    await page.getByText('Answer 2').waitFor();
+    await page.getByText('Answer 2', { exact: true }).waitFor();
     for (let n = 3; n < 30; n++) {
       await page.evaluate(() => window.transcriptRetentionFixture.addTurn());
       await page.waitForTimeout(20);
     }
-    await page.getByText('Answer 29').waitFor();
+    await page.getByText('Answer 29', { exact: true }).waitFor();
     assert.deepEqual(await liveTurns(page, cdp), both(range(20, 29)));
   });
 });
@@ -149,7 +153,7 @@ test('a reopened file edit, keyboard focus or a selection keeps its turn while e
       await page.evaluate(() => window.transcriptRetentionFixture.addTurn());
       await page.waitForTimeout(20);
     }
-    await page.getByText('Answer 29').waitFor();
+    await page.getByText('Answer 29', { exact: true }).waitFor();
     assert.equal(await editShown(), true, 'the reopened diff stays beyond the budget');
     assert.deepEqual(await liveTurns(page, cdp), both([0, ...range(20, 29)]));
     await edit.click(); // collapse the reopened edit: its pin is released
@@ -188,7 +192,7 @@ test('a reopened file edit, keyboard focus or a selection keeps its turn while e
       await page.evaluate(() => window.transcriptRetentionFixture.addTurn());
       await page.waitForTimeout(20);
     }
-    await page.getByText('Answer 39').waitFor();
+    await page.getByText('Answer 39', { exact: true }).waitFor();
     assert.deepEqual(await liveTurns(page, cdp), both([20, 21, ...range(30, 39)]));
     assert.equal(
       await page.evaluate(
@@ -223,7 +227,7 @@ test('a selection keeps every turn it spans, including a container-wide range', 
         await page.evaluate((edit) => window.transcriptRetentionFixture.addTurn({ edit }), n === 1)
       );
     }
-    await page.getByText('Answer 9').waitFor();
+    await page.getByText('Answer 9', { exact: true }).waitFor();
     // Show turn 1's default-open edit beside its answer, then close its tool calls.
     const chain = page.locator(`[data-task-block="${ids[1]}"]`).getByRole('button', {
       name: '1 tool call',
@@ -261,7 +265,7 @@ test('a selection keeps every turn it spans, including a container-wide range', 
       await page.evaluate(() => window.transcriptRetentionFixture.addTurn());
       await page.waitForTimeout(20);
     }
-    await page.getByText('Answer 19').waitFor();
+    await page.getByText('Answer 19', { exact: true }).waitFor();
     assert.deepEqual(await liveTurns(page, cdp), both([0, 1, 2, ...range(10, 19)]));
     assert.match(
       await page.evaluate(() => document.getSelection().toString()),
@@ -287,7 +291,7 @@ test('a selection keeps every turn it spans, including a container-wide range', 
       await page.evaluate(() => window.transcriptRetentionFixture.addTurn());
       await page.waitForTimeout(20);
     }
-    await page.getByText('Answer 29').waitFor();
+    await page.getByText('Answer 29', { exact: true }).waitFor();
     assert.deepEqual(await liveTurns(page, cdp), both(range(10, 29)));
     await disengage(page);
     assert.deepEqual(await liveTurns(page, cdp), both(range(20, 29)), 'selection cleared');
@@ -327,7 +331,7 @@ test('a portaled fullscreen viewer keeps its turn open and focused until closed'
       await page.evaluate(() => window.transcriptRetentionFixture.addTurn());
       await page.waitForTimeout(20);
     }
-    await page.getByText('Answer 29').waitFor();
+    await page.getByText('Answer 29', { exact: true }).waitFor();
     assert.deepEqual(await liveTurns(page, cdp), both([0, ...range(20, 29)]));
     assert.equal(
       await page.evaluate(
@@ -370,7 +374,7 @@ test('a byte budget releases very large turns before the turn count would', {
       );
       await page.waitForTimeout(20);
     }
-    await page.getByText('Answer 7').waitFor();
+    await page.getByText('Answer 7', { exact: true }).waitFor();
     assert.deepEqual(await liveTurns(page, cdp), both(range(3, 7)), 'oldest large turns released');
 
     // A reader re-expands an evicted large turn: its pin holds it within budget.
@@ -387,10 +391,10 @@ test('a byte budget releases very large turns before the turn count would', {
       (bytes) => window.transcriptRetentionFixture.addTurn({ bytes }),
       36 * MiB
     );
-    await page.getByText('Answer 8').waitFor();
+    await page.getByText('Answer 8', { exact: true }).waitFor();
     assert.deepEqual(await liveTurns(page, cdp), both([8]), 'the latest turn is protected');
     await page.evaluate(() => window.transcriptRetentionFixture.addTurn());
-    await page.getByText('Answer 9').waitFor();
+    await page.getByText('Answer 9', { exact: true }).waitFor();
     assert.deepEqual(await liveTurns(page, cdp), both([9]), 'no longer latest: released');
     const hugeTurn = page.locator(`[data-task-block="${huge}"]`);
     const hugeChain = hugeTurn.getByRole('button', { name: '1 tool call' });
@@ -428,7 +432,7 @@ test('reloaded inline detail stays open and live while protected turns exceed th
       (bytes) => window.transcriptRetentionFixture.addTurn({ bytes }),
       36 * 1024 * 1024
     );
-    await page.getByText('Answer 3').waitFor();
+    await page.getByText('Answer 3', { exact: true }).waitFor();
     assert.deepEqual(await liveTurns(page, cdp), both([3]));
 
     // Reloading opens the detail the reader asked for, which then holds the turn.
@@ -467,9 +471,13 @@ test('reloaded inline detail stays open and live while protected turns exceed th
       await turn.getByRole('button', { name: '1 tool call' }).waitFor();
     }
     assert.deepEqual(await liveTurns(page, cdp), both([3]), 'collapsed: released');
-    assert.equal(await page.getByText('Answer 0').count(), 1, 'lean history stays visible');
-    assert.equal(await page.getByText('Answer 1').count(), 1);
-    assert.equal(await page.getByText('Answer 2').count(), 1);
+    assert.equal(
+      await page.getByText('Answer 0', { exact: true }).count(),
+      1,
+      'lean history stays visible'
+    );
+    assert.equal(await page.getByText('Answer 1', { exact: true }).count(), 1);
+    assert.equal(await page.getByText('Answer 2', { exact: true }).count(), 1);
 
     await page.evaluate(() => window.transcriptRetentionFixture.unmount());
     assert.deepEqual(await liveTurns(page, cdp), both([]));
@@ -511,10 +519,10 @@ test('a reader parked at the latest turns keeps a bounded lean transcript and DO
       }
     };
     await addTurns(60);
-    await page.getByText('Answer 59').waitFor();
+    await page.getByText('Answer 59', { exact: true }).waitFor();
     const at60 = await dom();
     await addTurns(60);
-    await page.getByText('Answer 119').waitFor();
+    await page.getByText('Answer 119', { exact: true }).waitFor();
     const at120 = await dom();
     const lean = await liveLean();
     const { usedSize } = await cdp.send('Runtime.getHeapUsage');
