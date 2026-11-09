@@ -120,6 +120,8 @@ function sanitizeProvisioningError(error: unknown): string {
   }
 }
 
+const REPO_SETTINGS_ADMIN_REQUIRED = 'Admin access is required to change repository settings';
+
 /** Fields the git.clone worker writes when it finalizes or fails its own setup attempt. */
 const CLONE_WORKER_FIELDS: ReadonlySet<string> = new Set([
   'local_path',
@@ -286,7 +288,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     ) {
       return;
     }
-    throw new Forbidden('Admin access is required to change repository settings');
+    throw new Forbidden(REPO_SETTINGS_ADMIN_REQUIRED);
   }
 
   /**
@@ -444,6 +446,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         // A retry reuses a shared row; changing its default branch is a settings write.
         { keepDefaultBranchOnRetry: !hasMinimumRole(user.role, ROLES.ADMIN) }
       );
+      if (claim.defaultBranchChangeDenied) throw new Forbidden(REPO_SETTINGS_ADMIN_REQUIRED);
       const repo = claim.repo;
       const repoId = repo.repo_id;
       if (!claim.acquired) return { status: 'exists', slug, repo_id: repoId };

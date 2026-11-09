@@ -925,6 +925,38 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
     );
   });
 
+  it('rejects a member retry that asks for a different default branch', async () => {
+    executorMocks.spawnExecutorFireAndForget.mockClear();
+    repositoryMocks.claimClone.mockResolvedValueOnce({
+      repo: { repo_id: '550e8400-e29b-41d4-a716-446655440001', default_branch: 'main' },
+      acquired: false,
+      created: false,
+      defaultBranchChangeDenied: true,
+    });
+    const generateCommandToken = vi.fn(async () => 'delegated-user-token');
+    const service = new ReposService(
+      {} as never,
+      {
+        get: () => ({}),
+        sessionTokenService: { generateCommandToken },
+        settings: { authentication: { secret: 'test-secret' } },
+        service: vi.fn(() => ({ patch: vi.fn() })),
+      } as unknown as Application
+    );
+
+    await expect(
+      service.cloneRepository(
+        { url: 'https://github.com/preset-io/agor-retry.git', default_branch: 'other' },
+        { user: { user_id: '550e8400-e29b-41d4-a716-446655440004', role: 'member' } } as never
+      )
+    ).rejects.toMatchObject({
+      code: 403,
+      message: 'Admin access is required to change repository settings',
+    });
+    expect(generateCommandToken).not.toHaveBeenCalled();
+    expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+  });
+
   it('persists clone-exit failure in a fresh write-gated tenant unit', async () => {
     executorMocks.spawnExecutorFireAndForget.mockClear();
     const db = { marker: 'base-db', run: vi.fn() };

@@ -32,23 +32,57 @@ describe('clone reservation and in-place recovery', () => {
     expect(await repository.count()).toBe(1);
   });
 
-  dbTest('a retry keeps the stored default branch only when asked to', async ({ db }) => {
+  dbTest('a protected retry cannot change the stored default branch', async ({ db }) => {
     const repository = new RepoRepository(db);
     const fail = async (repo: Repo) =>
       repository.update(repo.repo_id, {
         clone_status: 'failed',
         clone_generation: repo.clone_generation,
       });
+    const protectedRetry = (default_branch?: string) =>
+      repository.claimClone(
+        { ...data, ...(default_branch ? { default_branch } : {}) },
+        { keepDefaultBranchOnRetry: true }
+      );
     const { repo: first } = await repository.claimClone(data);
-    await fail(first);
-    const { repo: kept } = await repository.claimClone(
-      { ...data, default_branch: 'attacker' },
-      { keepDefaultBranchOnRetry: true }
-    );
-    expect(kept).toMatchObject({ clone_status: 'cloning', default_branch: 'main' });
-    await fail(kept);
+    const failed = await fail(first);
+
+    const denied = await protectedRetry('attacker');
+    expect(denied).toMatchObject({ acquired: false, defaultBranchChangeDenied: true });
+    expect(denied.repo).toMatchObject({
+      clone_status: 'failed',
+      clone_generation: failed.clone_generation,
+      default_branch: 'main',
+    });
+
+    const { repo: same, acquired } = await protectedRetry('main');
+    expect(acquired).toBe(true);
+    expect(same).toMatchObject({ clone_status: 'cloning', default_branch: 'main' });
+    await fail(same);
+    const { repo: unspecified } = await protectedRetry();
+    expect(unspecified).toMatchObject({ clone_status: 'cloning', default_branch: 'main' });
+    await fail(unspecified);
+
     const { repo: changed } = await repository.claimClone({ ...data, default_branch: 'develop' });
     expect(changed).toMatchObject({ clone_status: 'cloning', default_branch: 'develop' });
+  });
+
+  dbTest('a protected retry leaves an unset default branch for the worker', async ({ db }) => {
+    const repository = new RepoRepository(db);
+    const { default_branch: _unset, ...withoutBranch } = data;
+    const { repo: first } = await repository.claimClone(withoutBranch);
+    await repository.update(first.repo_id, {
+      clone_status: 'failed',
+      clone_generation: first.clone_generation,
+    });
+
+    const retried = await repository.claimClone(
+      { ...withoutBranch, default_branch: 'main' },
+      { keepDefaultBranchOnRetry: true }
+    );
+    expect(retried.acquired).toBe(true);
+    expect(retried.defaultBranchChangeDenied).toBeUndefined();
+    expect(retried.repo.default_branch).toBeUndefined();
   });
 
   dbTest(
