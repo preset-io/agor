@@ -1,7 +1,7 @@
 import { getCurrentTenantDatabaseScope, runWithoutTenantDatabaseScope } from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
 import type { UserID } from '@agor/core/types';
-import type { LaunchSessionRevalidator } from './launch-auth.js';
+import { LaunchMembershipRefusedError, type LaunchSessionRevalidator } from './launch-auth.js';
 import { runtimeTenantClaims } from './runtime-tokens.js';
 import { AUTH_LAUNCH_SUBJECT_CLAIM, AUTH_REVALIDATED_AT_MS_CLAIM } from './session-lifetime.js';
 
@@ -24,12 +24,14 @@ interface TrackedMembership {
   nextCheckAtMs: number;
   confirmedAtMs?: number;
   launchSubject?: string;
+  refused?: boolean;
 }
 
 /**
  * Rate-limits the issuer membership check for direct personal API key use.
- * This state is only a per-replica throttle: a refusal deletes the user's keys
- * durably, so a confirmation remembered here can't outlive it on another replica.
+ * This state is a per-replica throttle: a refusal deletes the user's keys durably,
+ * so for keys a confirmation remembered here can't outlive it on another replica.
+ * MCP session tokens have no such fence and rely on each replica's own check.
  */
 export function createApiKeyMembershipCheck(options: {
   revalidate: LaunchSessionRevalidator;
@@ -87,19 +89,22 @@ export function createApiKeyMembershipCheck(options: {
         launchSubject: result?.launchSubject,
       });
     } catch (error) {
-      if (error instanceof NotAuthenticated) {
+      if (error instanceof LaunchMembershipRefusedError) {
         // A refusal repeats its side effects, so it waits as long as a confirmation does.
         return remember(key, {
           outcome: 'rejected',
           nextCheckAtMs: now() + API_KEY_MEMBERSHIP_CHECK_INTERVAL_MS,
+          refused: true,
         });
       }
       return remember(key, {
-        // An outage can't overturn a refusal; only the issuer's next answer can.
-        outcome: previous?.outcome === 'rejected' ? 'rejected' : 'unavailable',
+        // Neither an outage nor a bad response can overturn a refusal; only a confirmation can.
+        outcome:
+          error instanceof NotAuthenticated || previous?.refused ? 'rejected' : 'unavailable',
         nextCheckAtMs: now() + API_KEY_MEMBERSHIP_RETRY_MS,
         confirmedAtMs: previous?.confirmedAtMs,
         launchSubject: previous?.launchSubject,
+        refused: previous?.refused,
       });
     }
   };

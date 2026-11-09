@@ -14,7 +14,7 @@ import {
   API_KEY_MEMBERSHIP_RETRY_MS,
   createApiKeyMembershipCheck,
 } from './api-key-membership-check.js';
-import type { LaunchSessionRevalidator } from './launch-auth.js';
+import { LaunchMembershipRefusedError, type LaunchSessionRevalidator } from './launch-auth.js';
 import { AUTH_LAUNCH_SUBJECT_CLAIM, AUTH_REVALIDATED_AT_MS_CLAIM } from './session-lifetime.js';
 
 const userId = 'user-1' as UserID;
@@ -61,7 +61,7 @@ describe('API key membership check', () => {
 
   it('rejects after a refusal and asks again only after a full interval', async () => {
     const revalidate = vi.fn(async () => {
-      throw new NotAuthenticated('refused');
+      throw new LaunchMembershipRefusedError('refused');
     });
     const { clock, check } = harness(revalidate);
     await expect(check({ tenantId, userId })).resolves.toBe('rejected');
@@ -76,7 +76,7 @@ describe('API key membership check', () => {
   it('stays rejected when an outage follows a refusal, until the issuer answers', async () => {
     const revalidate = vi
       .fn()
-      .mockRejectedValueOnce(new NotAuthenticated('refused'))
+      .mockRejectedValueOnce(new LaunchMembershipRefusedError('refused'))
       .mockRejectedValueOnce(new Unavailable('down'))
       .mockResolvedValue(confirmed(1_000_000));
     const { clock, check } = harness(revalidate);
@@ -91,7 +91,7 @@ describe('API key membership check', () => {
     const revalidate = vi
       .fn()
       .mockResolvedValueOnce(confirmed(1_000_000))
-      .mockRejectedValueOnce(new NotAuthenticated('refused'))
+      .mockRejectedValueOnce(new LaunchMembershipRefusedError('refused'))
       .mockResolvedValue(confirmed(1_000_000));
     const { clock, check } = harness(revalidate);
     await check({ tenantId, userId });
@@ -100,6 +100,24 @@ describe('API key membership check', () => {
     clock.nowMs += API_KEY_MEMBERSHIP_CHECK_INTERVAL_MS;
     await check({ tenantId, userId });
     expect(revalidate.mock.calls[2][0].payload).not.toHaveProperty(AUTH_REVALIDATED_AT_MS_CLAIM);
+  });
+
+  it('treats a bad issuer response as a short rejection that keeps the confirmation', async () => {
+    const revalidate = vi
+      .fn()
+      .mockResolvedValueOnce(confirmed(1_000_000))
+      .mockRejectedValueOnce(new NotAuthenticated('assertion rejected'))
+      .mockResolvedValueOnce({ ...confirmed(1_000_000), notAfterSeconds: 9_000_000 });
+    const { clock, check } = harness(revalidate);
+    await check({ tenantId, userId });
+    clock.nowMs += API_KEY_MEMBERSHIP_CHECK_INTERVAL_MS;
+    await expect(check({ tenantId, userId })).resolves.toBe('rejected');
+    clock.nowMs += API_KEY_MEMBERSHIP_RETRY_MS - 1;
+    await expect(check({ tenantId, userId })).resolves.toBe('rejected');
+    expect(revalidate).toHaveBeenCalledTimes(2);
+    clock.nowMs += 1;
+    await expect(check({ tenantId, userId })).resolves.toBe('allowed');
+    expect(revalidate.mock.calls[2][0].payload[AUTH_REVALIDATED_AT_MS_CLAIM]).toBe(1_000_000);
   });
 
   it('keeps the last confirmation through an outage and caps a deferral at the grace deadline', async () => {

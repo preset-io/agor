@@ -31,6 +31,7 @@ import {
   createLaunchProjectionSerializer,
   createLaunchSessionRevalidator,
   LAUNCH_REVALIDATION_OUTAGE_GRACE_SECONDS,
+  LaunchMembershipRefusedError,
   launchSessionsAreRevalidated,
   resolveLaunchConnectionBounds,
 } from './launch-auth.js';
@@ -398,6 +399,28 @@ describe('refresh-time launch membership revalidation', () => {
       const { authenticate, rawKey } = await keyHolder(state);
       state.revalidate = down;
       await expect(authenticate(rawKey)).rejects.toMatchObject({ code: 503 });
+    });
+
+    it('marks only a membership refusal as one', async () => {
+      const state = member();
+      const { all } = await keyHolder(state);
+      const payload = {
+        sub: 'x',
+        tenant_id: 'tenant-a',
+        [AUTH_LAUNCH_SUBJECT_CLAIM]: 'user:cloud-1',
+      };
+      const revalidate = (userId: UserID) =>
+        all.revalidateLaunchSession!({ userId, payload }).catch((error: unknown) => error);
+      const row = await select(db).from(users).one();
+      const userId = row?.user_id as UserID;
+
+      state.revalidate = () => Response.json({ assertion: 'not-a-jwt' });
+      const badResponse = await revalidate(userId);
+      expect(badResponse).toMatchObject({ name: 'NotAuthenticated' });
+      expect(badResponse).not.toBeInstanceOf(LaunchMembershipRefusedError);
+
+      state.revalidate = refused;
+      await expect(revalidate(userId)).resolves.toBeInstanceOf(LaunchMembershipRefusedError);
     });
 
     it('leaves keys of accounts with no launch identity alone', async () => {

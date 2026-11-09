@@ -391,11 +391,16 @@ issuer can't answer, the key keeps working for up to one hour after that daemon
 last confirmed the user; after that, requests return a retryable `503` and the
 key is kept. That confirmation is held in memory, so a daemon that restarts during
 an outage returns the `503` straight away. The issuer is never asked about keys
-on accounts with no launch identity at this issuer.
+on accounts with no launch identity at this issuer. A response the daemon can't
+accept, such as a bad signature or the wrong subject or tenant, rejects the key
+until a retry a minute later. A daemon that saw a refusal keeps rejecting that
+user's keys and MCP session tokens for 15 minutes, even after they launch again.
 
 The session tokens agents use for MCP take the same check, so a refusal rejects
-them too. During an issuer outage a token that hasn't been refused keeps working
-until it expires, so a running agent keeps its tools.
+them too. These tokens are checked per daemon, with no durable record of a
+refusal. So during an issuer outage a token keeps working until it expires unless
+the daemon handling it has already seen a refusal, and a running agent keeps its
+tools.
 
 ## Compatibility and upgrade notes
 

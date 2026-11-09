@@ -1040,6 +1040,9 @@ export type LaunchSessionRevalidator = (
   input: LaunchSessionRevalidationInput
 ) => Promise<LaunchSessionRevalidationResult | null>;
 
+/** The issuer said this user is no longer a member; other rejections are about the response itself. */
+export class LaunchMembershipRefusedError extends NotAuthenticated {}
+
 /** The issuer's refusal code: the user is no longer an active member of the session's tenant. */
 export const LAUNCH_SESSION_MEMBERSHIP_INACTIVE = 'membership_inactive';
 
@@ -1297,6 +1300,7 @@ export function createLaunchSessionRevalidator(
           console.warn('[auth.refresh] session_revalidation_fence_failed');
         }
         options.onAuthorizationInvalidated?.(refusedTenantId, userId);
+        throw new LaunchMembershipRefusedError('Invalid or expired refresh token');
       }
       throw new NotAuthenticated('Invalid or expired refresh token');
     }
