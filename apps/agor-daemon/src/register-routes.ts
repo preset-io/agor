@@ -217,6 +217,7 @@ import {
   deliverPermissionDecision,
   type PermissionDecisionSubmission,
 } from './permissions/deliver-permission-decision.js';
+import { userScopedAuthorizationInvalidation } from './realtime/routing.js';
 import { registerTeamsGatewayIngressRoute } from './routes/teams-gateway-ingress.js';
 import { publicBoardCommentRepositionInput } from './services/board-comments.js';
 import type { GatewayService } from './services/gateway.js';
@@ -1352,7 +1353,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         config,
         provider: externalLaunchProvider,
         serializeProjection: serializeLaunchProjection,
-        onAuthorizationInvalidated: onLaunchAuthorizationInvalidated,
+        // A refusal or refresh-detected role change only concerns that user's sockets.
+        onAuthorizationInvalidated: (tenantId, userId) => {
+          app.emit(
+            'realtime:authorization-invalidated',
+            userScopedAuthorizationInvalidation(tenantId, userId)
+          );
+        },
       }),
     })
   );
