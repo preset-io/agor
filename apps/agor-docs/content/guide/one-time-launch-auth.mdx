@@ -394,7 +394,8 @@ an outage returns the `503` straight away. The issuer is never asked about keys
 on accounts with no launch identity at this issuer. A response the daemon can't
 accept, such as a bad signature or the wrong subject or tenant, rejects the key
 until a retry a minute later. A daemon that saw a refusal keeps rejecting that
-user's keys and MCP session tokens for 15 minutes, even after they launch again.
+user's keys and MCP session tokens for 15 minutes, even after they launch again,
+and after that until the issuer next confirms the user.
 
 The session tokens agents use for MCP take the same check, so a refusal rejects
 them too. These tokens are checked per daemon, with no durable record of a
