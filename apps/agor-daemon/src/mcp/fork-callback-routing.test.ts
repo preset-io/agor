@@ -23,7 +23,7 @@ import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { setupQuery } from '../../../../packages/executor/src/sdk-handlers/claude/query-builder';
 import { SessionsService } from '../services/sessions';
 import { TasksService } from '../services/tasks';
-import { createSessionMcpTokenAfterHooks } from '../utils/session-mcp-token-hook';
+import { createSessionMcpTokenHook } from '../utils/session-mcp-token-hook';
 import { setupMCPRoutes } from './server';
 import { initMcpTokens, shutdownMcpTokens } from './tokens';
 
@@ -80,8 +80,8 @@ dbTest(
     const sessions = new SessionsService(db, app as never, () => true);
     app.use('sessions', sessions);
     const queue = vi.spyOn(sessions, 'triggerQueueProcessing').mockResolvedValue(undefined);
-    const hooks = createSessionMcpTokenAfterHooks({ app: app as never, config: {} });
-    app.service('sessions').hooks({ after: { get: [hooks.get], create: [hooks.create] } });
+    const mcpTokenHook = createSessionMcpTokenHook({ app: app as never, config: {} });
+    app.service('sessions').hooks({ after: { get: [mcpTokenHook] } });
     initMcpTokens({ db, multiTenancy: resolveMultiTenancyConfig({}) });
     const tasks = new TaskRepository(db);
     const taskService = new TasksService(db, app as never);

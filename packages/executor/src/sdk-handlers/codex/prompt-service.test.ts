@@ -372,13 +372,10 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     // itself may be inside an outer sandbox, which must not rewrite the policy
     // under test into danger-full-access.
     delete process.env.AGOR_OUTER_SANDBOX;
-    // No user config.toml, so Agor's shell env policy uses the canonical filter form.
-    vi.stubEnv('CODEX_HOME', path.join(os.tmpdir(), `agor-codex-home-absent-${process.pid}`));
     vi.clearAllMocks();
   });
 
   afterEach(() => {
-    vi.unstubAllEnvs();
     if (originalOuterSandbox === undefined) delete process.env.AGOR_OUTER_SANDBOX;
     else process.env.AGOR_OUTER_SANDBOX = originalOuterSandbox;
   });
@@ -585,7 +582,6 @@ describe('CodexPromptService - prompt flow client initialization', () => {
               default_tools_approval_mode: 'approve',
             },
           },
-          shell_environment_policy: { filters: { 'AGOR_MCP_*': 'exclude' } },
           ...(expectedApps ? { apps: expectedApps } : {}),
         },
       ]);
@@ -987,12 +983,14 @@ describe('CodexPromptService - forked sessions', () => {
           const config = mockInstanceConfigs.at(-1) as {
             model_instructions_file: string;
             mcp_servers: { agor: { url: string; bearer_token_env_var: string } };
-            shell_environment_policy: unknown;
+            shell_environment_policy: { set: Record<string, string> };
           };
           // Config becomes Codex argv; the bearer rides only an env var hidden from shells.
           expect(JSON.stringify(config)).not.toContain('child-test-token');
           expect(config.mcp_servers.agor.bearer_token_env_var).toMatch(/^AGOR_MCP_/);
-          expect(JSON.stringify(config.shell_environment_policy)).toContain('"AGOR_MCP_*"');
+          expect(
+            config.shell_environment_policy.set[config.mcp_servers.agor.bearer_token_env_var]
+          ).toBe('');
           expect(path.basename(config.model_instructions_file)).toBe(
             'agor-codex-instructions-child-session.md'
           );

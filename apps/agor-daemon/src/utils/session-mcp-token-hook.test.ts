@@ -21,7 +21,7 @@ import {
 } from '../auth/executor-session-token.js';
 import { setupMCPRoutes } from '../mcp/server.js';
 import { initMcpTokens, shutdownMcpTokens } from '../mcp/tokens.js';
-import { createSessionMcpTokenAfterHooks } from './session-mcp-token-hook.js';
+import { createSessionMcpTokenHook } from './session-mcp-token-hook.js';
 
 const JWT_SECRET = 'session-mcp-hook-test-secret';
 
@@ -29,23 +29,13 @@ function makeApp(session: Session) {
   const app = feathers();
   app.set('authentication', { secret: JWT_SECRET });
   app.use('sessions', {
-    async create() {
-      return { ...session };
-    },
     async get() {
       return { ...session };
     },
   });
-  const hooks = createSessionMcpTokenAfterHooks({
-    app: app as never,
-    config: {},
-  });
-  app.service('sessions').hooks({
-    after: {
-      create: [hooks.create],
-      get: [hooks.get],
-    },
-  });
+  app
+    .service('sessions')
+    .hooks({ after: { get: [createSessionMcpTokenHook({ app: app as never, config: {} })] } });
   return app;
 }
 
@@ -127,27 +117,34 @@ async function seedRunningTask(db: Database, session: Session) {
 }
 
 describe('sessions MCP-token after hook', () => {
-  dbTest.for(['create', 'get'] as const)(
-    'attaches a task-bound default-static token to a task executor %s',
-    async (method, { db }) => {
-      initMcpTokens({ db, multiTenancy: resolveMultiTenancyConfig({}) });
-      const session = await seedSession(db);
-      const task = await seedRunningTask(db, session);
-      const service = makeApp(session).service('sessions');
-      // No request tenant params or ambient ALS: this models executor fetches (issue #2003).
-      const params = executorParams(session, task.task_id) as never;
-      const result =
-        method === 'create'
-          ? await service.create({}, params)
-          : await service.get(session.session_id, params);
+  dbTest('attaches a task-bound default-static token to a task executor', async ({ db }) => {
+    initMcpTokens({ db, multiTenancy: resolveMultiTenancyConfig({}) });
+    const session = await seedSession(db);
+    const task = await seedRunningTask(db, session);
+    // No request tenant params or ambient ALS: this models executor fetches (issue #2003).
+    const result = await makeApp(session)
+      .service('sessions')
+      .get(session.session_id, executorParams(session, task.task_id) as never);
 
-      const claims = jwt.verify((result as Session).mcp_token!, JWT_SECRET) as {
-        tid?: string;
-        tsk?: string;
-      };
-      expect(claims).toMatchObject({ tid: 'default', tsk: task.task_id });
-    }
-  );
+    const claims = jwt.verify((result as Session).mcp_token!, JWT_SECRET) as {
+      tid?: string;
+      tsk?: string;
+    };
+    expect(claims).toMatchObject({ tid: 'default', tsk: task.task_id });
+  });
+
+  dbTest("returns no token for a session other than the executor's own", async ({ db }) => {
+    initMcpTokens({ db, multiTenancy: resolveMultiTenancyConfig({}) });
+    const own = await seedSession(db);
+    const parent = await seedSession(db);
+    const task = await seedRunningTask(db, own);
+
+    expect(
+      await makeApp(parent)
+        .service('sessions')
+        .get(parent.session_id, executorParams(own, task.task_id) as never)
+    ).not.toHaveProperty('mcp_token');
+  });
 
   dbTest.for([
     ['a browser/API member', { user: member }],
@@ -169,7 +166,6 @@ describe('sessions MCP-token after hook', () => {
     const service = makeApp(session).service('sessions');
 
     expect(await service.get(session.session_id, params as never)).not.toHaveProperty('mcp_token');
-    expect(await service.create({}, params as never)).not.toHaveProperty('mcp_token');
   });
 
   dbTest('returns no token to a viewer even with task executor scope', async ({ db }) => {

@@ -23,7 +23,6 @@
  * without cleanup. See issue #133.
  */
 
-import { readFileSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -213,15 +212,6 @@ function applyGatewayMcpStartupGuard(config: CodexConfigObject, requireMcpServer
 
 function getCodexHome(): string {
   return process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
-}
-
-/** The user's own Codex config, read only so Agor's env policy extends rather than replaces it. */
-function readUserCodexConfigToml(): string | undefined {
-  try {
-    return readFileSync(path.join(getCodexHome(), 'config.toml'), 'utf8');
-  } catch {
-    return undefined;
-  }
 }
 
 async function findCodexRolloutFile(threadId: string): Promise<string | undefined> {
@@ -512,7 +502,7 @@ export class CodexPromptService {
     const options: ConstructorParameters<typeof CodexSdk.Codex>[0] = {
       ...(apiKey ? { apiKey } : {}),
       ...(baseUrl ? { baseUrl } : {}),
-      config: applyAgorCodexLaunchPolicy(config, includePlugins, readUserCodexConfigToml()),
+      config: applyAgorCodexLaunchPolicy(config, includePlugins),
     };
 
     if (useSubscription) {

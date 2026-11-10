@@ -1228,13 +1228,15 @@ export class OpenCodeTool {
     directory: string,
     servers: Record<string, unknown>
   ): Promise<void> {
-    for (const [name, config] of Object.entries(servers)) {
-      const response = await client.mcp.add({
-        body: { name, config: config as OpenCodeMcpServerConfig },
-        query: { directory },
-      });
-      if (response.error) throw new Error(`OpenCode could not attach MCP server ${name}`);
-    }
+    await Promise.all(
+      Object.entries(servers).map(async ([name, config]) => {
+        const response = await client.mcp.add({
+          body: { name, config: config as OpenCodeMcpServerConfig },
+          query: { directory },
+        });
+        if (response.error) throw new Error(`OpenCode could not attach MCP server ${name}`);
+      })
+    );
   }
 
   /** Create a new OpenCode session on the invocation's managed runtime. */

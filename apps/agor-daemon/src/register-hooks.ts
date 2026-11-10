@@ -236,7 +236,7 @@ import {
   recomputeNextRunAt,
   validateScheduleConfig,
 } from './utils/schedule-hooks.js';
-import { createSessionMcpTokenAfterHooks } from './utils/session-mcp-token-hook.js';
+import { createSessionMcpTokenHook } from './utils/session-mcp-token-hook.js';
 import { deferWithSessionQueueTenantScope } from './utils/session-queue-tenant-scope.js';
 import {
   isTerminalQueueProcessingSuppressed,
@@ -1445,13 +1445,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     jwtSecret,
   });
   const executionMode = resolveExecutionSecurityMode(config);
-  const sessionMcpTokenAfterHooks = createSessionMcpTokenAfterHooks({
+  const sessionMcpTokenGetHook = createSessionMcpTokenHook({
     app,
     config,
-    onGetAttached: (session) =>
+    onAttached: (session) =>
       mcpTokenDebug(`🔄 Resolved MCP token for session ${shortId(session.session_id)}`),
-    onCreateAttached: (session) =>
-      console.log(`🎫 MCP token issued for session ${shortId(session.session_id)}`),
   });
 
   const tenantOwnedServicePaths = TENANT_OWNED_SERVICE_PATHS;
@@ -3476,7 +3474,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           return context;
         },
       ],
-      get: [sessionMcpTokenAfterHooks.get],
+      get: [sessionMcpTokenGetHook],
       create: [
         async (context) => {
           const session = context.result as Session;
@@ -3487,7 +3485,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           );
           return context;
         },
-        sessionMcpTokenAfterHooks.create,
         // TODO: OpenCode session creation moved to executor - implement via IPC if needed
       ],
       patch: [

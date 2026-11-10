@@ -520,9 +520,9 @@ tenant-scoped units of work.
 MCP session tokens are short-lived JWTs (aud `agor:mcp:internal`) embedding
 the session (`sub`), the user the agent acts for (`uid`), the tenant (`tid`),
 the executor's task (`tsk`), a per-issuance ID (`jti`), and an expiry (`exp`).
-Agor issues them only to an agent's executor, which fetches its session with
-its own task-scoped credential; a still-valid token may be reused from a cache
-keyed by tenant, session, user, and task.
+Agor issues them only to an agent's executor, when it fetches its own session
+with its task-scoped credential; a still-valid token may be reused from a
+cache keyed by tenant, session, user, and task.
 
 A token stops working as soon as its task completes, fails, or a Stop is
 requested, so an agent keeps its Agor tools for the whole turn but a copied
@@ -544,29 +544,33 @@ The executor hands the token to the coding agent without putting it where the
 agent's own shell commands can read it:
 
 - **Claude Code:** applied over the SDK control channel before the first
-  prompt, not on the CLI command line.
-- **Codex:** read by Codex from an environment variable that Agor's
-  `shell_environment_policy` keeps out of every command Codex runs. A legacy
-  `exclude`/`include_only` list in your `config.toml` is extended, not
-  replaced.
+  prompt, together with the other MCP servers and their credentials, not on
+  the CLI command line.
+- **Codex:** read by Codex from an environment variable that Agor blanks in
+  every command Codex runs (`shell_environment_policy.set`), along with the
+  variables carrying other MCP servers' credentials. Your own
+  `shell_environment_policy` settings keep applying.
 - **OpenCode:** attached through the OpenCode server's authenticated API
   rather than its environment, together with the other MCP servers and their
   resolved auth headers.
 - **Gemini, Copilot, Cursor:** passed in process or over the SDK's stdio
   channel.
 
-The agent process itself still holds the token in memory, and on a shared
-account another process could read that memory or the agent CLI's own process
-environment. The task binding limits what such a copy is worth.
+This keeps the token out of what the agent's commands inherit or see in a
+process listing. It does not isolate processes running as the same OS user:
+such a process can still read the agent's memory, or, for Codex, the Codex
+process's own environment (for example `/proc/<pid>/environ` on Linux). The
+task binding limits what such a copy is worth.
 
 ### Access gating
 
-- **`GET /sessions/:id`** and **`POST /sessions`** return `mcp_token` only to
-  a task executor whose delegated user is `member+`, after normal session and
-  branch authorization. That user need not be the session creator: MCP tools
-  act as the prompting user and enforce their normal authorization checks.
-- Browser, CLI, and API callers, service accounts, and viewers never receive
-  an `mcp_token`. External clients use
+- **`GET /sessions/:id`** returns `mcp_token` only to a task executor reading
+  its own session, whose delegated user is `member+`, after normal session
+  and branch authorization. That user need not be the session creator: MCP
+  tools act as the prompting user and enforce their normal authorization
+  checks.
+- `POST /sessions` never returns one. Browser, CLI, and API callers, service
+  accounts, and viewers never receive an `mcp_token`; external clients use
   [personal API keys](#external-agent-access) instead.
 
 ### Config knobs

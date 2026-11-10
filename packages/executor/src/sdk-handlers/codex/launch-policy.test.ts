@@ -1,10 +1,8 @@
 import type { CodexOptions } from '@agor/core/sdk';
 import { describe, expect, it } from 'vitest';
-import { agorShellEnvironmentPolicy, applyAgorCodexLaunchPolicy } from './launch-policy.js';
+import { applyAgorCodexLaunchPolicy } from './launch-policy.js';
 
 type CodexConfigObject = NonNullable<CodexOptions['config']>;
-
-const agorShellPolicy = { filters: { 'AGOR_MCP_*': 'exclude' } };
 
 describe('applyAgorCodexLaunchPolicy', () => {
   it('disables native multi-agent while preserving every unrelated override', () => {
@@ -38,7 +36,6 @@ describe('applyAgorCodexLaunchPolicy', () => {
           url: 'http://localhost:3030/mcp',
         },
       },
-      shell_environment_policy: agorShellPolicy,
     });
     expect(config.features).toEqual({
       goals: false,
@@ -51,7 +48,6 @@ describe('applyAgorCodexLaunchPolicy', () => {
     expect(applyAgorCodexLaunchPolicy(undefined)).toEqual({
       features: { multi_agent: false, plugins: false },
       tools: { update_plan: { enabled: true } },
-      shell_environment_policy: agorShellPolicy,
     });
   });
 
@@ -69,7 +65,6 @@ describe('applyAgorCodexLaunchPolicy', () => {
         web_search: true,
         update_plan: { enabled: true, some_future_field: 'keep' },
       },
-      shell_environment_policy: agorShellPolicy,
     });
     // Input is not mutated.
     expect((config.tools as CodexConfigObject).update_plan).toEqual({
@@ -118,25 +113,27 @@ describe('applyAgorCodexLaunchPolicy', () => {
   });
 });
 
-describe('agorShellEnvironmentPolicy', () => {
-  it('adds a canonical filter when the user sets no policy or already uses filters', () => {
-    expect(agorShellEnvironmentPolicy(undefined)).toEqual(agorShellPolicy);
-    expect(agorShellEnvironmentPolicy('model = "gpt-5"\n')).toEqual(agorShellPolicy);
-    expect(
-      agorShellEnvironmentPolicy('[shell_environment_policy.filters]\n"AWS_*" = "exclude"\n')
-    ).toEqual(agorShellPolicy);
+describe('MCP credential env vars', () => {
+  it('blanks every bearer and header env var in the shells Codex runs', () => {
+    const result = applyAgorCodexLaunchPolicy({
+      mcp_servers: {
+        agor: { url: 'http://localhost:3030/mcp', bearer_token_env_var: 'AGOR_MCP_S1_AGOR' },
+        remote: {
+          url: 'https://example.test/mcp',
+          bearer_token_env_var: 'AGOR_MCP_S1_REMOTE',
+          env_http_headers: { 'X-Api-Key': 'AGOR_MCP_S1_REMOTE_HEADER_1' },
+        },
+        local: { command: 'tool' },
+      },
+    });
+    expect(result.shell_environment_policy).toEqual({
+      set: { AGOR_MCP_S1_AGOR: '', AGOR_MCP_S1_REMOTE: '', AGOR_MCP_S1_REMOTE_HEADER_1: '' },
+    });
   });
 
-  it("extends a user's legacy exclude list instead of replacing it", () => {
+  it('sets no shell policy when no MCP credential travels by env var', () => {
     expect(
-      agorShellEnvironmentPolicy('[shell_environment_policy]\nexclude = ["AWS_*", 7]\n')
-    ).toEqual({ exclude: ['AWS_*', 'AGOR_MCP_*'] });
-    expect(
-      agorShellEnvironmentPolicy('[shell_environment_policy]\ninclude_only = ["PATH"]\n')
-    ).toEqual({ exclude: ['AGOR_MCP_*'] });
-  });
-
-  it('falls back to the filter form for an unparseable config', () => {
-    expect(agorShellEnvironmentPolicy('[shell_environment_policy\n')).toEqual(agorShellPolicy);
+      applyAgorCodexLaunchPolicy({ mcp_servers: { local: { command: 'tool' } } })
+    ).not.toHaveProperty('shell_environment_policy');
   });
 });

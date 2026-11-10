@@ -687,14 +687,14 @@ export async function setupQuery(
     releaseInputResolve = resolve;
   });
 
+  // Every MCP server (and its credentials) is applied over the control channel
+  // as one set, like a refresh, so none of it reaches the CLI argv.
+  const startupMcpServers: MCPServersConfig = {
+    ...((queryOptions.mcpServers as MCPServersConfig | undefined) ?? {}),
+    ...(agorMcpServer ? { [AGOR_MCP_SERVER_NAME]: agorMcpServer } : {}),
+  };
+  delete queryOptions.mcpServers;
   let refreshApplyTail: Promise<unknown> = Promise.resolve();
-  // The same full set a refresh applies, so attached servers stay registered.
-  const startupMcpServers = agorMcpServer
-    ? {
-        ...((queryOptions.mcpServers as MCPServersConfig | undefined) ?? {}),
-        [AGOR_MCP_SERVER_NAME]: agorMcpServer,
-      }
-    : undefined;
   const MCP_SET_SERVERS_TIMEOUT_MS = 15_000;
   // The SDK starts reading the prompt inside query(), before it returns the Query.
   let resolveQueryReady: (query: InterruptibleQuery) => void = () => {};
@@ -702,7 +702,7 @@ export async function setupQuery(
     resolveQueryReady = resolve;
   });
   const applyStartupMcpServers = async (): Promise<void> => {
-    if (!startupMcpServers) return;
+    if (Object.keys(startupMcpServers).length === 0) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const query = await queryReady;
@@ -711,7 +711,7 @@ export async function setupQuery(
           startupMcpServers as unknown as Record<string, ClaudeSdk.McpServerConfig>
         ),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error('timed out')), MCP_SET_SERVERS_TIMEOUT_MS);
+          timer = setTimeout(() => reject(new Error('timeout')), MCP_SET_SERVERS_TIMEOUT_MS);
         }),
       ]);
       if (result.errors[AGOR_MCP_SERVER_NAME]) {
@@ -719,15 +719,18 @@ export async function setupQuery(
           '⚠️  [executor.mcp] event=agor_mcp_connect_failed - Agor MCP tools unavailable'
         );
       }
-    } catch {
-      console.warn('⚠️  [executor.mcp] event=agor_mcp_apply_failed - Agor MCP tools unavailable');
+    } catch (error) {
+      // After a timeout the CLI may still finish connecting; the turn proceeds either way.
+      const reason = error instanceof Error && error.message === 'timeout' ? 'timeout' : 'error';
+      console.warn(`⚠️  [executor.mcp] event=mcp_startup_apply_failed reason=${reason}`);
     } finally {
       clearTimeout(timer);
     }
   };
 
   async function* asUserMessageIterable(text: string) {
-    // Connect Agor MCP before the first message so the first turn sees its tools.
+    // Connect MCP before the first message so the first turn sees its tools. The SDK
+    // reads the prompt inside query(), so this is queued before any refresh can be.
     const startupApply = applyStartupMcpServers();
     refreshApplyTail = startupApply;
     await startupApply;
