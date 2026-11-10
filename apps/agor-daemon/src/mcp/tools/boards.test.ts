@@ -424,7 +424,7 @@ describe('agor_boards_update realtime events', () => {
     });
   });
 
-  it('emits custom object mutations with a correctly-shaped HookContext', async () => {
+  it('routes object writes through the guarded boards patch actions with caller params', async () => {
     const params = {
       authenticated: true,
       provider: 'mcp',
@@ -432,12 +432,11 @@ describe('agor_boards_update realtime events', () => {
       user: { user_id: 'user-1', role: 'member' },
     };
     const updatedBoard = { board_id: 'board-1', name: 'Board', objects: {} };
-    const emit = vi.fn();
-    const batchUpsertBoardObjects = vi.fn(async () => updatedBoard);
+    const patch = vi.fn(async () => updatedBoard);
     const get = vi.fn(async () => updatedBoard);
     const app = {
       service(name: string) {
-        if (name === 'boards') return { batchUpsertBoardObjects, get, emit };
+        if (name === 'boards') return { patch, get };
         throw new Error(`Unexpected service call: ${name}`);
       },
     };
@@ -450,19 +449,21 @@ describe('agor_boards_update realtime events', () => {
     await updateBoard({
       boardId: 'board-1',
       upsertObjects: { 'zone-1': { type: 'zone', x: 0, y: 0, width: 100, height: 100 } },
+      removeObjects: ['zone-2'],
     });
 
-    expect(batchUpsertBoardObjects).toHaveBeenCalledWith('board-1', expect.any(Object), params);
-    expect(emit).toHaveBeenCalledWith(
-      'patched',
-      updatedBoard,
-      expect.objectContaining({
-        path: 'boards',
-        method: 'patch',
-        id: 'board-1',
-        params: {},
-        result: updatedBoard,
-      })
+    // The patch hook owns Board Editor authorization and the realtime patched event.
+    expect(patch).toHaveBeenNthCalledWith(
+      1,
+      'board-1',
+      { _action: 'batchUpsertObjects', objects: expect.any(Object) },
+      params
+    );
+    expect(patch).toHaveBeenNthCalledWith(
+      2,
+      'board-1',
+      { _action: 'removeObject', objectId: 'zone-2' },
+      params
     );
   });
 });
@@ -485,9 +486,11 @@ describe('board icon shortcode handling at MCP boundary', () => {
       archived: false,
       url: 'http://localhost:5173/ui/b/board-1/',
     }));
+    const permissionsFind = vi.fn(async () => ({ board_access: { sharing_mode: 'shared' } }));
     const app = {
       service(name: string) {
         if (name === 'boards') return { create: boardsCreate };
+        if (name === 'boards/:id/permissions') return { find: permissionsFind };
         throw new Error(`Unexpected service call: ${name}`);
       },
     };
@@ -509,6 +512,11 @@ describe('board icon shortcode handling at MCP boundary', () => {
       baseServiceParams
     );
     expect(parsed.icon).toBe('🧭');
+    expect(permissionsFind).toHaveBeenCalledWith({
+      ...baseServiceParams,
+      route: { id: 'board-1' },
+    });
+    expect(parsed.permissions).toEqual({ board_access: { sharing_mode: 'shared' } });
   });
 
   it('agor_boards_update returns the repository-normalized icon', async () => {

@@ -18,6 +18,7 @@ import {
   loadSessionBranch,
   paginateClientSide,
   protectGatewaySourceMetadata,
+  protectScheduledRunMetadata,
   resolveBranchPermission,
   resolveSessionContext,
   setSessionUnixUsername,
@@ -69,6 +70,35 @@ describe('protectGatewaySourceMetadata', () => {
   it('allows trusted gateway service writes', () => {
     const hook = context({ custom_context: { gateway_source: { channel_type: 'slack' } } }, null);
     expect(protectGatewaySourceMetadata(hook)).toBe(hook);
+  });
+});
+
+describe('protectScheduledRunMetadata', () => {
+  const context = (data: unknown, provider: string | null = 'rest', method = 'create') =>
+    ({ data, method, params: { provider } }) as HookContext;
+
+  it.each([
+    [{ schedule_id: 'victim-schedule' }, 'schedule_id'],
+    [{ scheduled_run_at: Date.now() }, 'scheduled_run_at'],
+    [{ scheduled_from_branch: true }, 'scheduled_from_branch'],
+    [{ custom_context: { scheduled_run: { run_index: 1 } } }, 'custom_context.scheduled_run'],
+  ])('rejects an external write of %o', (data, field) => {
+    for (const method of ['create', 'patch']) {
+      expect(() => protectScheduledRunMetadata(context(data, 'mcp', method))).toThrow(
+        `session.${field} is server-managed`
+      );
+    }
+  });
+
+  it('allows ordinary external writes and trusted scheduler writes', () => {
+    const external = context({ title: 'Mine', custom_context: { project: 'agor' } });
+    expect(protectScheduledRunMetadata(external)).toBe(external);
+    const scheduler = context(
+      { schedule_id: 'schedule-1', custom_context: { scheduled_run: { run_index: 1 } } },
+      null,
+      'patch'
+    );
+    expect(protectScheduledRunMetadata(scheduler)).toBe(scheduler);
   });
 });
 

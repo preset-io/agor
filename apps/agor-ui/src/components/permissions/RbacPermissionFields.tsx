@@ -65,12 +65,6 @@ const fsAccessDescriptions: Record<FsAccessLevel, string> = {
   write: 'Read/write',
 };
 
-export const othersCanFromRbacVisibility = (
-  visibility: RbacVisibility,
-  previous: BranchPermissionLevel | undefined
-): BranchPermissionLevel =>
-  visibility === 'private' ? 'none' : previous === 'none' ? 'session' : previous || 'session';
-
 export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
   value,
   onChange,
@@ -117,7 +111,7 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
   const handleVisibilityChange = (visibility: RbacVisibility) => {
     setOwnersHint(null);
     onChange('visibility', visibility);
-    onChange('othersCan', othersCanFromRbacVisibility(visibility, value.othersCan));
+    onChange('othersCan', 'none');
     if (visibility === 'private') {
       const ownerId =
         value.ownerIds.length === 1
@@ -148,7 +142,11 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
           label={visibilityLabel}
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
-          help={isShared ? 'Group and fallback access.' : 'Owner-only access.'}
+          help={
+            isShared
+              ? 'Members can view this board. Set branch access below.'
+              : 'Owner-only access.'
+          }
         >
           <Radio.Group
             value={value.visibility}

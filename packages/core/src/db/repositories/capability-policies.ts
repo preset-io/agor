@@ -192,16 +192,17 @@ export class CapabilityPolicyRepository {
     }
   ): BoardCapabilityPolicies {
     const shared = options.shared === true;
+    // Others get only what the creator chose: no implied branch role or file access.
     const defaultPreset =
-      options.defaultOthersCan === 'none'
-        ? 'none'
-        : options.defaultOthersCan === 'view'
-          ? 'viewer'
-          : options.defaultOthersCan === 'all'
-            ? 'manager'
-            : 'collaborator';
+      options.defaultOthersCan === 'view'
+        ? 'viewer'
+        : options.defaultOthersCan === 'all'
+          ? 'manager'
+          : options.defaultOthersCan === 'session' || options.defaultOthersCan === 'prompt'
+            ? 'collaborator'
+            : 'none';
     const defaultFsAccess =
-      defaultPreset === 'none' ? 'none' : (options.defaultOthersFsAccess ?? 'read');
+      defaultPreset === 'none' ? 'none' : (options.defaultOthersFsAccess ?? 'none');
     const boardPolicy: CapabilityPolicy = shared
       ? {
           ...EMPTY_BOARD_POLICY,
@@ -320,7 +321,7 @@ export class CapabilityPolicyRepository {
           : options.othersCan === 'session' || options.othersCan === 'prompt'
             ? 'collaborator'
             : 'none';
-    const fsAccess = preset === 'none' ? 'none' : (options.othersFsAccess ?? 'read');
+    const fsAccess = preset === 'none' ? 'none' : (options.othersFsAccess ?? 'none');
     const config: BranchPermissionConfig =
       preset === 'none'
         ? EMPTY_BRANCH_CONFIG

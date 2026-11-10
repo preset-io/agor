@@ -301,13 +301,13 @@ export interface Board {
   /** Primary owner, changed only by explicit ownership transfer; independent of attribution. */
   primary_owner_user_id?: string;
 
-  /** Board-level visibility. Existing boards default/read as 'shared'. */
+  /** Create-only visibility; omitted means shared only if default_others_can grants access. Never on reads: use boards/:id/permissions. */
   access_mode?: BoardAccessMode;
 
-  /** Default app-layer permission for new/aligned branches on this board. */
+  /** Create-only default branch permission for others (default 'none'). Never on reads. */
   default_others_can?: BranchPermissionLevel;
 
-  /** Default filesystem access for new/aligned branches on this board. */
+  /** Create-only default branch filesystem access for others (default 'none'). Never on reads. */
   default_others_fs_access?: BoardDefaultFsAccess;
 
   /** Hex color for visual distinction */

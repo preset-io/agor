@@ -65,6 +65,13 @@ Board roles are cumulative:
 | Editor  | Viewer + `board.edit`, `board.attach_branch` |
 | Manager | Editor + `board.policy.manage`               |
 
+Creation maps the create-only legacy inputs (`access_mode`, `default_others_can`,
+`default_others_fs_access`) once. Omitted inputs grant Others nothing: no role,
+no file access, and a private board unless `access_mode: shared` or a non-`none`
+`default_others_can` is given. Board reads never return those fields and branch
+reads never return `others_can` or `others_fs_access`, so they cannot contradict
+the stored policy.
+
 Board listing and canvas delivery consult `board_access` only. Seeing any
 branch on a board no longer makes the board visible. Within a visible board,
 branch objects are returned only when the caller can also view that branch.
@@ -191,9 +198,16 @@ of `override` branches only clear caches or do nothing.
 Internal runtime callers do not rely on provider-only Feathers hooks. Gateway
 inbound traffic checks Collaborator access before Session creation, binds a
 durable platform thread to the configured branch, and resolves shared-session
-authority immediately before Prompt admission. The scheduler checks its
-creator at Session admission and again before its initial Prompt so revocation
-races and crash recovery fail closed.
+authority immediately before Prompt admission. Creating or editing a schedule
+requires branch Manager, the same bar as run-now, because it spawns unattended
+work on that branch. The scheduler re-checks that its creator is still a
+workspace member and branch Manager at every fire, and checks that plus prompt
+authority again before its initial Prompt. The initial Task's fenced admission
+and its executor launch binding repeat the Manager and member check, so
+revocation races and crash recovery (including an initial Task persisted before
+a crash) fail closed; later prompts keep ordinary prompt authority. Session occurrence fields (`schedule_id`, `scheduled_run_at`,
+`scheduled_from_branch`, `custom_context.scheduled_run`) are scheduler-owned and
+rejected on external Session writes.
 
 Task launch and heartbeat use the narrower
 `resolveSessionRuntimeBranchAccess` point projection in `branch-access.ts`.

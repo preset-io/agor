@@ -7,7 +7,13 @@ import {
 } from './executor-connection-admission.js';
 import { isExecutorSessionTokenPayload } from './executor-session-token.js';
 import { resolveSignedRuntimeTenant } from './runtime-tokens.js';
+import {
+  readLaunchSubject,
+  readSessionStartedAtMs,
+  sessionDeadlineSeconds,
+} from './session-lifetime.js';
 import { isTerminalExecutorIdentity } from './terminal-executor-guard.js';
+import type { UserAuthTokenPayload } from './token-invalidation.js';
 import { redactUserAuthMetadata } from './user-redaction.js';
 
 const CONNECTION_AUTHORITY = Symbol('agor.authenticated-connection-authority');
@@ -58,7 +64,7 @@ export type AuthenticatedConnectionPrincipal =
 export interface AuthenticatedConnectionAuthority {
   readonly principal: AuthenticatedConnectionPrincipal;
   readonly tenant?: TenantContext;
-  /** Absolute expiry of the bearer accepted at the namespace handshake. */
+  /** Bearer expiry from the handshake, or the earliest configured connection bound. */
   readonly expiresAt?: number;
   /** Whether this connection capability itself must be retired at `expiresAt`. */
   readonly retireAtExpiry: boolean;
@@ -69,6 +75,10 @@ export interface FinalizeAuthenticatedConnectionOptions {
   authResult: object;
   multiTenancy?: ResolvedMultiTenancyConfig;
   executorRevocationFence?: ExecutorConnectionRevocationFence;
+  /** Retire user sockets this long after the handshake, so reconnecting needs a revalidated token. */
+  userConnectionMaxAgeMs?: number;
+  /** Retire a launched session's sockets at its absolute deadline. */
+  launchedSessionMaxLifetimeSeconds?: number;
 }
 
 function asNotAuthenticated(error: unknown): NotAuthenticated {
@@ -210,6 +220,26 @@ export function finalizeAuthenticatedConnectionAuthority(
     throw new NotAuthenticated('Authenticated principal is unavailable');
   }
 
+  const payloadRecord =
+    payload && typeof payload === 'object' ? (payload as UserAuthTokenPayload) : undefined;
+  const tokenBound = principal.kind !== 'user' || payloadRecord?.is_impersonated === true;
+  const connectionBounds: number[] = [];
+  if (!tokenBound && expiresAt !== undefined) {
+    if (options.userConnectionMaxAgeMs !== undefined) {
+      connectionBounds.push(Date.now() + options.userConnectionMaxAgeMs);
+    }
+    if (
+      options.launchedSessionMaxLifetimeSeconds !== undefined &&
+      readLaunchSubject(payloadRecord)
+    ) {
+      const startedAtMs = readSessionStartedAtMs(payloadRecord);
+      if (startedAtMs === null) throw new NotAuthenticated('Session expired, please login again');
+      connectionBounds.push(
+        sessionDeadlineSeconds(startedAtMs, options.launchedSessionMaxLifetimeSeconds) * 1000
+      );
+    }
+  }
+
   // Restricted terminal executors intentionally receive no Feathers identity
   // projection: they may use their raw terminal capability, but may not enter
   // tenant-owned services. Every other principal receives one immutable,
@@ -218,14 +248,13 @@ export function finalizeAuthenticatedConnectionAuthority(
     bindAuthenticatedFeathersProjection(connection, result, trustedTenant);
   }
 
-  const payloadRecord =
-    payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : undefined;
-  const retireAtExpiry = principal.kind !== 'user' || payloadRecord?.is_impersonated === true;
+  const retireAtExpiry = tokenBound || connectionBounds.length > 0;
+  const retireAt = connectionBounds.length > 0 ? Math.min(...connectionBounds) : expiresAt;
 
   const authority = Object.freeze({
     principal: Object.freeze(principal),
     ...(trustedTenant ? { tenant: trustedTenant } : {}),
-    ...(expiresAt === undefined ? {} : { expiresAt }),
+    ...(retireAt === undefined ? {} : { expiresAt: retireAt }),
     retireAtExpiry,
   });
   Object.defineProperty(connection, CONNECTION_AUTHORITY, {

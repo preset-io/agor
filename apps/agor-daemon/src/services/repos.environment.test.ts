@@ -58,7 +58,10 @@ dbTest(
       up_command: 'echo replacement',
       down_command: 'echo stop',
     });
-    await service.patch(repo.repo_id, { name: 'Metadata only' }, params('member'));
+    await expect(
+      service.patch(repo.repo_id, { name: 'Metadata only' }, params('member'))
+    ).rejects.toThrow(/Admin access/);
+    await service.patch(repo.repo_id, { name: 'Metadata only' }, params('admin'));
     expect((await repository.findById(repo.repo_id))?.environment).toEqual(environment);
   }
 );

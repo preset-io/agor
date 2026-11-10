@@ -79,11 +79,25 @@ export interface RealtimeAuthorizationInvalidation {
    * eviction. Senders keep `disconnectSockets: true` so an older receiver
    * that does not understand this field still evicts tenant-wide. Any other
    * value, or a missing/invalid branch id, is ignored (full eviction).
+   *
+   * `'user'` declares that only `userId`'s own authority changed. Receivers
+   * clear caches, retire that user's terminal attachments, and disconnect only
+   * that user's sockets, including their executors. A missing `userId` is a
+   * full eviction, and an older receiver evicts tenant-wide as above.
    */
   revocationScope?: unknown;
 }
 
 export const BRANCH_REVOCATION_SCOPE = 'branch';
+export const USER_REVOCATION_SCOPE = 'user';
+
+/** An eviction limited to one user's own sockets; every other member stays connected. */
+export function userScopedAuthorizationInvalidation(
+  tenantId: string,
+  userId: string
+): RealtimeAuthorizationInvalidation {
+  return { tenantId, disconnectSockets: true, userId, revocationScope: USER_REVOCATION_SCOPE };
+}
 
 /** Internal exact executor-token revocation signal. */
 export const HA_EXECUTOR_TOKEN_INVALIDATION_EVENT = 'agor:executor-token-invalidated:v1';

@@ -261,11 +261,14 @@ type RealtimePublishOptions = {
 
 type PublishChannel = ReturnType<Application['channel']>;
 
+/** Branch read-model fields derived from the board canvas (see BranchRepository.enrichManyWithZoneInfo). */
+const BRANCH_CANVAS_FIELDS = ['board_object_id', 'position', 'zone_id', 'zone_label'];
+
 type PublishScope =
   | { kind: 'global' }
   | { kind: 'board'; boardId: string | null }
   | { kind: 'branch'; branchId: BranchID | null }
-  | { kind: 'branches'; branchIds: BranchID[] }
+  | { kind: 'branches'; branchIds: BranchID[]; boardId?: string | null }
   | { kind: 'users'; userIds: Set<string> }
   | { kind: 'serviceOnly' };
 
@@ -631,6 +634,10 @@ async function resolvePublishScope(
       if (branchIds === null) return { kind: 'serviceOnly' };
       if (branchIds === undefined) {
         return { kind: 'board', boardId: extractBoardId(data, context) ?? null };
+      }
+      // A canvas placement is readable only with both branch and board view, so publish to both audiences.
+      if (context.path === 'board-objects') {
+        return { kind: 'branches', branchIds, boardId: extractBoardId(data, context) ?? null };
       }
       return { kind: 'branches', branchIds };
     }
@@ -1022,17 +1029,20 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       if (scope.kind === 'users') {
         return filterToUserIdsOrAdmins(tenantScoped, scope.userIds, allowSuperadmin);
       }
-      if (scope.kind === 'board') {
-        if (!scope.boardId || !boardRepository) {
-          return filterToServiceConnections(tenantScoped);
+      const filterToBoardViewers = async (
+        channel: PublishChannel,
+        boardId: string | null | undefined
+      ): Promise<PublishChannel> => {
+        if (!boardId || !boardRepository) {
+          return filterToServiceConnections(channel);
         }
-        const removalVisibility = boardRemovalVisibilitySnapshot(context, scope.boardId);
+        const removalVisibility = boardRemovalVisibilitySnapshot(context, boardId);
         if (removalVisibility?.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED) {
-          return tenantScoped;
+          return channel;
         }
         if (removalVisibility?.mode === BranchRealtimeVisibilityMode.EXPLICIT_USERS) {
           return filterToUserIdsOrAdmins(
-            tenantScoped,
+            channel,
             new Set(removalVisibility.userIds),
             allowSuperadmin
           );
@@ -1044,11 +1054,11 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         // server-captured pre-delete visibility snapshot.
         let loadedBoard: Awaited<ReturnType<BoardRepository['findById']>>;
         try {
-          loadedBoard = await boardRepository.findById(scope.boardId);
+          loadedBoard = await boardRepository.findById(boardId);
         } catch {
-          return filterToServiceConnections(tenantScoped);
+          return filterToServiceConnections(channel);
         }
-        if (!loadedBoard) return filterToServiceConnections(tenantScoped);
+        if (!loadedBoard) return filterToServiceConnections(channel);
         const currentBoard = loadedBoard;
 
         // Materialize the exact normalized audience in one query. A branch,
@@ -1062,10 +1072,11 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         } catch {
           // Concurrent policy/deletion failure fails narrow. Deleted boards
           // require and use the pre-delete snapshot handled above.
-          return filterToServiceConnections(tenantScoped);
+          return filterToServiceConnections(channel);
         }
-        return filterToUserIdsOrAdmins(tenantScoped, visibleUserIds, allowSuperadmin);
-      }
+        return filterToUserIdsOrAdmins(channel, visibleUserIds, allowSuperadmin);
+      };
+      if (scope.kind === 'board') return filterToBoardViewers(tenantScoped, scope.boardId);
       if (scope.kind === 'branches') {
         let explicitUserIds: Set<UserID> | null = null;
         for (const branchId of scope.branchIds) {
@@ -1082,9 +1093,12 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
             explicitUserIds = new Set(visibility.userIds);
           }
         }
-        return explicitUserIds
+        const branchViewers = explicitUserIds
           ? filterToUserIdsOrSuperadmins(tenantScoped, explicitUserIds, allowSuperadmin)
           : tenantScoped;
+        return 'boardId' in scope
+          ? filterToBoardViewers(branchViewers, scope.boardId)
+          : branchViewers;
       }
       if (!scope.branchId) {
         console.warn('[realtime] Suppressing scoped event without resolvable branch context', {
@@ -1111,8 +1125,26 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         });
         return filterToServiceConnections(tenantScoped);
       }
-      if (visibility.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED) return tenantScoped;
-      return filterToUserIdsOrSuperadmins(tenantScoped, visibility.userIds, allowSuperadmin);
+      const branchViewers =
+        visibility.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED
+          ? tenantScoped
+          : filterToUserIdsOrSuperadmins(tenantScoped, visibility.userIds, allowSuperadmin);
+      // Branch rows carry canvas fields; only board viewers receive them.
+      const branchRecord = context.path === 'branches' ? asRecord(data) : null;
+      const boardId = branchRecord ? pickString(branchRecord, 'board_id') : undefined;
+      // Every board-attached branch event takes this same path so events keep their relative order.
+      if (!branchRecord || !boardId) return branchViewers;
+      const full = await filterToBoardViewers(branchViewers, boardId);
+      const fullConnections = new Set(full.connections as unknown[]);
+      const stripped = Object.fromEntries(
+        Object.entries(branchRecord).filter(([field]) => !BRANCH_CANVAS_FIELDS.includes(field))
+      );
+      return [
+        full,
+        branchViewers
+          .filter((connection: unknown) => !fullConnections.has(connection))
+          .send(stripped),
+      ];
     };
 
     let delivery =

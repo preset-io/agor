@@ -34,7 +34,7 @@ This is the foundational layer: [teammates](/guide/teammates), [scheduled prompt
 | Domain                | What agents can do                                                                                                           |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | **Sessions**          | Introspect the current session, list siblings, spawn child sessions with prompts, archive/complete work                      |
-| **Repositories**      | List repositories, clone remote repos, register local repos, manage repo metadata                                            |
+| **Repositories**      | List repositories, clone remote repos, register local repos, edit repo metadata (admin-only)                                 |
 | **Branches & Boards** | List or fetch branches, create new ones, assign them to boards, update metadata, move cards, request policy-approved cleanup |
 | **Board Zones**       | Create zones on boards, update zone properties (position, size, color), manage zone triggers                                 |
 | **Tasks**             | Fetch task history, cancel selected queued tasks, reorder pending work                                                       |
@@ -268,6 +268,10 @@ with a reason, and `_readiness` names the wait tool to call next.
 - **Environment orchestration:** Start/stop branch environments via MCP before delegating work to collaborators or other agents.
 
 Because MCP calls are just JSON-RPC, complex workflows can be scripted once and reused by any tool that speaks the protocol.
+
+Repositories are shared across the workspace: their remote URL and default branch decide what
+every new branch checks out. Members can list, clone and register repositories, but only
+admins can change their settings with `agor_repos_update` or delete them (UI, CLI, or API).
 
 `agor_repos_import_environment` exposes the repository editor's admin-only
 `.agor.yml` import. For its replacement semantics and the import/render/lifecycle

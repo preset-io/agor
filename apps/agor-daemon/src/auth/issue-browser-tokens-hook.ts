@@ -1,9 +1,19 @@
 import { analyticsLogger } from '@agor/core/analytics';
 import { runWithTenantContext } from '@agor/core/db';
+import { NotAuthenticated } from '@agor/core/feathers';
 import { PRODUCT_ANALYTICS_EVENTS } from '@agor/core/types';
 import type { SignOptions } from 'jsonwebtoken';
 import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
-import { authCredentialGenerationClaim, authTokenIssuedAtClaim } from './token-invalidation.js';
+import {
+  continueBrowserSession,
+  readLaunchSubject,
+  startBrowserSession,
+} from './session-lifetime.js';
+import {
+  authCredentialGenerationClaim,
+  authTokenIssuedAtClaim,
+  type UserAuthTokenPayload,
+} from './token-invalidation.js';
 import { redactUserAuthMetadata } from './user-redaction.js';
 
 /**
@@ -16,6 +26,10 @@ export interface IssueBrowserTokensHookOptions {
   jwtSecret: string;
   accessTokenTtl: SignOptions['expiresIn'];
   refreshTokenTtl: number;
+  /** Absolute lifetime in seconds of a launched session, counted from the launch. */
+  sessionMaxLifetimeSeconds: number;
+  /** Set when refresh revalidates launched sessions: JWT re-auth never extends any access token. */
+  pinReauthenticatedAccessExpiry?: boolean;
   tenantClaim: string;
   /** Only set for a configured static-tenant deployment. Never a Cloud fallback. */
   staticTenantId?: string;
@@ -42,6 +56,8 @@ export function createIssueBrowserTokensHook(options: IssueBrowserTokensHookOpti
     jwtSecret,
     accessTokenTtl,
     refreshTokenTtl,
+    sessionMaxLifetimeSeconds,
+    pinReauthenticatedAccessExpiry = false,
     tenantClaim,
     now = Date.now,
     debug,
@@ -66,7 +82,11 @@ export function createIssueBrowserTokensHook(options: IssueBrowserTokensHookOpti
     }
 
     const payloadType = context.result.authentication?.payload?.type;
-    if (typeof payloadType === 'string' && MACHINE_TOKEN_TYPES.has(payloadType)) {
+    // Where refresh revalidates membership, re-auth must not turn an impersonation token into a refreshable session.
+    const impersonated =
+      pinReauthenticatedAccessExpiry &&
+      context.result.authentication?.payload?.is_impersonated === true;
+    if ((typeof payloadType === 'string' && MACHINE_TOKEN_TYPES.has(payloadType)) || impersonated) {
       context.result.user = redactUserAuthMetadata(context.result.user);
       return context;
     }
@@ -74,6 +94,20 @@ export function createIssueBrowserTokensHook(options: IssueBrowserTokensHookOpti
     const tenantId =
       context.params?.tenant?.tenant_id ??
       (context.result.user as { tenant_id?: string }).tenant_id;
+    const nowMs = now();
+    // JWT re-authentication continues the presented session. A launched session, or any
+    // session where refresh revalidates membership, never gets a later access-token expiry,
+    // so chaining re-auth can't stand in for a refresh.
+    const presented = context.result.authentication?.payload as UserAuthTokenPayload | undefined;
+    const reauthenticating = context.result.authentication?.strategy === 'jwt';
+    const pinAccessExpiry =
+      reauthenticating && (pinReauthenticatedAccessExpiry || !!readLaunchSubject(presented));
+    if (pinAccessExpiry && typeof presented?.exp !== 'number') {
+      throw new NotAuthenticated('Session expired, please login again');
+    }
+    const session = reauthenticating
+      ? continueBrowserSession(presented, sessionMaxLifetimeSeconds, nowMs)
+      : startBrowserSession(sessionMaxLifetimeSeconds, { nowMs });
     const tokens = issueRuntimeTokenPair(
       context.result.user,
       jwtSecret,
@@ -81,8 +115,13 @@ export function createIssueBrowserTokensHook(options: IssueBrowserTokensHookOpti
       refreshTokenTtl,
       {
         ...authCredentialGenerationClaim(context.result.user),
-        ...authTokenIssuedAtClaim(now(), context.result.user),
+        ...authTokenIssuedAtClaim(nowMs, context.result.user),
         ...runtimeTenantClaims(tenantId, tenantClaim),
+        ...session.claims,
+      },
+      {
+        notAfterSeconds: session.notAfterSeconds,
+        ...(pinAccessExpiry ? { accessNotAfterSeconds: presented?.exp } : {}),
       }
     );
     context.result.accessToken = tokens.accessToken;

@@ -162,6 +162,35 @@ describe('SessionTokenService runtime scoping', () => {
     );
   });
 
+  it('signs a clone command token to one repository and attempt', async () => {
+    const service = new SessionTokenService(
+      { expiration_ms: 60 * 60_000, max_uses: -1 },
+      { startCleanupTimer: false }
+    );
+    service.setJwtSecret('session-token-test-secret');
+    const issue = (command: string, generation: number) =>
+      runWithTenantDatabaseScope(scopeOnlyDb, 'tenant-a', () =>
+        issueExecutorCommandToken(
+          { sessionTokenService: service },
+          command,
+          'user-1',
+          undefined,
+          undefined,
+          undefined,
+          { repoId: 'repo-1', generation }
+        )
+      );
+
+    const decoded = jwt.verify(await issue('git.clone', 3), 'session-token-test-secret');
+    expect(decoded).toMatchObject({
+      session_id: 'git.clone',
+      repo_id: 'repo-1',
+      clone_generation: 3,
+    });
+    await expect(issue('git.branch.add', 3)).rejects.toThrow('Clone scope requires');
+    await expect(issue('git.clone', 0)).rejects.toThrow('Clone scope requires');
+  });
+
   it.each([
     { command: 'environment-start', expirationMs: 30 * 60_000, attempt: undefined, seconds: 1800 },
     { command: 'git.branch.add', expirationMs: undefined, attempt: 'attempt-1', seconds: 900 },

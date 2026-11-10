@@ -39,7 +39,9 @@ describe('OnboardingSetupTips', () => {
     motion.reduced = true;
     render(<OnboardingSetupTips />);
     expect(
-      screen.getByText('Share your board so everyone can work with your teammate.')
+      screen.getByText(
+        'Share your board and give your team Collaborator access so they can work with your teammate. Under the filesystem sandbox or delegated execution, they also need file access.'
+      )
     ).toBeInTheDocument();
     const first = currentTip();
     wait(20000);

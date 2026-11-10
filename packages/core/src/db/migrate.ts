@@ -135,6 +135,24 @@ export function createMigrationImpactRegistry(
 }
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
+  // SQLite and PostgreSQL number the same Knowledge migration differently.
+  ...['0119_kb_namespace_others_can_tighten', '0120_kb_namespace_others_can_tighten'].map(
+    (name) =>
+      [
+        name,
+        {
+          // Older daemons still store write-for-everyone on new namespaces, so none may overlap.
+          requiresOfflineCutover: true,
+          impact: defineMigrationImpact({
+            classification: 'data',
+            userAction: 'required',
+            rollbackCompatibility: 'compatible',
+            summary:
+              'Stops Knowledge namespaces granting write to every member. Stop all daemons first: older ones keep creating member-writable namespaces. Owners can reopen access in settings.',
+          }),
+        },
+      ] as const
+  ),
   // SQLite and PostgreSQL number the same Teams migration differently.
   ...['0117_teams_gateway_ha', '0118_teams_gateway_ha'].map(
     (name) =>
@@ -726,7 +744,8 @@ export async function seedInitialDataInTransaction(
       db,
       boardId as import('@agor/core/types').BoardID,
       createdBy as import('@agor/core/types').UserID,
-      { shared: true, defaultOthersCan: 'session', defaultOthersFsAccess: 'read' }
+      // Members see the shared canvas; branch access for Others is granted explicitly.
+      { shared: true }
     );
   }
   return inserted.rowsAffected;

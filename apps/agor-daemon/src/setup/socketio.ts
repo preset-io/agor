@@ -64,6 +64,7 @@ import {
   tenantChannelName,
   tenantUserChannelName,
   terminalChannelName,
+  USER_REVOCATION_SCOPE,
 } from '../realtime/routing.js';
 import type { TerminalAttachmentIdentity } from '../services/terminals.js';
 import {
@@ -279,6 +280,15 @@ function executorUserId(socket: Socket): string | undefined {
     | undefined;
   const userId = projection?.user?.user_id;
   return typeof userId === 'string' ? userId : undefined;
+}
+
+/** Whether a socket acts for this user: their browser, task executor or terminal executor. */
+function socketActsForUser(socket: Socket, auth: SocketAuthState, userId: string): boolean {
+  return (
+    auth.userId === userId ||
+    auth.terminalUserId === userId ||
+    (auth.isExecutor === true && executorUserId(socket) === userId)
+  );
 }
 
 /**
@@ -905,7 +915,15 @@ export function createSocketIOConfig(
           : undefined;
       const branchScoped =
         affectedBranchId !== undefined && data.revocationScope === BRANCH_REVOCATION_SCOPE;
-      if (branchScoped) {
+      const changedUserId =
+        typeof data.userId === 'string' && data.userId.length > 0 ? data.userId : undefined;
+      const scopedUserId =
+        data.revocationScope === USER_REVOCATION_SCOPE ? changedUserId : undefined;
+      if (scopedUserId) {
+        // Only this user's authority changed: other members keep their rooms and terminals.
+        app.emit(LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT, { tenantId: data.tenantId });
+        app.emit('terminal:close-user', { tenantId: data.tenantId, userId: scopedUserId });
+      } else if (branchScoped) {
         // Only this branch's ACL changed. Publication re-checks current branch
         // visibility, so clearing caches retires stale event delivery; the
         // branch's terminal attachments are the only passive browser rooms
@@ -918,11 +936,13 @@ export function createSocketIOConfig(
         // inherit a warmed pre-revocation ACL cache or terminal allocation.
         app.emit(LOCAL_AUTHORIZATION_INVALIDATION_EVENT, { tenantId: data.tenantId });
       }
-      const changedUserId =
-        typeof data.userId === 'string' && data.userId.length > 0 ? data.userId : undefined;
       for (const socket of io.sockets.sockets.values()) {
         const auth = getSocketAuthState(socket);
         if (auth.tenant?.tenant_id !== data.tenantId) continue;
+        if (scopedUserId) {
+          if (socketActsForUser(socket, auth, scopedUserId)) socket.disconnect(true);
+          continue;
+        }
         // Agent executors survive ordinary tenant evictions: dropping them
         // fails every in-flight turn in the tenant with "socket has been
         // disconnected" whenever any RBAC-relevant mutation (e.g. moving a

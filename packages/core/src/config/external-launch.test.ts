@@ -62,6 +62,31 @@ describe('external launch effective config', () => {
     });
   });
 
+  it('takes the session revalidation URL from the environment, over the file value', () => {
+    const fromEnv = resolveEffectiveExternalLaunchConfig(
+      { ...completeProvider, session_revalidation_url: 'https://file.example.test/revalidate' },
+      {
+        AGOR_EXTERNAL_LAUNCH_SESSION_REVALIDATION_URL:
+          ' https://issuer.example.test/sessions/revalidate ',
+      }
+    );
+    expect(fromEnv?.session_revalidation_url).toBe(
+      'https://issuer.example.test/sessions/revalidate'
+    );
+
+    expect(
+      resolveEffectiveExternalLaunchConfig(undefined, {
+        AGOR_EXTERNAL_LAUNCH_SESSION_REVALIDATION_URL: 'https://issuer.example.test/revalidate',
+      })
+    ).toMatchObject({ session_revalidation_url: 'https://issuer.example.test/revalidate' });
+
+    expect(
+      resolveEffectiveExternalLaunchConfig(completeProvider, {
+        AGOR_EXTERNAL_LAUNCH_SESSION_REVALIDATION_URL: '   ',
+      })
+    ).not.toHaveProperty('session_revalidation_url');
+  });
+
   it('rejects invalid environment booleans instead of silently disabling auth', () => {
     expect(() =>
       resolveEffectiveExternalLaunchConfig(undefined, {
@@ -86,6 +111,24 @@ describe('external launch effective config', () => {
         },
       })
     ).toThrow(/multiple assertion verification methods/);
+  });
+
+  it('parses an optional session revalidation URL and rejects unsafe values', () => {
+    const resolve = (session_revalidation_url: unknown) =>
+      resolveValidExternalLaunchProvider(
+        unsafeConfig({ ...completeProvider, session_revalidation_url })
+      );
+    expect(resolve(undefined).sessionRevalidationUrl).toBeUndefined();
+    expect(resolve('https://issuer.example.test/revalidate').sessionRevalidationUrl).toBe(
+      'https://issuer.example.test/revalidate'
+    );
+    expect(() => resolve('ftp://issuer.example.test/revalidate')).toThrow(
+      /session_revalidation_url must be a valid HTTP\(S\) URL/
+    );
+    expect(() => resolve('https://user:secret@issuer.example.test/revalidate')).toThrow(
+      /session_revalidation_url must not include URL credentials/
+    );
+    expect(() => resolve(42)).toThrow(/session_revalidation_url must be a non-empty string/);
   });
 
   it('accepts one complete effective provider configuration', () => {

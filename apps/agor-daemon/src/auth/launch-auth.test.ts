@@ -160,6 +160,7 @@ describe('one-time launch auth service', () => {
       jwtSecret: RUNTIME_JWT_SECRET,
       accessTokenTtl: '15m',
       refreshTokenTtl,
+      sessionMaxLifetimeSeconds: 2_592_000,
       usersService,
       onAuthorizationInvalidated,
     });

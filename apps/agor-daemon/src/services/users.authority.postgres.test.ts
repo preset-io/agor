@@ -287,6 +287,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         jwtSecret,
         accessTokenTtl: '15m',
         refreshTokenTtl: 2_592_000,
+        sessionMaxLifetimeSeconds: 2_592_000,
         usersService: {
           get: async (...args: Parameters<UsersService['get']>) => {
             const snapshot = await service.get(...args);

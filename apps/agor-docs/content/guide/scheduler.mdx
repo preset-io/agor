@@ -54,6 +54,12 @@ _The scheduler dovetails with [Teammates](/guide/teammates): a daily cron firing
 
 You can edit the schedule whenever you like; changes apply to the next run. Disabling the schedule clears the upcoming run timestamp but preserves your configuration for later.
 
+### Who can schedule
+
+Creating, editing, deleting, or manually running a schedule requires the **Manager** role on its branch (the branch owner always qualifies). Collaborators can still start and prompt their own sessions, but cannot leave recurring runs behind on a branch they don't manage. Each schedule runs as the person who created it, so creating one needs real Manager access even for a superadmin; only the creator can manually run it, and only the creator or a superadmin can edit it.
+
+The creator's access is re-checked every time the schedule fires. If they are no longer a workspace member or a Manager of the branch, the run is skipped until their access is restored; a branch Manager can delete the schedule.
+
 ## Template Variables & Context
 
 Prompt templates render with a full, typed context:

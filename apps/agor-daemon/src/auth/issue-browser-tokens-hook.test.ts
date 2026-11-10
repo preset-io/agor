@@ -15,6 +15,7 @@ function makeHook() {
     jwtSecret: JWT_SECRET,
     accessTokenTtl: ACCESS_TOKEN_TTL,
     refreshTokenTtl: REFRESH_TOKEN_TTL,
+    sessionMaxLifetimeSeconds: 2_592_000,
     tenantClaim: 'tenant_id',
     staticTenantId: 'default',
   });
@@ -30,6 +31,11 @@ function makeUser() {
   };
 }
 
+function presentedPayload(type: string) {
+  const iat = Math.floor(Date.now() / 1000);
+  return { sub: 'user-1', type, iat, exp: iat + 900 };
+}
+
 function makeContext(payloadType?: string, strategy = 'jwt') {
   return {
     params: {},
@@ -38,7 +44,7 @@ function makeContext(payloadType?: string, strategy = 'jwt') {
       user: makeUser(),
       authentication: {
         strategy,
-        ...(payloadType ? { payload: { sub: 'user-1', type: payloadType } } : {}),
+        ...(payloadType ? { payload: presentedPayload(payloadType) } : {}),
       },
     },
   };
@@ -99,6 +105,7 @@ test('local login refresh token lives exactly the configured number of seconds',
     jwtSecret: JWT_SECRET,
     accessTokenTtl: ACCESS_TOKEN_TTL,
     refreshTokenTtl: 604_800,
+    sessionMaxLifetimeSeconds: 2_592_000,
     tenantClaim: 'tenant_id',
     staticTenantId: 'default',
   });
@@ -214,6 +221,7 @@ test('records configured static-tenant local sign-ins without inventing a Cloud 
     jwtSecret: JWT_SECRET,
     accessTokenTtl: ACCESS_TOKEN_TTL,
     refreshTokenTtl: REFRESH_TOKEN_TTL,
+    sessionMaxLifetimeSeconds: 2_592_000,
     tenantClaim: 'tenant_id',
   });
   await noFallback(makeContext(undefined, 'local'));

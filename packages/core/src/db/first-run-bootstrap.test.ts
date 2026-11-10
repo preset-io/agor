@@ -1,8 +1,11 @@
+import type { BoardID, UserID } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { select, update } from './database-wrapper';
 import { bootstrapFirstRunAdmin } from './first-run-bootstrap';
 import { seedInitialData } from './migrate';
+import { CapabilityPolicyRepository } from './repositories/capability-policies';
+import { UsersRepository } from './repositories/users';
 import { boards } from './schema';
 import { dbTest, ensureTestUser } from './test-helpers';
 import { createUser } from './user-utils';
@@ -15,6 +18,29 @@ describe('bootstrapFirstRunAdmin', () => {
     const boardRows = await select(db).from(boards).all();
     expect(boardRows).toHaveLength(1);
     expect(boardRows[0].slug).toBe('default');
+  });
+
+  dbTest('seeds a shared Main Board whose branch defaults grant Others nothing', async ({ db }) => {
+    await ensureTestUser(db);
+    await seedInitialData(db, 'test-user');
+    const [board] = await select(db).from(boards).all();
+    const colleague = await new UsersRepository(db).create({
+      email: 'colleague@example.test',
+      role: 'member',
+    });
+    const policies = new CapabilityPolicyRepository(db);
+    const stored = await policies.getBoardPolicies(board.board_id as BoardID);
+
+    expect(stored.board_access.others.preset).toBe('viewer');
+    expect(stored.branch_template.access.others).toMatchObject({
+      preset: 'none',
+      capabilities: [],
+      fs_access: 'none',
+    });
+    expect(
+      (await policies.resolveBoardAccess(board.board_id as BoardID, colleague.user_id as UserID))
+        .capabilities
+    ).toEqual(['board.view']);
   });
 
   dbTest('allows competing daemon admin bootstraps to converge on one user', async ({ db }) => {

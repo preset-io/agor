@@ -11,6 +11,10 @@ import { authenticatedTaskExecutorRuntimeAuthority } from '../auth/executor-runt
 import { RuntimeJWTStrategy } from '../auth/runtime-jwt-strategy.js';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
 import {
+  AUTH_LAUNCH_SUBJECT_CLAIM,
+  AUTH_SESSION_STARTED_AT_MS_CLAIM,
+} from '../auth/session-lifetime.js';
+import {
   type SessionTokenAuthorityStore,
   SessionTokenService,
 } from '../services/session-token-service.js';
@@ -92,6 +96,8 @@ async function startHarness(
     pauseAdmission?: boolean;
     reconnectionAttempts?: number;
     sessionTokenExpirationMs?: number;
+    launchedSessionMaxLifetimeSeconds?: number;
+    userConnectionMaxAgeMs?: number;
   } = {}
 ): Promise<
   Harness & {
@@ -255,6 +261,12 @@ async function startHarness(
       sessionTokenService: sessionTokens,
       executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
       multiTenancy: MULTI_TENANCY,
+      ...(options.launchedSessionMaxLifetimeSeconds !== undefined
+        ? { launchedSessionMaxLifetimeSeconds: options.launchedSessionMaxLifetimeSeconds }
+        : {}),
+      ...(options.userConnectionMaxAgeMs !== undefined
+        ? { userConnectionMaxAgeMs: options.userConnectionMaxAgeMs }
+        : {}),
     })
   );
   if (admissionGate) {
@@ -831,6 +843,70 @@ describe('executor Socket.IO connection capability', () => {
       });
       expect(userClient.io.connected).toBe(false);
       expect(getAuthenticatedConnectionAuthority(connection)).toBeUndefined();
+    } finally {
+      userClient.io.close();
+    }
+  });
+
+  it('closes a launched session socket at its deadline and leaves other user sockets open', async () => {
+    const maxLifetimeSeconds = 60;
+    const harness = await startHarness({ launchedSessionMaxLifetimeSeconds: maxLifetimeSeconds });
+    harnesses.push(harness);
+    const signUser = (claims: Record<string, unknown>) =>
+      jwt.sign(
+        { sub: USER_ID, type: 'access', tenant_id: REPLACEMENT_TENANT_ID, ...claims },
+        JWT_SECRET,
+        {
+          algorithm: 'HS256',
+          audience: RUNTIME_JWT_AUDIENCE,
+          issuer: RUNTIME_JWT_ISSUER,
+          expiresIn: '1m',
+        }
+      );
+    const open = async (accessToken: string) => {
+      const client = createClient(harness.url, false, {
+        reconnectionAttempts: 0,
+        socketAuthentication: { accessToken },
+      });
+      client.io.connect();
+      await waitForConnect(client);
+      const socket = harness.socketConfig.getSocketServer()?.sockets.sockets.get(client.io.id!);
+      return { client, connection: (socket as unknown as { feathers?: object }).feathers };
+    };
+    const launched = await open(
+      signUser({
+        [AUTH_LAUNCH_SUBJECT_CLAIM]: 'user:cloud-1',
+        // The deadline lands about two seconds from now.
+        [AUTH_SESSION_STARTED_AT_MS_CLAIM]: Date.now() - (maxLifetimeSeconds - 2) * 1000,
+      })
+    );
+    const password = await open(signUser({}));
+    try {
+      expect(getAuthenticatedConnectionAuthority(launched.connection)?.retireAtExpiry).toBe(true);
+      expect(getAuthenticatedConnectionAuthority(password.connection)?.retireAtExpiry).toBe(false);
+
+      await waitFor(() => !launched.client.io.connected, 4_000);
+
+      expect(getAuthenticatedConnectionAuthority(launched.connection)).toBeUndefined();
+      expect(password.client.io.connected).toBe(true);
+      expect(getAuthenticatedConnectionAuthority(password.connection)).toBeDefined();
+    } finally {
+      launched.client.io.close();
+      password.client.io.close();
+    }
+  });
+
+  it('closes a user socket at the configured connection max age', async () => {
+    const harness = await startHarness({ userConnectionMaxAgeMs: 1_500 });
+    harnesses.push(harness);
+    const userClient = createClient(harness.url, false, {
+      reconnectionAttempts: 0,
+      socketAuthentication: { accessToken: harness.userToken },
+    });
+    try {
+      userClient.io.connect();
+      await waitForConnect(userClient);
+      await waitFor(() => !userClient.io.connected, 3_000);
     } finally {
       userClient.io.close();
     }

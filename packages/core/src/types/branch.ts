@@ -472,31 +472,10 @@ export interface Branch {
    */
   permission_source?: BranchPermissionSource;
 
-  /**
-   * Permission level for non-owners
-   *
-   * - 'none': No access (branch is completely private to owners)
-   * - 'view': Can read branches/sessions/tasks/messages
-   * - 'session': View + can create new sessions (running as own identity) and prompt own sessions
-   * - 'prompt': View + can create tasks/messages in ANY session (run agents as session creator's identity)
-   * - 'all': Full control (create/patch/delete sessions)
-   *
-   * Note: Owners always have 'all' permission regardless of this setting.
-   */
+  /** Repository-level create input for an `override` branch (default 'none'); never on reads, use branches/:id/permissions. */
   others_can?: BranchPermissionLevel;
 
-  /**
-   * Sandbox filesystem access level for non-owners.
-   *
-   * Controls the branch mount exposed to users who are NOT branch owners.
-   * Branch owners receive a writable mount.
-   *
-   * - 'none': The branch is not mounted
-   * - 'read': The branch is mounted read-only
-   * - 'write': The branch is mounted read-write
-   *
-   * This controls sandbox mounts independently of app-layer `others_can`.
-   */
+  /** Repository-level create input for an `override` branch (default 'none'); never on reads, use branches/:id/permissions. */
   others_fs_access?: 'none' | 'read' | 'write';
 
   // ===== Branch Storage Mode =====

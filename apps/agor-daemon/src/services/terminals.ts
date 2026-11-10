@@ -83,6 +83,7 @@ interface OwnedTerminal extends TerminalAttachment {
 
 interface TerminalStartReservation {
   tenantId: string;
+  userId: UserID;
   branchId: BranchID;
   promise: Promise<void>;
   cancelled: boolean;
@@ -172,6 +173,9 @@ export class TerminalsService {
     );
     events.on('terminal:close-branch', (data: { tenantId?: string; branchId?: string }) => {
       if (data.tenantId && data.branchId) this.closeBranch(data.tenantId, data.branchId);
+    });
+    events.on('terminal:close-user', (data: { tenantId?: string; userId?: string }) => {
+      if (data.tenantId && data.userId) this.closeUser(data.tenantId, data.userId);
     });
     events.on(LOCAL_AUTHORIZATION_INVALIDATION_EVENT, (data: { tenantId?: string }) => {
       if (data.tenantId) this.closeTenant(data.tenantId);
@@ -265,6 +269,7 @@ export class TerminalsService {
     });
     const reservation: TerminalStartReservation = {
       tenantId,
+      userId,
       branchId: branch.branch_id,
       promise: reservationPromise,
       cancelled: false,
@@ -551,6 +556,20 @@ export class TerminalsService {
     }
     for (const terminal of [...this.terminals.values()]) {
       if (terminal.tenantId === tenantId && terminal.branchId === branchId) {
+        this.stopTerminal(terminal);
+      }
+    }
+  }
+
+  /** Retire one user's process-local terminals after their own authority changed. */
+  closeUser(tenantId: string, userId: string): void {
+    for (const reservation of this.starting.values()) {
+      if (reservation.tenantId === tenantId && reservation.userId === userId) {
+        reservation.cancelled = true;
+      }
+    }
+    for (const terminal of [...this.terminals.values()]) {
+      if (terminal.tenantId === tenantId && terminal.userId === userId) {
         this.stopTerminal(terminal);
       }
     }

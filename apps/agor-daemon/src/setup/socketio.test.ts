@@ -53,6 +53,8 @@ import {
   tenantChannelName,
   tenantUserChannelName,
   terminalChannelName,
+  USER_REVOCATION_SCOPE,
+  userScopedAuthorizationInvalidation,
 } from '../realtime/routing';
 import { fingerprintExecutorSessionToken } from '../services/session-token-service';
 import type { TerminalAttachmentIdentity } from '../services/terminals';
@@ -545,6 +547,95 @@ it("disconnects only the changed user's task executors on a user-level eviction"
   peerIo.serverHandlers.get(HA_AUTHORIZATION_INVALIDATION_EVENT)?.(invalidation);
   expect(peerAlice.connected).toBe(false);
   expect(peerBob.connected).toBe(true);
+});
+
+it("disconnects only one user's sockets on a user-scoped eviction, across replicas", () => {
+  const { app, io } = buildHarness({ adapter: {} as never, multiTenancy: EXECUTOR_MULTI_TENANCY });
+  const aliceBrowser = makeSocket('tenant-a-alice', io);
+  asUser(aliceBrowser, ALICE, 'tenant-a');
+  connect(io, aliceBrowser);
+  const aliceExecutor = connectTaskExecutor(app, io, 'executor-alice', ALICE, 'task-alice');
+  const bobBrowser = makeSocket('tenant-a-bob', io);
+  asUser(bobBrowser, BOB, 'tenant-a');
+  connect(io, bobBrowser);
+  const bobExecutor = connectTaskExecutor(app, io, 'executor-bob', BOB, 'task-bob');
+  const otherTenantAlice = makeSocket('tenant-b-alice', io);
+  asUser(otherTenantAlice, ALICE, 'tenant-b');
+  connect(io, otherTenantAlice);
+
+  const invalidation = userScopedAuthorizationInvalidation('tenant-a', ALICE);
+  (app as any).eventHandlers.get('realtime:authorization-invalidated')?.(invalidation);
+
+  expect(aliceBrowser.connected).toBe(false);
+  expect(aliceExecutor.connected).toBe(false);
+  expect(bobBrowser.connected).toBe(true);
+  expect(bobExecutor.connected).toBe(true);
+  expect(otherTenantAlice.connected).toBe(true);
+  expect(app.emit).toHaveBeenCalledWith(LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT, {
+    tenantId: 'tenant-a',
+  });
+  expect(app.emit).toHaveBeenCalledWith('terminal:close-user', {
+    tenantId: 'tenant-a',
+    userId: ALICE,
+  });
+  expect(app.emit).not.toHaveBeenCalledWith(LOCAL_AUTHORIZATION_INVALIDATION_EVENT, {
+    tenantId: 'tenant-a',
+  });
+  expect(io.serverSideEmitted).toContainEqual({
+    event: HA_AUTHORIZATION_INVALIDATION_EVENT,
+    data: invalidation,
+  });
+
+  // The relayed event applies the same user scope on a peer replica.
+  const { io: peerIo, app: peerApp } = buildHarness({
+    adapter: {} as never,
+    multiTenancy: EXECUTOR_MULTI_TENANCY,
+  });
+  const peerAlice = makeSocket('peer-alice', peerIo);
+  asUser(peerAlice, ALICE, 'tenant-a');
+  connect(peerIo, peerAlice);
+  const peerBob = makeSocket('peer-bob', peerIo);
+  asUser(peerBob, BOB, 'tenant-a');
+  connect(peerIo, peerBob);
+  peerIo.serverHandlers.get(HA_AUTHORIZATION_INVALIDATION_EVENT)?.(invalidation);
+  expect(peerAlice.connected).toBe(false);
+  expect(peerBob.connected).toBe(true);
+  expect(peerApp.emit).toHaveBeenCalledWith('terminal:close-user', {
+    tenantId: 'tenant-a',
+    userId: ALICE,
+  });
+});
+
+it("disconnects the user's own terminal executor on a user-scoped eviction, not another user's", () => {
+  const { app, io } = buildHarness({ adapter: {} as never });
+  const aliceTerminal = makeSocket('terminal-alice', io);
+  asServiceForUser(aliceTerminal, ALICE);
+  connect(io, aliceTerminal);
+  const bobTerminal = makeSocket('terminal-bob', io);
+  asServiceForUser(bobTerminal, BOB, '55555555-eeee-eeee-eeee-555555555555');
+  connect(io, bobTerminal);
+
+  (app as any).eventHandlers.get('realtime:authorization-invalidated')?.(
+    userScopedAuthorizationInvalidation('default', ALICE)
+  );
+
+  expect(aliceTerminal.connected).toBe(false);
+  expect(bobTerminal.connected).toBe(true);
+});
+
+it('falls back to a tenant-wide eviction when a user-scoped event names no user', () => {
+  const { app, io } = buildHarness({ adapter: {} as never });
+  const bob = makeSocket('default-bob', io);
+  asUser(bob, BOB);
+  connect(io, bob);
+
+  (app as any).eventHandlers.get('realtime:authorization-invalidated')?.({
+    tenantId: 'default',
+    disconnectSockets: true,
+    revocationScope: USER_REVOCATION_SCOPE,
+  });
+
+  expect(bob.connected).toBe(false);
 });
 
 it('revokes a branch-scoped ACL change without reconnecting unrelated sockets', () => {

@@ -31,6 +31,7 @@ async function seedNamespace(db: Parameters<typeof dbTest>[0]['db']) {
   return new KnowledgeNamespaceRepository(db).create({
     slug: `kb-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     display_name: 'Test KB',
+    others_can: 'write',
   });
 }
 

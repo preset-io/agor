@@ -45,8 +45,10 @@ import {
   buildKnowledgeDocumentUri,
   buildKnowledgeUnitUri,
   buildKnowledgeUri,
+  defaultKnowledgeNamespaceOthersCan,
   KNOWLEDGE_DOCUMENT_URI_PREFIX,
   KNOWLEDGE_EMBEDDING_STATUSES,
+  KNOWLEDGE_NAMESPACE_OTHERS_CAN,
   KNOWLEDGE_UNIT_URI_PREFIX,
   normalizeKnowledgeDocumentIconEmoji,
   normalizeKnowledgeFolderPath,
@@ -73,6 +75,7 @@ import {
   update,
 } from '../database-wrapper';
 import {
+  branches,
   groupMemberships,
   groups,
   type KBDocumentInsert,
@@ -444,6 +447,12 @@ export class KnowledgeNamespaceRepository
       );
     }
 
+    const visibilityDefault = data.visibility_default ?? 'public';
+    const othersCan = data.others_can ?? defaultKnowledgeNamespaceOthersCan(visibilityDefault);
+    if (!KNOWLEDGE_NAMESPACE_OTHERS_CAN.includes(othersCan)) {
+      throw new RepositoryError(`Invalid knowledge namespace others_can: ${othersCan}`);
+    }
+
     return {
       namespace_id: (data.namespace_id ?? generateId()) as string,
       slug,
@@ -453,8 +462,8 @@ export class KnowledgeNamespaceRepository
       owner_user_id: data.owner_user_id ?? null,
       repo_id: data.repo_id ?? null,
       branch_id: data.branch_id ?? null,
-      visibility_default: data.visibility_default ?? 'public',
-      others_can: data.others_can ?? 'write',
+      visibility_default: visibilityDefault,
+      others_can: othersCan,
       metadata: data.metadata ?? null,
       created_by: data.created_by ?? null,
       created_at: data.created_at ? new Date(data.created_at) : new Date(now),
@@ -782,9 +791,19 @@ export class KnowledgeNamespaceRepository
       )
       .all();
 
+    // A branch-bound namespace (teammate home) belongs to the branch's current primary owner.
+    const branchOwner =
+      namespace.kind === 'branch' && namespace.branch_id
+        ? await select(this.db, { owner: branches.primary_owner_user_id })
+            .from(branches)
+            .where(eq(branches.branch_id, namespace.branch_id))
+            .one()
+        : null;
+
     return maxKnowledgePermission([
       othersCanToPermission(namespace.others_can),
       namespace.owner_user_id === userId ? 'own' : null,
+      branchOwner?.owner === userId ? 'own' : null,
       ...directRows.map((row: KBNamespaceAclRow) => row.permission as KnowledgeNamespacePermission),
       ...groupRows.map(
         (row: { kb_namespace_acl: KBNamespaceAclRow }) =>

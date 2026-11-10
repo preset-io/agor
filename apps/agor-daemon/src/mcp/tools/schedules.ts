@@ -192,7 +192,7 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
     'agor_schedules_create',
     {
       description:
-        "Create a new schedule on a branch. A branch can hold multiple schedules (e.g. 'hourly heartbeat' + 'daily summary'). Cron + prompt + agentic_tool_config are required.",
+        "Create a new schedule on a branch. A branch can hold multiple schedules (e.g. 'hourly heartbeat' + 'daily summary'). Cron + prompt + agentic_tool_config are required. Requires branch-tier 'all' permission; runs execute as the creator.",
       inputSchema: z
         .strictObject({
           branchId: mcpRequiredId('branchId', 'Branch', 'Branch this schedule belongs to'),
@@ -286,7 +286,7 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
     'agor_schedules_patch',
     {
       description:
-        'Patch a schedule. Only the supplied fields are changed; everything else is preserved. Cron / timezone / prompt changes are re-validated.',
+        "Patch a schedule you created. Only the supplied fields are changed; everything else is preserved. Cron / timezone / prompt changes are re-validated. Requires branch-tier 'all' permission.",
       inputSchema: z.strictObject({
         scheduleId: mcpRequiredId('scheduleId', 'Schedule'),
         name: mcpOptionalString('name', 'Display name'),
@@ -329,7 +329,7 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
     'agor_schedules_delete',
     {
       description:
-        'Delete a schedule. Sessions linked via schedule_id are NOT deleted; the FK is SET NULL so historical runs are preserved as orphaned scheduled sessions.',
+        "Delete a schedule. Sessions linked via schedule_id are NOT deleted; the FK is SET NULL so historical runs are preserved as orphaned scheduled sessions. Requires branch-tier 'all' permission.",
       annotations: { destructiveHint: true },
       inputSchema: z.strictObject({
         scheduleId: mcpRequiredId('scheduleId', 'Schedule'),

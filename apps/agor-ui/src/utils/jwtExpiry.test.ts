@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { decodeJwtExpMs, isExpiringSoon, msUntilExpiry } from './jwtExpiry';
+import {
+  autoRefreshDelayMs,
+  autoRefreshRetryDelayMs,
+  decodeJwtExpMs,
+  isExpiringSoon,
+  msUntilExpiry,
+} from './jwtExpiry';
 
 /**
  * Build a fake JWT with the given payload. Only the middle segment matters
@@ -108,5 +114,29 @@ describe('isExpiringSoon', () => {
     } finally {
       vi.restoreAllMocks();
     }
+  });
+});
+
+describe('autoRefreshDelayMs', () => {
+  it('refreshes a minute before expiry and falls back when exp is unreadable', () => {
+    expect(autoRefreshDelayMs(900_000, false)).toBe(840_000);
+    expect(autoRefreshDelayMs(null, false)).toBe(300_000);
+  });
+
+  it('never schedules tighter than a second', () => {
+    expect(autoRefreshDelayMs(30_000, false)).toBe(1_000);
+  });
+
+  it('waits for expiry when the last refresh did not move exp', () => {
+    expect(autoRefreshDelayMs(30_000, true)).toBe(30_000);
+    expect(autoRefreshDelayMs(-5_000, true)).toBe(1_000);
+  });
+});
+
+describe('autoRefreshRetryDelayMs', () => {
+  it('doubles from five seconds and stays capped', () => {
+    expect([1, 2, 3].map(autoRefreshRetryDelayMs)).toEqual([5_000, 10_000, 20_000]);
+    expect(autoRefreshRetryDelayMs(8)).toBe(5 * 60_000);
+    expect(autoRefreshRetryDelayMs(5_000)).toBe(5 * 60_000);
   });
 });

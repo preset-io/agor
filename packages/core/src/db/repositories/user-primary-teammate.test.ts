@@ -42,6 +42,7 @@ async function createBoard(db: Database, overrides?: Partial<Board>): Promise<Bo
     name: overrides?.name ?? 'Board',
     created_by: overrides?.created_by ?? 'test-user',
     access_mode: overrides?.access_mode ?? 'shared',
+    default_others_can: overrides?.default_others_can,
   });
 }
 
@@ -84,7 +85,7 @@ describe('UserPrimaryTeammateRepository', () => {
   dbTest('resolves a board-level teammate on an accessible board', async ({ db }) => {
     const repo = new UserPrimaryTeammateRepository(db);
     const user = await createUser(db, 'board-level@example.com');
-    const board = await createBoard(db, { access_mode: 'shared' });
+    const board = await createBoard(db, { access_mode: 'shared', default_others_can: 'session' });
     const branchId = await createBranch(db, board.board_id as UUID, {
       permission_source: 'board',
     });

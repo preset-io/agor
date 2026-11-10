@@ -77,6 +77,7 @@ vi.mock('@agor/core/types', () => ({
   KNOWLEDGE_GRAPH_EDGE_TYPES: ['references', 'relates_to'],
   KNOWLEDGE_GRAPH_NODE_TYPES: ['document', 'external'],
   KNOWLEDGE_VISIBILITIES: ['public', 'private'],
+  KNOWLEDGE_NAMESPACE_OTHERS_CAN: ['none', 'read', 'write'],
   normalizeKnowledgeFolderPath: (folder?: string | null) =>
     (folder ?? '')
       .trim()

@@ -272,6 +272,45 @@ describe('cross-tab credential reconciliation (useAuth + useAgorClient)', () => 
     expect(refreshCreate).toHaveBeenLastCalledWith({ refreshToken: 'refresh-2' });
   });
 
+  it('retries auto-refresh after a retryable 503 and recovers without a reload', async () => {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const first = jwt(nowSeconds + 120, 'user-a');
+    const recovered = jwt(nowSeconds + 1200, 'user-a');
+    const { result } = await mountAuthenticated(first, 'refresh-1');
+    refreshCreate.mockRejectedValue(Object.assign(new Error('Unavailable'), { code: 503 }));
+
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(refreshCreate).toHaveBeenCalledTimes(1);
+    expect(result.current.auth.error).toBe('Connection lost - waiting for daemon...');
+    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('refresh-1');
+
+    await act(() => vi.advanceTimersByTimeAsync(5_000));
+    expect(refreshCreate).toHaveBeenCalledTimes(2);
+
+    refreshCreate.mockReset();
+    refreshCreate.mockResolvedValueOnce({
+      accessToken: recovered,
+      refreshToken: 'refresh-2',
+      user: userA,
+    });
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(refreshCreate).toHaveBeenCalledExactlyOnceWith({ refreshToken: 'refresh-1' });
+    expect(result.current.auth.accessToken).toBe(recovered);
+    expect(result.current.auth.error).toBeNull();
+
+    // The recovered token returns to the normal schedule, 60s before its expiry.
+    refreshCreate.mockReset();
+    refreshCreate.mockResolvedValue({
+      accessToken: jwt(nowSeconds + 2400, 'user-a'),
+      refreshToken: 'refresh-3',
+      user: userA,
+    });
+    await act(() => vi.advanceTimersByTimeAsync(1_000_000));
+    expect(refreshCreate).not.toHaveBeenCalled();
+    await act(() => vi.advanceTimersByTimeAsync(100_000));
+    expect(refreshCreate).toHaveBeenCalledTimes(1);
+  });
+
   it('lets logout win while socket recovery waits for reconciliation', async () => {
     const { result } = await mountAuthenticated('access-a', 'refresh-a');
     const post = deferred<unknown>();

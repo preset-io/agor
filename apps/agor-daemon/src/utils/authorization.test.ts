@@ -5,13 +5,14 @@
  * Also verifies that `provider` presence controls whether auth hooks run.
  */
 
-import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext } from '@agor/core/types';
 import { BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS, ROLES } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
   ensureMinimumRole,
   registerAuthenticatedRoute,
+  rejectNonScalarExternalId,
   requireAdminForEnvConfig,
   requireMinimumRole,
 } from './authorization';
@@ -239,5 +240,28 @@ describe('registerAuthenticatedRoute', () => {
     for (const hook of hooks) {
       await expect(Promise.resolve(hook(context))).resolves.toBe(context);
     }
+  });
+});
+
+describe('rejectNonScalarExternalId', () => {
+  const context = (method: string, id: unknown, provider?: string) =>
+    ({ method, id, params: { provider } }) as unknown as HookContext;
+
+  it('rejects array and object IDs from transports on single-record methods', () => {
+    for (const method of ['get', 'update', 'patch', 'remove']) {
+      for (const id of [['a'], { id: 'a' }]) {
+        expect(() => rejectNonScalarExternalId(context(method, id, 'socketio'))).toThrow(
+          BadRequest
+        );
+      }
+    }
+  });
+
+  it('keeps scalar, multi (null) and internal calls unchanged', () => {
+    for (const id of ['a', 7, null, undefined]) {
+      expect(() => rejectNonScalarExternalId(context('patch', id, 'rest'))).not.toThrow();
+    }
+    expect(() => rejectNonScalarExternalId(context('patch', ['a']))).not.toThrow();
+    expect(() => rejectNonScalarExternalId(context('find', ['a'], 'rest'))).not.toThrow();
   });
 });

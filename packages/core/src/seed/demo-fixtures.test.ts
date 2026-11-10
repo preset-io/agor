@@ -16,6 +16,7 @@ import {
   BoardObjectRepository,
   BoardRepository,
   BranchRepository,
+  CapabilityPolicyRepository,
   CardRepository,
   CardTypeRepository,
   MessagesRepository,
@@ -92,6 +93,14 @@ describe('loadDemoFixtures', { timeout: DEMO_FIXTURES_TIMEOUT_MS }, () => {
     // Branch + card placements are board_objects rows (5 branches + 4 cards).
     const placements = await boardObjectRepo.findByBoardId(board!.board_id);
     expect(placements).toHaveLength(9);
+
+    // The multiplayer demo opts in to sharing; new boards are otherwise private.
+    const policies = await new CapabilityPolicyRepository(db).getBoardPolicies(board!.board_id);
+    expect(policies.board_access.others.preset).toBe('viewer');
+    expect(policies.branch_template.access.others).toMatchObject({
+      preset: 'collaborator',
+      fs_access: 'read',
+    });
   });
 
   dbTest('creates loginable demo users with bcrypt-hashed passwords', async ({ db }) => {

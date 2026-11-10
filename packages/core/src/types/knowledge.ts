@@ -102,6 +102,13 @@ export type KnowledgeEditPolicy = (typeof KNOWLEDGE_EDIT_POLICIES)[number];
 export const KNOWLEDGE_NAMESPACE_OTHERS_CAN = ['none', 'read', 'write'] as const;
 export type KnowledgeNamespaceOthersCan = (typeof KNOWLEDGE_NAMESPACE_OTHERS_CAN)[number];
 
+/** Fallback for namespaces created without an explicit `others_can`: never writable by others. */
+export function defaultKnowledgeNamespaceOthersCan(
+  visibilityDefault: KnowledgeVisibility | undefined
+): KnowledgeNamespaceOthersCan {
+  return visibilityDefault === 'private' ? 'none' : 'read';
+}
+
 export const KNOWLEDGE_NAMESPACE_SUBJECT_TYPES = ['user', 'group'] as const;
 export type KnowledgeNamespaceSubjectType = (typeof KNOWLEDGE_NAMESPACE_SUBJECT_TYPES)[number];
 

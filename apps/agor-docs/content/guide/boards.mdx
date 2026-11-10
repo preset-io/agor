@@ -158,6 +158,12 @@ Every board has one primary owner and two intentionally separate permission sect
 
 Board access uses Viewer, Editor, and Manager roles. Seeing a branch associated with a board does not make the board visible, and seeing a board does not reveal branch cards the person cannot access.
 
+A new board is private by default: **Others** get no access to the board or to the branches that inherit its defaults. Choose **Shared** when you create it to let other members view the canvas; only Editors and Managers can change its zones, notes, and cards. Branch defaults for **Others** start at no access and no file access, so viewing, starting sessions, file access, and terminals on your branches are granted only when you choose them. Branch defaults never hide a shared board itself.
+
+These defaults apply only to new boards and new workspaces. When you upgrade, existing boards, including Main Boards, keep their stored permissions and may still give **Others** Collaborator access with read access to files, which includes terminals. Owners and Managers can narrow **Others** by hand in **Branch defaults**. Cloning a board copies its sharing settings, so a clone of an older board starts with the same access for **Others** until you narrow it.
+
+API reads of boards and branches don't include the creation-time fields `access_mode`, `default_others_can`, `default_others_fs_access`, `others_can`, and `others_fs_access`. Read the stored policy from `boards/:id/permissions` or `branches/:id/permissions` instead. When a board is created through the API without `access_mode`, it is shared only if `default_others_can` grants something other than `none`.
+
 Branch defaults use the same roles, file-access choices, and session-sharing editor as a branch override. A branch inherits the entire package or overrides the entire package—session sharing never has its own separate inheritance switch.
 
 Entries point to one person or group. Direct person entries override group membership; otherwise group entries combine. **Others** is a clearly labeled fallback for active workspace members who do not match any named entry.

@@ -33,6 +33,7 @@ import {
   resolvePasswordPolicyRequirements,
   resolveRefreshTokenTtlSeconds,
   resolveSdkWatchdogConfig,
+  resolveSessionMaxLifetimeSeconds,
   resolveTeammateFrameworkRepoUrl,
   resolveTenantContext,
 } from '@agor/core/config';
@@ -45,6 +46,7 @@ import {
   generateId,
   getCurrentTenantId,
   getMCPEgressGatewayMode,
+  isScheduledInitialTaskRevoked,
   MCPCatalogCandidateRepository,
   MCPServerRepository,
   MessagesRepository,
@@ -153,7 +155,14 @@ import {
   matchesTaskExecutorRuntimeScope,
 } from './auth/executor-runtime-scope.js';
 import { createIssueBrowserTokensHook } from './auth/issue-browser-tokens-hook.js';
-import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './auth/launch-auth.js';
+import {
+  createLaunchAuthService,
+  createLaunchProjectionSerializer,
+  createLaunchSessionRevalidator,
+  launchSessionsAreRevalidated,
+  resolveLaunchConnectionBounds,
+  resolvePublicLaunchAuthSettings,
+} from './auth/launch-auth.js';
 import { createRefreshTokenService } from './auth/refresh-token-service.js';
 import {
   issueRuntimeToken,
@@ -208,6 +217,7 @@ import {
   deliverPermissionDecision,
   type PermissionDecisionSubmission,
 } from './permissions/deliver-permission-decision.js';
+import { userScopedAuthorizationInvalidation } from './realtime/routing.js';
 import { registerTeamsGatewayIngressRoute } from './routes/teams-gateway-ingress.js';
 import { publicBoardCommentRepositionInput } from './services/board-comments.js';
 import type { GatewayService } from './services/gateway.js';
@@ -252,6 +262,7 @@ import { buildAuthRateLimitKey } from './utils/auth-rate-limit-key.js';
 import {
   ensureMinimumRole,
   registerAuthenticatedRoute as registerAuthenticatedRouteUnscoped,
+  rejectNonScalarExternalId,
   requireMinimumRole,
 } from './utils/authorization.js';
 import { authorizeBranchArchiveDelete } from './utils/branch-archive-delete-authorization.js';
@@ -1154,6 +1165,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // AGOR_REFRESH_TOKEN_TTL_SECONDS, validated at config load. All three issuers
   // below MUST use this one value so login, launch and refresh never disagree.
   const REFRESH_TOKEN_TTL_SECONDS = resolveRefreshTokenTtlSeconds(config);
+  // Absolute lifetime of a launched browser session, counted from the launch.
+  const SESSION_MAX_LIFETIME_SECONDS = resolveSessionMaxLifetimeSeconds(config);
 
   app.set('authentication', {
     secret: jwtSecret,
@@ -1187,6 +1200,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       sessionTokenService,
       executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
       multiTenancy,
+      ...resolveLaunchConnectionBounds(externalLaunchProvider, SESSION_MAX_LIFETIME_SECONDS),
     })
   );
   authentication.register('local', new AgorLocalStrategy());
@@ -1271,6 +1285,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           jwtSecret,
           accessTokenTtl: ACCESS_TOKEN_TTL,
           refreshTokenTtl: REFRESH_TOKEN_TTL_SECONDS,
+          sessionMaxLifetimeSeconds: SESSION_MAX_LIFETIME_SECONDS,
+          pinReauthenticatedAccessExpiry: launchSessionsAreRevalidated(externalLaunchProvider),
           tenantClaim: tenantTokenClaim,
           staticTenantId:
             multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
@@ -1284,6 +1300,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // One-time launch-code authentication endpoint
   // ============================================================================
 
+  const onLaunchAuthorizationInvalidated = (tenantId: string, userId: UserID) => {
+    app.emit('realtime:authorization-invalidated', {
+      tenantId,
+      disconnectSockets: true,
+      userId,
+    });
+  };
+  // Launch and refresh-time revalidation project the same identities through one queue.
+  const serializeLaunchProjection = createLaunchProjectionSerializer();
+
   // biome-ignore lint/suspicious/noExplicitAny: Feathers Application vs Express middleware overload
   app.use('/auth/launch', authRateLimiter as any);
   app.use(
@@ -1295,14 +1321,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       jwtSecret,
       accessTokenTtl: ACCESS_TOKEN_TTL,
       refreshTokenTtl: REFRESH_TOKEN_TTL_SECONDS,
+      sessionMaxLifetimeSeconds: SESSION_MAX_LIFETIME_SECONDS,
       usersService,
-      onAuthorizationInvalidated: (tenantId, userId) => {
-        app.emit('realtime:authorization-invalidated', {
-          tenantId,
-          disconnectSockets: true,
-          userId,
-        });
-      },
+      onAuthorizationInvalidated: onLaunchAuthorizationInvalidated,
+      serializeProjection: serializeLaunchProjection,
     })
   );
 
@@ -1323,8 +1345,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       jwtSecret,
       accessTokenTtl: ACCESS_TOKEN_TTL,
       refreshTokenTtl: REFRESH_TOKEN_TTL_SECONDS,
+      sessionMaxLifetimeSeconds: SESSION_MAX_LIFETIME_SECONDS,
       tenantClaim: tenantTokenClaim,
       usersService,
+      revalidateLaunchSession: createLaunchSessionRevalidator({
+        db,
+        config,
+        provider: externalLaunchProvider,
+        serializeProjection: serializeLaunchProjection,
+        // A refusal or refresh-detected role change only concerns that user's sockets.
+        onAuthorizationInvalidated: (tenantId, userId) => {
+          app.emit(
+            'realtime:authorization-invalidated',
+            userScopedAuthorizationInvalidation(tenantId, userId)
+          );
+        },
+      }),
     })
   );
 
@@ -2455,6 +2491,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 }
                 const admissionSession = (await sessionsService.get(id, params)) as Session;
                 await assertCurrentPromptAuthority(operationDb, admissionSession);
+                // An already-admitted initial Task is re-checked at its launch fence instead.
+                if (
+                  !prior &&
+                  data.idempotencyTaskId &&
+                  (await isScheduledInitialTaskRevoked(operationDb, {
+                    sessionId: id,
+                    taskId: data.idempotencyTaskId,
+                    principalUserId: createdBy,
+                  }))
+                ) {
+                  throw new Forbidden(
+                    "This schedule's creator no longer has Manager access to its branch"
+                  );
+                }
                 if (admissionFence) await admissionFence(operationDb);
                 return new TaskRepository(operationDb).createPending({
                   task_id: data.idempotencyTaskId,
@@ -7139,7 +7189,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       all: aroundAll,
     },
     before: {
-      all: [enforcePasswordChange],
+      // Every service's record hooks only ever see scalar IDs from transports.
+      all: [rejectNonScalarExternalId, enforcePasswordChange],
     },
   });
 
