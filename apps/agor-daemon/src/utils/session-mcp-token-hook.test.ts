@@ -99,122 +99,136 @@ async function seedSession(db: Database): Promise<Session> {
 
 afterEach(() => shutdownMcpTokens());
 
-describe('sessions MCP-token after hook', () => {
-  async function expectDefaultStaticToken(
-    db: Database,
-    method: 'create' | 'get',
-    user: { user_id: string; role: string }
-  ) {
-    initMcpTokens({
-      db,
-      multiTenancy: resolveMultiTenancyConfig({}),
-    });
-    const session = await seedSession(db);
-    const service = makeApp(session).service('sessions');
-    const params = {
-      // No provider, request tenant params, or ambient ALS: this models the
-      // executor/background fetches that exposed issue #2003.
-      user,
-    };
-    const result =
-      method === 'create'
-        ? await service.create({}, params as never)
-        : await service.get(session.session_id, params as never);
+const member = { user_id: 'test-user', role: 'member' };
 
-    const token = (result as Session).mcp_token;
-    expect(token).toEqual(expect.any(String));
-    expect((jwt.verify(token!, JWT_SECRET) as { tid?: string }).tid).toBe('default');
-  }
+function executorParams(session: Session, taskId: string, user = member) {
+  return {
+    user,
+    provider: 'socketio',
+    authentication: {
+      strategy: 'jwt',
+      payload: {
+        type: EXECUTOR_SESSION_TOKEN_TYPE,
+        purpose: EXECUTOR_SESSION_TOKEN_PURPOSE,
+        session_id: session.session_id,
+        task_id: taskId,
+      },
+    },
+  };
+}
 
-  dbTest('attaches a default-static token through Feathers sessions.create', async ({ db }) => {
-    await expectDefaultStaticToken(db, 'create', {
-      user_id: 'member-user',
-      role: 'member',
-    });
+async function seedRunningTask(db: Database, session: Session) {
+  return new TaskRepository(db).create({
+    session_id: session.session_id,
+    created_by: 'test-user',
+    status: TaskStatus.RUNNING,
+    executor_connected_at: new Date().toISOString(),
   });
+}
 
-  dbTest(
-    'binds a task executor token to its task so /mcp refuses it after the task ends',
-    async ({ db }) => {
+describe('sessions MCP-token after hook', () => {
+  dbTest.for(['create', 'get'] as const)(
+    'attaches a task-bound default-static token to a task executor %s',
+    async (method, { db }) => {
       initMcpTokens({ db, multiTenancy: resolveMultiTenancyConfig({}) });
       const session = await seedSession(db);
-      const tasks = new TaskRepository(db);
-      const task = await tasks.create({
-        session_id: session.session_id,
-        created_by: 'test-user',
-        status: TaskStatus.RUNNING,
-        executor_connected_at: new Date().toISOString(),
-      });
-      const app = makeApp(session);
-      const user = { user_id: 'test-user', role: 'member' };
-      const executorParams = {
-        user,
-        provider: 'socketio',
+      const task = await seedRunningTask(db, session);
+      const service = makeApp(session).service('sessions');
+      // No request tenant params or ambient ALS: this models executor fetches (issue #2003).
+      const params = executorParams(session, task.task_id) as never;
+      const result =
+        method === 'create'
+          ? await service.create({}, params)
+          : await service.get(session.session_id, params);
+
+      const claims = jwt.verify((result as Session).mcp_token!, JWT_SECRET) as {
+        tid?: string;
+        tsk?: string;
+      };
+      expect(claims).toMatchObject({ tid: 'default', tsk: task.task_id });
+    }
+  );
+
+  dbTest.for([
+    ['a browser/API member', { user: member }],
+    ['a superadmin', { user: { user_id: 'admin', role: 'superadmin' } }],
+    ['the daemon service identity', { user: { user_id: 'executor-service', role: 'service' } }],
+    [
+      'a taskless command executor',
+      {
+        user: member,
         authentication: {
           strategy: 'jwt',
-          payload: {
-            type: EXECUTOR_SESSION_TOKEN_TYPE,
-            purpose: EXECUTOR_SESSION_TOKEN_PURPOSE,
-            session_id: session.session_id,
-            task_id: task.task_id,
-          },
+          payload: { type: EXECUTOR_SESSION_TOKEN_TYPE, purpose: 'executor-command' },
         },
+      },
+    ],
+  ] as const)('returns no token to %s', async ([, params], { db }) => {
+    initMcpTokens({ db, multiTenancy: resolveMultiTenancyConfig({}) });
+    const session = await seedSession(db);
+    const service = makeApp(session).service('sessions');
+
+    expect(await service.get(session.session_id, params as never)).not.toHaveProperty('mcp_token');
+    expect(await service.create({}, params as never)).not.toHaveProperty('mcp_token');
+  });
+
+  dbTest('returns no token to a viewer even with task executor scope', async ({ db }) => {
+    initMcpTokens({ db, multiTenancy: resolveMultiTenancyConfig({}) });
+    const session = await seedSession(db);
+    const task = await seedRunningTask(db, session);
+    const params = executorParams(session, task.task_id, { user_id: 'v', role: 'viewer' });
+
+    expect(
+      await makeApp(session)
+        .service('sessions')
+        .get(session.session_id, params as never)
+    ).not.toHaveProperty('mcp_token');
+  });
+
+  dbTest('/mcp refuses a task executor token once its task ends', async ({ db }) => {
+    initMcpTokens({ db, multiTenancy: resolveMultiTenancyConfig({}) });
+    const session = await seedSession(db);
+    const task = await seedRunningTask(db, session);
+    const app = makeApp(session);
+    const executorToken = (
+      (await app
+        .service('sessions')
+        .get(session.session_id, executorParams(session, task.task_id) as never)) as Session
+    ).mcp_token!;
+
+    const web = express();
+    web.use(express.json());
+    web.set('authentication', { secret: JWT_SECRET });
+    Object.assign(web, {
+      service: (name: string) =>
+        name === 'users'
+          ? { get: async () => ({ ...member, email: 'u@example.com' }) }
+          : app.service(name),
+    });
+    setupMCPRoutes(web as never, db, false);
+    const server = web.listen(0, '127.0.0.1');
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    try {
+      const { port } = server.address() as { port: number };
+      const listTools = async () => {
+        const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json, text/event-stream',
+            Authorization: `Bearer ${executorToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+        });
+        await response.text();
+        return response.status;
       };
-      const executorToken = (
-        (await app.service('sessions').get(session.session_id, executorParams as never)) as Session
-      ).mcp_token!;
-      const memberToken = (
-        (await app.service('sessions').get(session.session_id, { user } as never)) as Session
-      ).mcp_token!;
-      expect((jwt.decode(executorToken) as { tsk?: string }).tsk).toBe(task.task_id);
-      expect((jwt.decode(memberToken) as { tsk?: string }).tsk).toBeUndefined();
 
-      const web = express();
-      web.use(express.json());
-      web.set('authentication', { secret: JWT_SECRET });
-      Object.assign(web, {
-        service: (name: string) =>
-          name === 'users'
-            ? { get: async () => ({ ...user, email: 'u@example.com' }) }
-            : app.service(name),
-      });
-      setupMCPRoutes(web as never, db, false);
-      const server = web.listen(0, '127.0.0.1');
-      await new Promise<void>((resolve) => server.once('listening', resolve));
-      try {
-        const { port } = server.address() as { port: number };
-        const listTools = (token: string) =>
-          fetch(`http://127.0.0.1:${port}/mcp`, {
-            method: 'POST',
-            headers: {
-              Accept: 'application/json, text/event-stream',
-              Authorization: `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
-          }).then(async (response) => {
-            await response.text();
-            return response.status;
-          });
-
-        expect(await listTools(executorToken)).toBe(200);
-        await tasks.update(task.task_id, { status: TaskStatus.COMPLETED });
-        expect(await listTools(executorToken)).toBe(401);
-        // Interactive caller tokens are not task-bound and keep their session-scoped lifetime.
-        expect(await listTools(memberToken)).toBe(200);
-      } finally {
-        await new Promise<void>((resolve) => server.close(() => resolve()));
-      }
+      expect(await listTools()).toBe(200);
+      await new TaskRepository(db).update(task.task_id, { status: TaskStatus.COMPLETED });
+      expect(await listTools()).toBe(401);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
-  );
-
-  dbTest(
-    'attaches a default-static token through executor/background Feathers sessions.get',
-    async ({ db }) => {
-      await expectDefaultStaticToken(db, 'get', {
-        user_id: 'executor-service',
-        role: 'service',
-      });
-    }
-  );
+  });
 });

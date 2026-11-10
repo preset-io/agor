@@ -12,7 +12,7 @@
  * - `iat`  — unix seconds, standard JWT "issued at"
  * - `exp`  — unix seconds, enforced by `jsonwebtoken.verify`
  * - `jti`  — per-issuance UUID (useful for log correlation)
- * - `tsk`  — task id, when minted for a task executor
+ * - `tsk`  — the executor's task; the sessions hook mints only these, older tokens may lack it
  *
  * No denylist or generation counter. Tokens are minted lazily and cached
  * briefly per `(tenant,session,user,task)` so high-frequency `session.get`

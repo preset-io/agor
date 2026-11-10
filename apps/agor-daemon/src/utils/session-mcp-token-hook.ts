@@ -21,14 +21,21 @@ export interface SessionMcpTokenAfterHooksOptions
  * Build the shared sessions after:get / after:create MCP-token hook.
  *
  * Token issuance owns tenant binding semantics; this hook owns only caller
- * authorization and response enrichment. A task executor's token is bound to
- * its task, so it stops authenticating once that task's executor is done.
+ * authorization and response enrichment. Only task executors receive a token,
+ * and it is bound to their task, so it stops authenticating once the task's
+ * executor is done. Browser, CLI and API callers never receive one.
  * Keeping both session paths on this function prevents request and background
  * fetch behavior from drifting.
  */
 export function createSessionMcpTokenHook(options: SessionMcpTokenHookOptions) {
   return async (context: HookContext): Promise<HookContext> => {
     if (options.config.daemon?.mcpEnabled === false) return context;
+
+    // Only a task executor receives a token; it is bound to that task.
+    const taskId = authenticatedTaskExecutorRuntimeScope(context.params)?.taskId as
+      | TaskID
+      | undefined;
+    if (!taskId) return context;
 
     const callerUser = (context.params as AuthenticatedParams).user;
     if (
@@ -49,9 +56,6 @@ export function createSessionMcpTokenHook(options: SessionMcpTokenHookOptions) {
     }
 
     const session = context.result as Session;
-    const taskId = authenticatedTaskExecutorRuntimeScope(context.params)?.taskId as
-      | TaskID
-      | undefined;
     const mcpToken = await generateSessionToken(
       options.app,
       session.session_id,

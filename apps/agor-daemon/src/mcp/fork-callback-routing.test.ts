@@ -105,9 +105,34 @@ dbTest(
     expect(fork.genealogy.forked_from_session_id).toBe(original.session_id);
     expect(fork.sdk_session_id).toBeUndefined();
 
+    // MCP tokens are issued only to a task executor, so each runtime gets a live task.
+    async function executorParams(session: Session) {
+      const task = await tasks.create({
+        session_id: session.session_id,
+        created_by: user.user_id,
+        status: 'running',
+        executor_connected_at: new Date().toISOString(),
+      });
+      return {
+        user,
+        authentication: {
+          strategy: 'jwt',
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-task',
+            session_id: session.session_id,
+            task_id: task.task_id,
+          },
+        },
+      };
+    }
+
     async function runtimeHeaders(session: Session, expectedResume?: string) {
+      const runtimeParams = await executorParams(session);
       const deps = {
-        sessionsRepo: { findById: (id: string) => app.service('sessions').get(id, params) },
+        sessionsRepo: {
+          findById: (id: string) => app.service('sessions').get(id, runtimeParams as never),
+        },
         branchesRepo: branches,
       } as unknown as Parameters<typeof setupQuery>[2];
       const result = await setupQuery(
@@ -183,8 +208,11 @@ dbTest(
         expect(payload.result?.isError, text).not.toBe(true);
         return JSON.parse(payload.result.content[0].text);
       };
-      const originalToken = (await app.service('sessions').get(original.session_id, params))
-        .mcp_token;
+      const originalToken = (
+        await app
+          .service('sessions')
+          .get(original.session_id, (await executorParams(original)) as never)
+      ).mcp_token;
       // Send A first, then reuse a stale transport/header hint with B's actual
       // runtime credentials. No request-local handler may keep A's identity.
       await call({ Authorization: `Bearer ${originalToken}` }, 'agor_users_get_current', {});
