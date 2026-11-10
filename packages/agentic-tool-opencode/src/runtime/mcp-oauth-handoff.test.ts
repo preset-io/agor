@@ -155,9 +155,10 @@ describe('executor repository to OpenCode OAuth handoff', () => {
     expect(Object.keys((await fixture([], {}).build()).mcp)).toHaveLength(1);
   });
 
-  it('delivers only the authorized access header to the managed process config before any model call', async () => {
+  it('attaches only the authorized access header over the API before any model call', async () => {
     const f = fixture([server()], { authorization: 'Bearer fictional-refreshed-access' });
     const envs: Array<NodeJS.ProcessEnv> = [];
+    const added: unknown[] = [];
     const stdout = new PassThrough();
     const child = Object.assign(new EventEmitter(), {
       stdout,
@@ -177,9 +178,16 @@ describe('executor repository to OpenCode OAuth handoff', () => {
         return child;
       },
       fetch: vi.fn(async () => new Response('{}', { status: 200 })),
-      createClient: () => {
-        throw new Error('Stop at config handoff; no model call');
-      },
+      // Ends the turn after the MCP handoff; no model call.
+      createClient: () =>
+        ({
+          mcp: {
+            add: async ({ body }: { body: unknown }) => {
+              added.push(body);
+              return { data: {} };
+            },
+          },
+        }) as never,
     });
     await expect(
       tool.runTurn({
@@ -197,9 +205,11 @@ describe('executor repository to OpenCode OAuth handoff', () => {
       })
     ).rejects.toThrow();
     expect(envs).toHaveLength(1);
-    const content = envs[0].OPENCODE_CONFIG_CONTENT ?? '';
-    expect(content).toContain('Bearer fictional-refreshed-access');
-    expect(content).not.toMatch(
+    // Tool subprocesses inherit the server env, so no bearer may ride it.
+    expect(JSON.stringify(envs[0])).not.toMatch(/fictional-refreshed-access|fictional-agor-token/);
+    const attached = JSON.stringify(added);
+    expect(attached).toContain('Bearer fictional-refreshed-access');
+    expect(attached).not.toMatch(
       /oauth_refresh_token|oauth_client_secret|oauthAuthResolution|must-not-win/
     );
   });

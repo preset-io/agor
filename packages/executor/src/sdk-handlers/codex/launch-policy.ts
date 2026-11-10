@@ -1,4 +1,5 @@
 import type { CodexOptions } from '@agor/core/sdk';
+import { parse as parseToml } from 'smol-toml';
 
 type CodexConfigObject = NonNullable<CodexOptions['config']>;
 
@@ -23,9 +24,42 @@ function isCodexConfigObject(value: unknown): value is CodexConfigObject {
  * runtime default. `update_plan` is a nested table (`{ enabled: bool }`), not a
  * scalar toggle like `tools.web_search`.
  */
+/** Every MCP bearer Agor hands Codex travels in an env var matching this pattern. */
+export const AGOR_MCP_ENV_PATTERN = 'AGOR_MCP_*';
+
+/**
+ * Keep Agor's MCP bearer env vars out of every shell command the agent runs.
+ *
+ * Codex reads `bearer_token_env_var`/`env_http_headers` from its own process
+ * env, which its shell tool would otherwise inherit (`ignore_default_excludes`
+ * defaults to true). Codex applies the policy form of the topmost layer that
+ * sets one, so a `filters` override would silently drop a user's legacy
+ * `exclude`/`include_only` list; in that case the legacy form is extended
+ * instead.
+ */
+export function agorShellEnvironmentPolicy(userConfigToml: string | undefined): CodexConfigObject {
+  let userPolicy: unknown;
+  try {
+    userPolicy = userConfigToml
+      ? (parseToml(userConfigToml) as Record<string, unknown>).shell_environment_policy
+      : undefined;
+  } catch {
+    // Codex refuses an unparseable config.toml itself; no user policy survives it.
+  }
+  const policy = isCodexConfigObject(userPolicy) ? userPolicy : {};
+  if (policy.exclude !== undefined || policy.include_only !== undefined) {
+    const userExclude = Array.isArray(policy.exclude)
+      ? policy.exclude.filter((pattern): pattern is string => typeof pattern === 'string')
+      : [];
+    return { exclude: [...userExclude, AGOR_MCP_ENV_PATTERN] };
+  }
+  return { filters: { [AGOR_MCP_ENV_PATTERN]: 'exclude' } };
+}
+
 export function applyAgorCodexLaunchPolicy(
   config: CodexConfigObject | undefined,
-  includePlugins = false
+  includePlugins = false,
+  userConfigToml?: string
 ): CodexConfigObject {
   const features = config?.features;
   if (features !== undefined && !isCodexConfigObject(features)) {
@@ -50,6 +84,7 @@ export function applyAgorCodexLaunchPolicy(
 
   return {
     ...config,
+    shell_environment_policy: agorShellEnvironmentPolicy(userConfigToml),
     features: {
       ...features,
       // Agor sessions/subsessions are the supported, observable orchestration boundary.

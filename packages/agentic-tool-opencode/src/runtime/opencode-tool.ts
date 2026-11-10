@@ -86,6 +86,9 @@ const AGOR_PERMISSION_INTERCEPTION = {
 const AGOR_MANAGED_AGENT = 'agor-managed';
 
 type OpenCodeClient = ReturnType<typeof createOpencodeClient>;
+type OpenCodeMcpServerConfig = NonNullable<
+  NonNullable<Parameters<OpenCodeClient['mcp']['add']>[0]>['body']
+>['config'];
 /**
  * Permission replies go through the v2 `/permission/:requestID/reply` route:
  * unlike the legacy session route it forwards a `message`, and OpenCode turns a
@@ -877,7 +880,10 @@ export class OpenCodeTool {
     const invocationConfig = input.managed
       ? hostedOpenCodeInvocationConfig(protectedConfig)
       : protectedConfig;
-    const configContent = JSON.stringify(invocationConfig);
+    // MCP servers carry bearers and resolved auth headers, so they are attached
+    // over the server's authenticated API rather than the env its tools inherit.
+    const { mcp: invocationMcp, ...processConfig } = invocationConfig;
+    const configContent = JSON.stringify(processConfig);
     let managedServer: ManagedOpenCodeServer;
     try {
       if (input.managed) {
@@ -958,6 +964,7 @@ export class OpenCodeTool {
         directory: input.directory,
         headers: { Authorization: authorization },
       });
+      await this.addMcpServers(client, input.directory, invocationMcp);
       await this.assertExplicitModelAvailable(
         client,
         input.directory,
@@ -1213,6 +1220,21 @@ export class OpenCodeTool {
       mcpToolPermissions: buildOpenCodeMcpToolPermissions(sessionId, servers),
       mcpSignInNotice: signIn.render(),
     };
+  }
+
+  /** Attach this turn's MCP servers before any session exists, so the first prompt sees them. */
+  private async addMcpServers(
+    client: OpenCodeClient,
+    directory: string,
+    servers: Record<string, unknown>
+  ): Promise<void> {
+    for (const [name, config] of Object.entries(servers)) {
+      const response = await client.mcp.add({
+        body: { name, config: config as OpenCodeMcpServerConfig },
+        query: { directory },
+      });
+      if (response.error) throw new Error(`OpenCode could not attach MCP server ${name}`);
+    }
   }
 
   /** Create a new OpenCode session on the invocation's managed runtime. */

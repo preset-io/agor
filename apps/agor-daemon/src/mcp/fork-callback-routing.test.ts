@@ -27,7 +27,10 @@ import { createSessionMcpTokenAfterHooks } from '../utils/session-mcp-token-hook
 import { setupMCPRoutes } from './server';
 import { initMcpTokens, shutdownMcpTokens } from './tokens';
 
-const sdk = vi.hoisted(() => ({ query: vi.fn(() => ({})) }));
+const sdk = vi.hoisted(() => {
+  const setMcpServers = vi.fn(async () => ({ added: [], removed: [], errors: {} }));
+  return { setMcpServers, query: vi.fn(() => ({ setMcpServers })) };
+});
 vi.mock('@agor/core/agentic-integrations', async (original) => ({
   ...(await original<typeof import('@agor/core/agentic-integrations')>()),
   loadManagedAgenticToolSdk: vi.fn(async () => sdk),
@@ -140,19 +143,18 @@ dbTest(
         `Inherited example: callbackSessionId=${original.session_id}. Delegate work.`,
         deps
       );
+      const [{ options, prompt }] = sdk.query.mock.calls.at(-1) as unknown as [
+        {
+          options: { systemPrompt: { append: string }; resume?: string; forkSession?: boolean };
+          prompt: AsyncIterable<unknown>;
+        },
+      ];
+      // The Agor server is applied over the control channel before the first message.
+      await prompt[Symbol.asyncIterator]().next();
       result.query.releaseInput();
-      const options = (
-        sdk.query.mock.calls.at(-1) as unknown as [
-          {
-            options: {
-              systemPrompt: { append: string };
-              resume?: string;
-              forkSession?: boolean;
-              mcpServers: { agor: { headers: Record<string, string> } };
-            };
-          },
-        ]
-      )[0].options;
+      const [applied] = sdk.setMcpServers.mock.calls.at(-1) as unknown as [
+        { agor: { headers: Record<string, string> } },
+      ];
       expect(options.systemPrompt.append).toContain(
         `Current Agor session ID: ${session.session_id}`
       );
@@ -161,7 +163,7 @@ dbTest(
       );
       if (expectedResume)
         expect(options).toMatchObject({ resume: expectedResume, forkSession: true });
-      return options.mcpServers.agor.headers;
+      return applied.agor.headers;
     }
 
     const web = express();

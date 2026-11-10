@@ -111,6 +111,8 @@ it('refreshes Cursor request identity without persisting the identity block as u
     expect(mocks.configured.mock.lastCall?.[0].mcpServers.external.headers).toEqual({
       Authorization: 'Bearer external-token',
     });
+    // The in-process SDK's tools inherit the executor env, which never carries a bearer.
+    expect(JSON.stringify(process.env)).not.toMatch(/test-token|external-token/);
     expect(mocks.send).toHaveBeenLastCalledWith(
       expect.stringContaining(`Current Agor session ID: ${id}`),
       expect.objectContaining({ idempotencyKey: 'task-1' })

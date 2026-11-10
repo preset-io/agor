@@ -1,8 +1,10 @@
 import type { CodexOptions } from '@agor/core/sdk';
 import { describe, expect, it } from 'vitest';
-import { applyAgorCodexLaunchPolicy } from './launch-policy.js';
+import { agorShellEnvironmentPolicy, applyAgorCodexLaunchPolicy } from './launch-policy.js';
 
 type CodexConfigObject = NonNullable<CodexOptions['config']>;
+
+const agorShellPolicy = { filters: { 'AGOR_MCP_*': 'exclude' } };
 
 describe('applyAgorCodexLaunchPolicy', () => {
   it('disables native multi-agent while preserving every unrelated override', () => {
@@ -36,6 +38,7 @@ describe('applyAgorCodexLaunchPolicy', () => {
           url: 'http://localhost:3030/mcp',
         },
       },
+      shell_environment_policy: agorShellPolicy,
     });
     expect(config.features).toEqual({
       goals: false,
@@ -48,6 +51,7 @@ describe('applyAgorCodexLaunchPolicy', () => {
     expect(applyAgorCodexLaunchPolicy(undefined)).toEqual({
       features: { multi_agent: false, plugins: false },
       tools: { update_plan: { enabled: true } },
+      shell_environment_policy: agorShellPolicy,
     });
   });
 
@@ -65,6 +69,7 @@ describe('applyAgorCodexLaunchPolicy', () => {
         web_search: true,
         update_plan: { enabled: true, some_future_field: 'keep' },
       },
+      shell_environment_policy: agorShellPolicy,
     });
     // Input is not mutated.
     expect((config.tools as CodexConfigObject).update_plan).toEqual({
@@ -110,5 +115,28 @@ describe('applyAgorCodexLaunchPolicy', () => {
     ).toThrow(
       'Cannot launch Codex with Agor policy: config.tools.update_plan must be an object so its enabled flag can be set'
     );
+  });
+});
+
+describe('agorShellEnvironmentPolicy', () => {
+  it('adds a canonical filter when the user sets no policy or already uses filters', () => {
+    expect(agorShellEnvironmentPolicy(undefined)).toEqual(agorShellPolicy);
+    expect(agorShellEnvironmentPolicy('model = "gpt-5"\n')).toEqual(agorShellPolicy);
+    expect(
+      agorShellEnvironmentPolicy('[shell_environment_policy.filters]\n"AWS_*" = "exclude"\n')
+    ).toEqual(agorShellPolicy);
+  });
+
+  it("extends a user's legacy exclude list instead of replacing it", () => {
+    expect(
+      agorShellEnvironmentPolicy('[shell_environment_policy]\nexclude = ["AWS_*", 7]\n')
+    ).toEqual({ exclude: ['AWS_*', 'AGOR_MCP_*'] });
+    expect(
+      agorShellEnvironmentPolicy('[shell_environment_policy]\ninclude_only = ["PATH"]\n')
+    ).toEqual({ exclude: ['AGOR_MCP_*'] });
+  });
+
+  it('falls back to the filter form for an unparseable config', () => {
+    expect(agorShellEnvironmentPolicy('[shell_environment_policy\n')).toEqual(agorShellPolicy);
   });
 });

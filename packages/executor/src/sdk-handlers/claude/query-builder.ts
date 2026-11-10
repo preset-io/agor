@@ -454,7 +454,10 @@ export async function setupQuery(
     // -> queryOptions.resume not set, SDK will start fresh and return new session ID
   }
 
-  // Configure Agor MCP server (self-access to daemon) - only if MCP is enabled
+  // Configure Agor MCP server (self-access to daemon) - only if MCP is enabled.
+  // Its bearer is applied over the SDK control channel before the first prompt,
+  // never in `options.mcpServers`, which the SDK serializes onto the CLI's argv.
+  let agorMcpServer: Record<string, unknown> | undefined;
   if (deps.mcpEnabled !== false) {
     const mcpToken = session.mcp_token;
 
@@ -462,18 +465,15 @@ export async function setupQuery(
       // Get daemon URL from config
       const daemonUrl = await getDaemonUrl();
 
-      const mcpConfig = {
-        agor: {
-          type: 'http' as const,
-          url: `${daemonUrl}/mcp`,
-          headers: {
-            Authorization: `Bearer ${mcpToken}`,
-            [MCP_CLIENT_HINT_HEADER]: MCP_CLIENT_HINTS.claude,
-          },
-          ...(shouldBlockOnMcpStartup ? { alwaysLoad: true } : {}),
+      agorMcpServer = {
+        type: 'http' as const,
+        url: `${daemonUrl}/mcp`,
+        headers: {
+          Authorization: `Bearer ${mcpToken}`,
+          [MCP_CLIENT_HINT_HEADER]: MCP_CLIENT_HINTS.claude,
         },
+        ...(shouldBlockOnMcpStartup ? { alwaysLoad: true } : {}),
       };
-      queryOptions.mcpServers = mcpConfig;
     } else {
       console.warn(
         `⚠️  No MCP token found for session ${shortId(sessionId)} - MCP tools unavailable`
@@ -610,11 +610,7 @@ export async function setupQuery(
           }
         }
 
-        // Merge with existing MCP servers (preserve Agor MCP server)
-        queryOptions.mcpServers = {
-          ...(queryOptions.mcpServers || {}),
-          ...mcpConfig,
-        };
+        queryOptions.mcpServers = mcpConfig;
         authDiagnostics.emitSummary('claude');
         const signInNotice = signIn.render();
         if (signInNotice) {
@@ -691,7 +687,50 @@ export async function setupQuery(
     releaseInputResolve = resolve;
   });
 
+  let refreshApplyTail: Promise<unknown> = Promise.resolve();
+  // The same full set a refresh applies, so attached servers stay registered.
+  const startupMcpServers = agorMcpServer
+    ? {
+        ...((queryOptions.mcpServers as MCPServersConfig | undefined) ?? {}),
+        [AGOR_MCP_SERVER_NAME]: agorMcpServer,
+      }
+    : undefined;
+  const MCP_SET_SERVERS_TIMEOUT_MS = 15_000;
+  // The SDK starts reading the prompt inside query(), before it returns the Query.
+  let resolveQueryReady: (query: InterruptibleQuery) => void = () => {};
+  const queryReady = new Promise<InterruptibleQuery>((resolve) => {
+    resolveQueryReady = resolve;
+  });
+  const applyStartupMcpServers = async (): Promise<void> => {
+    if (!startupMcpServers) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const query = await queryReady;
+      const result = await Promise.race([
+        query.setMcpServers(
+          startupMcpServers as unknown as Record<string, ClaudeSdk.McpServerConfig>
+        ),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('timed out')), MCP_SET_SERVERS_TIMEOUT_MS);
+        }),
+      ]);
+      if (result.errors[AGOR_MCP_SERVER_NAME]) {
+        console.warn(
+          '⚠️  [executor.mcp] event=agor_mcp_connect_failed - Agor MCP tools unavailable'
+        );
+      }
+    } catch {
+      console.warn('⚠️  [executor.mcp] event=agor_mcp_apply_failed - Agor MCP tools unavailable');
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   async function* asUserMessageIterable(text: string) {
+    // Connect Agor MCP before the first message so the first turn sees its tools.
+    const startupApply = applyStartupMcpServers();
+    refreshApplyTail = startupApply;
+    await startupApply;
     yield {
       type: 'user' as const,
       message: { role: 'user' as const, content: [{ type: 'text' as const, text }] },
@@ -738,13 +777,12 @@ export async function setupQuery(
   queryObj.releaseInput = () => {
     releaseInputResolve?.();
   };
+  resolveQueryReady(queryObj);
 
-  let refreshApplyTail = Promise.resolve();
   let mcpRefreshTransportUncertain = false;
   let appliedRefreshAwaitingSettlement:
     | { identity: string; projection: MCPRuntimeReprojection }
     | undefined;
-  const MCP_SET_SERVERS_TIMEOUT_MS = 15_000;
   const serializeRefreshApply = <T>(apply: () => Promise<T>): Promise<T> => {
     const result = refreshApplyTail.then(apply, apply);
     refreshApplyTail = result.then(
