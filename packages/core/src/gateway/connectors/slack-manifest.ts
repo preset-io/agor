@@ -14,6 +14,7 @@
  * channel-like prompts and commands trigger only on `app_mention`.
  * Broad channel-message subscriptions are intentionally not requested.
  * Inbound emoji reactions are the one non-message trigger: they subscribe to `reaction_added`/`reaction_removed` only when opted in.
+ * `agent_session_stopped` is always subscribed so Slack's Stop button runs `!stop`.
  */
 
 import {
@@ -212,11 +213,11 @@ export function requiredBotScopes(opts: SlackWizardOptions): string[] {
 /**
  * Bot event subscriptions required for the selected capabilities,
  * de-duplicated and stable-sorted. Channel prompts and commands use `app_mention`,
- * DMs use `message.im`, and inbound reactions add
- * `reaction_added`/`reaction_removed`.
+ * DMs use `message.im`, Slack's Stop button uses `agent_session_stopped`, and
+ * inbound reactions add `reaction_added`/`reaction_removed`.
  */
 export function requiredBotEvents(opts: SlackWizardOptions): string[] {
-  const events = ['message.im'];
+  const events = ['agent_session_stopped', 'message.im'];
 
   if (hasChannelLikeSurface(opts)) {
     events.push('app_mention');
