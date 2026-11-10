@@ -319,6 +319,19 @@ export interface TaskTerminationCoordinationClaimResult {
   task: Task;
 }
 
+export interface TerminalCleanupClaimInput extends TaskTerminationCoordinationClaimInput {
+  requestedAt: string;
+  revision: string;
+}
+
+export interface TerminalCleanupSettlementInput {
+  taskId: string;
+  requestedAt: string;
+  attemptId: string;
+  confirmed: boolean;
+  diagnostic: string;
+}
+
 export interface TaskRuntimeDiscoveryRef {
   task_id: TaskID;
   tenant_id?: string;
@@ -1872,6 +1885,83 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       };
       await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
       return this.rowToTask({ ...row, data });
+    });
+  }
+
+  /** Claim an explicit cleanup retry without reviving terminal execution. */
+  async beginTerminalCleanup(input: TerminalCleanupClaimInput): Promise<Task | null> {
+    return this.mutateLockedTask(input.taskId, async (txDb, row, fullId) => {
+      const current = this.rowToTask(row);
+      const request = current.termination_request;
+      const now = await this.mutationNow(txDb, fullId, input.now);
+      if (
+        !isTerminalTaskStatus(current.status) ||
+        current.sdk_failure?.termination !== 'unverified' ||
+        !request ||
+        request.requested_at !== input.requestedAt ||
+        (request.recovery_revision ?? request.requested_at) !== input.revision ||
+        (request.coordination && Date.parse(request.coordination.lease_expires_at) > now.getTime())
+      )
+        return null;
+      if (!Number.isFinite(input.leaseDurationMs) || input.leaseDurationMs <= 0) {
+        throw new RepositoryError('A bounded terminal cleanup lease is required');
+      }
+      const { coordination: _coordination, cleanup_diagnostic: _diagnostic, ...retained } = request;
+      const data = {
+        ...row.data,
+        termination_request: {
+          ...retained,
+          recovery_revision: input.claimToken,
+          cleanup_attempt: { attempt_id: input.claimToken, started_at: now.toISOString() },
+        },
+      };
+      const values = {
+        data,
+        termination_coordination_token: input.claimToken,
+        termination_coordination_claimed_at: now,
+        termination_coordination_expires_at: new Date(now.getTime() + input.leaseDurationMs),
+        termination_coordination_instance_id: input.instanceId,
+        termination_coordination_boot_id: input.bootId,
+      };
+      await update(txDb, tasks).set(values).where(eq(tasks.task_id, fullId)).run();
+      return this.rowToTask({ ...row, ...values });
+    });
+  }
+
+  /** Record new containment evidence without reopening a terminal Task or changing its Session. */
+  async finishTerminalCleanup(input: TerminalCleanupSettlementInput): Promise<Task | null> {
+    return this.mutateLockedTask(input.taskId, async (txDb, row, fullId) => {
+      const current = this.rowToTask(row);
+      const request = current.termination_request;
+      if (
+        !isTerminalTaskStatus(current.status) ||
+        current.sdk_failure?.termination !== 'unverified' ||
+        !request ||
+        request.requested_at !== input.requestedAt ||
+        request.recovery_revision !== input.attemptId ||
+        request.cleanup_attempt?.attempt_id !== input.attemptId ||
+        request.coordination?.claim_token !== input.attemptId
+      )
+        return null;
+      const { coordination: _coordination, ...retained } = request;
+      const values = {
+        data: {
+          ...row.data,
+          sdk_failure: {
+            ...current.sdk_failure,
+            termination: input.confirmed ? ('verified' as const) : ('unverified' as const),
+          },
+          termination_request: { ...retained, cleanup_diagnostic: input.diagnostic.slice(0, 1000) },
+        },
+        termination_unverified_at: input.confirmed ? null : row.termination_unverified_at,
+        termination_coordination_token: null,
+        termination_coordination_claimed_at: null,
+        termination_coordination_expires_at: null,
+        termination_coordination_instance_id: null,
+        termination_coordination_boot_id: null,
+      };
+      await update(txDb, tasks).set(values).where(eq(tasks.task_id, fullId)).run();
+      return this.rowToTask({ ...row, ...values });
     });
   }
 

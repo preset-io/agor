@@ -656,3 +656,99 @@ export async function forceFailUnverifiedTask(input: {
   untrackExecutorProcess(settlement.task.session_id, settlement.task.task_id, input.app);
   return { outcome: 'force_failed', task: settlement.task };
 }
+
+/** Explicitly recover containment of an already terminal remote Task. */
+export async function reconcileTerminalExecutorCleanup(input: {
+  app: Application;
+  taskId: TaskID | string;
+  sessionId: string;
+  requestedAt: string;
+  revision: string;
+  params?: Params;
+  runInFreshTenantWriteDatabase: TerminationInput['runInFreshTenantWriteDatabase'];
+}): Promise<TerminationResult> {
+  const tasks = input.app.service('tasks') as unknown as TasksServiceImpl;
+  const current = await input.runInFreshTenantWriteDatabase(() =>
+    tasks.get(input.taskId, internalParams(input.params))
+  );
+  if (
+    current.session_id !== input.sessionId ||
+    !isTerminalTaskStatus(current.status) ||
+    current.termination_request?.requested_at !== input.requestedAt
+  ) {
+    return { status: 'condition_changed', task: current };
+  }
+  if (current.sdk_failure?.termination === 'verified') return { status: 'terminal', task: current };
+  const config = input.app.get('config')?.execution;
+  const command = config?.executor_cleanup_command_template;
+  if (current.executor_mode !== 'templated' || !command) {
+    return {
+      status: 'unverified',
+      task: current,
+      reason: 'A trusted remote executor cleanup helper is required.',
+    };
+  }
+  const timeoutMs = config.executor_cleanup_timeout_ms ?? DEFAULT_CLEANUP_TIMEOUT_MS;
+  const identity = input.app.get('distributedWorkIdentity') ?? {
+    instanceId: 'daemon',
+    bootId: 'unknown-boot',
+  };
+  const context = await input.runInFreshTenantWriteDatabase(async () => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) return null;
+    const session = await input.app
+      .service('sessions')
+      .get(current.session_id, internalParams(input.params));
+    if (session.session_id !== input.sessionId || !session.branch_id) return null;
+    const task = await tasks.beginTerminalCleanup(
+      {
+        taskId: current.task_id,
+        requestedAt: input.requestedAt,
+        revision: input.revision,
+        claimToken: generateId(),
+        leaseDurationMs: timeoutMs + COORDINATION_LEASE_MARGIN_MS,
+        instanceId: identity.instanceId,
+        bootId: identity.bootId,
+      },
+      internalParams(input.params)
+    );
+    const attempt = task?.termination_request?.cleanup_attempt;
+    if (!task || !attempt) return null;
+    return {
+      version: 1 as const,
+      tenant_id: tenantId,
+      task_id: task.task_id,
+      session_id: task.session_id,
+      branch_id: session.branch_id,
+      requested_at: input.requestedAt,
+      attempt_id: attempt.attempt_id,
+      cause: task.termination_request!.cause,
+    };
+  });
+  if (!context) return { status: 'condition_changed', task: current };
+  let result: ExecutorCleanupCommandResult;
+  try {
+    result = await runExecutorCleanupCommand(command, context, timeoutMs);
+  } catch {
+    result = {
+      confirmed: false,
+      diagnostic: 'Cleanup helper failed before containment could be verified.',
+    };
+  }
+  const task = await input.runInFreshTenantWriteDatabase(() =>
+    tasks.finishTerminalCleanup(
+      {
+        taskId: context.task_id,
+        requestedAt: context.requested_at,
+        attemptId: context.attempt_id,
+        confirmed: result.confirmed,
+        diagnostic: result.diagnostic,
+      },
+      internalParams(input.params)
+    )
+  );
+  if (!task) return { status: 'condition_changed', task: current };
+  return result.confirmed
+    ? { status: 'terminal', task }
+    : { status: 'unverified', task, reason: result.diagnostic };
+}

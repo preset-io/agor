@@ -13,6 +13,8 @@ import type {
   TaskDispatchClaimResult,
   TaskTerminationCoordinationClaimInput,
   TaskTerminationCoordinationClaimResult,
+  TerminalCleanupClaimInput,
+  TerminalCleanupSettlementInput,
   TerminationClaimInput,
   TerminationClaimResult,
   TerminationSettlementResult,
@@ -242,6 +244,14 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
   beginCleanupAttempt(
     taskId: string,
     claimToken: string,
+    params?: FeathersParams
+  ): Promise<Task | null>;
+  beginTerminalCleanup(
+    input: TerminalCleanupClaimInput,
+    params?: FeathersParams
+  ): Promise<Task | null>;
+  finishTerminalCleanup(
+    input: TerminalCleanupSettlementInput,
     params?: FeathersParams
   ): Promise<Task | null>;
   settleTermination(
