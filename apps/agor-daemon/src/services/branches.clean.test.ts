@@ -681,3 +681,39 @@ test('explicit Manager retirement clears revoked collaborators preferences, pres
     prefs.setPrimaryTeammate(user.user_id, branch.branch_id, { source: 'explicit' })
   ).rejects.toThrow(/active/);
 });
+
+test('Board Manager can retire an active teammate owned by another member on their board', async ({
+  db,
+}) => {
+  const { branch, user: branchOwner } = await seedManagedBranch(db);
+  const { service } = setup(db);
+  const branches = new BranchRepository(db);
+  const boards = new BoardRepository(db);
+  const prefs = new UserPrimaryTeammateRepository(db);
+  const boardManager = await new UsersRepository(db).create({
+    email: 'board-manager-retire@example.test',
+    role: 'member',
+  });
+  const board = await boards.create({
+    name: 'Manager Retirement Board',
+    created_by: boardManager.user_id,
+  });
+  await branches.update(branch.branch_id, {
+    board_id: board.board_id,
+    custom_context: { teammate: { kind: 'teammate', displayName: 'Peer Teammate' } },
+  });
+  await prefs.setPrimaryTeammate(branchOwner.user_id, branch.branch_id, { source: 'explicit' });
+  expect(await prefs.getBranchId(branchOwner.user_id)).toBe(branch.branch_id);
+
+  const tenant = { tenant_id: 'default' };
+  await service.retireTeammate(branch.branch_id, { user: boardManager, tenant });
+
+  expect(await prefs.getBranchId(branchOwner.user_id)).toBeNull();
+  expect(await branches.findById(branch.branch_id)).toMatchObject({
+    archived: true,
+    path: branch.path,
+    filesystem_status: 'ready',
+  });
+  expect(spawnExecutor).not.toHaveBeenCalled();
+  expect(requestExecutor).not.toHaveBeenCalled();
+});

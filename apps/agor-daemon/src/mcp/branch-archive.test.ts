@@ -442,3 +442,201 @@ dbTest(
     }
   }
 );
+
+dbTest(
+  "board administrator can archive another member's branch on the same board, but not across boards or permanently delete",
+  async ({ db }) => {
+    const { branch } = await seedEnvironmentCommandBranch(db, {
+      path: getBranchPath('test/archive', 'branch'),
+    });
+    const users = new UsersRepository(db);
+    const boards = new BoardRepository(db);
+    const branches = new BranchRepository(db);
+    const apiKeys = new UserApiKeysRepository(db);
+
+    // Board Manager (primary owner of Board A)
+    const boardAdmin = await users.create({
+      email: 'board-admin@example.test',
+      role: 'member',
+    });
+    const { rawKey: boardAdminKey } = await apiKeys.create(boardAdmin.user_id, 'admin key');
+
+    // Regular member without board admin rights
+    const regularMember = await users.create({
+      email: 'regular-member@example.test',
+      role: 'member',
+    });
+    const { rawKey: memberKey } = await apiKeys.create(regularMember.user_id, 'member key');
+
+    // Admin of Board B
+    const boardBAdmin = await users.create({
+      email: 'board-b-admin@example.test',
+      role: 'member',
+    });
+    const { rawKey: boardBAdminKey } = await apiKeys.create(boardBAdmin.user_id, 'board-b key');
+
+    // Create Board A (owned by boardAdmin) and Board B (owned by boardBAdmin)
+    const boardA = await boards.create({ name: 'Board A', created_by: boardAdmin.user_id });
+    await boards.create({ name: 'Board B', created_by: boardBAdmin.user_id });
+
+    // Attach branch to Board A
+    await branches.update(branch.branch_id, { board_id: boardA.board_id });
+
+    const fixture = await archiveMcpFixture(db);
+    try {
+      Object.assign(fixture.app, {
+        sessionTokenService: {
+          generateCommandToken: vi.fn().mockResolvedValue('disposable-unused-token'),
+        },
+      });
+      vi.spyOn(
+        fixture.service as unknown as {
+          resolveEnvironmentExecutorContext: (typeof fixture.service)['resolveEnvironmentExecutorContext'];
+        },
+        'resolveEnvironmentExecutorContext'
+      ).mockResolvedValue({
+        env: {},
+        sandboxMounts: {},
+        executionUserId: boardAdmin.user_id,
+        branchFsAccess: 'write',
+      });
+
+      // 1. Regular member cannot archive another member's branch
+      const memberDenied = await fixture.call(memberKey, 'agor_branches_archive', {
+        branchId: branch.branch_id,
+        filesystemAction: 'preserved',
+      });
+      expect(memberDenied.result?.isError).toBe(true);
+
+      // 2. Board B admin cannot archive a branch on Board A
+      const crossBoardDenied = await fixture.call(boardBAdminKey, 'agor_branches_archive', {
+        branchId: branch.branch_id,
+        filesystemAction: 'preserved',
+      });
+      expect(crossBoardDenied.result?.isError).toBe(true);
+
+      // 3. Board administrator cannot archive unattached branch
+      await branches.update(branch.branch_id, { board_id: null });
+      const unattachedDenied = await fixture.call(boardAdminKey, 'agor_branches_archive', {
+        branchId: branch.branch_id,
+        filesystemAction: 'preserved',
+      });
+      expect(unattachedDenied.result?.isError).toBe(true);
+
+      // Re-attach to Board A
+      await branches.update(branch.branch_id, { board_id: boardA.board_id });
+
+      // 4. Board administrator cannot permanently delete another user's branch
+      await expect(
+        fixture.app
+          .service('/branches/:id/archive-or-delete')
+          .create({ metadataAction: 'delete', filesystemAction: 'deleted' }, {
+            provider: 'mcp',
+            authenticated: true,
+            user: boardAdmin,
+            route: { id: branch.branch_id },
+          } as never)
+      ).rejects.toThrow();
+
+      // 5. Board administrator cannot unarchive another user's branch
+      await branches.update(branch.branch_id, { archived: true });
+      const unarchiveDenied = await fixture.call(boardAdminKey, 'agor_branches_unarchive', {
+        branchId: branch.branch_id,
+      });
+      expect(unarchiveDenied.result?.isError).toBe(true);
+
+      // Reset archived to false
+      await branches.update(branch.branch_id, { archived: false });
+
+      // 6. Board administrator CAN archive another member's branch on their board (preserved)
+      const allowedPreserved = await fixture.call(boardAdminKey, 'agor_branches_archive', {
+        branchId: branch.branch_id,
+        filesystemAction: 'preserved',
+      });
+      expect(allowedPreserved.result?.isError, JSON.stringify(allowedPreserved)).not.toBe(true);
+      expect((await branches.findById(branch.branch_id))?.archived).toBe(true);
+
+      // Reset to unarchived
+      await branches.update(branch.branch_id, { archived: false });
+
+      // 7. Board administrator archiving another user's branch defaults to 'preserved' when omitted
+      const allowedDefaultPreserved = await fixture.call(boardAdminKey, 'agor_branches_archive', {
+        branchId: branch.branch_id,
+      });
+      expect(allowedDefaultPreserved.result?.isError).not.toBe(true);
+      expect((await branches.findById(branch.branch_id))?.archived).toBe(true);
+
+      // Reset to unarchived
+      await branches.update(branch.branch_id, { archived: false });
+
+      // 8. Board administrator CAN archive with filesystem cleanup ('cleaned')
+      vi.mocked(requestExecutor).mockResolvedValue({
+        success: true,
+        data: { branchId: branch.branch_id, exists: true, kind: 'directory' },
+      });
+      await new RepoRepository(db).update(branch.repo_id, {
+        cleanup_policy: {
+          enabled: true,
+          command: 'git clean -fdX',
+          allow_branch_protection: true,
+        },
+      });
+      const allowedCleaned = await fixture.call(boardAdminKey, 'agor_branches_archive', {
+        branchId: branch.branch_id,
+        filesystemAction: 'cleaned',
+      });
+      expect(allowedCleaned.result?.isError, JSON.stringify(allowedCleaned)).not.toBe(true);
+      expect((await branches.findById(branch.branch_id))?.archived).toBe(true);
+    } finally {
+      await fixture.close();
+    }
+  }
+);
+
+dbTest(
+  'archive rejects when branch board association is detached before transaction validation',
+  async ({ db }) => {
+    const { branch } = await seedEnvironmentCommandBranch(db, {
+      path: getBranchPath('test/archive', 'branch'),
+    });
+    const users = new UsersRepository(db);
+    const boards = new BoardRepository(db);
+    const branches = new BranchRepository(db);
+    const apiKeys = new UserApiKeysRepository(db);
+
+    const boardAdmin = await users.create({
+      email: 'revoked-admin@example.test',
+      role: 'member',
+    });
+    const { rawKey: boardAdminKey } = await apiKeys.create(boardAdmin.user_id, 'admin key');
+    const board = await boards.create({ name: 'Board Test', created_by: boardAdmin.user_id });
+    await branches.update(branch.branch_id, { board_id: board.board_id });
+
+    const fixture = await archiveMcpFixture(db);
+    try {
+      const originalClaim = BranchMaintenanceRepository.prototype.claim;
+      vi.spyOn(BranchMaintenanceRepository.prototype, 'claim').mockImplementation(async function (
+        this: BranchMaintenanceRepository,
+        branchId,
+        action,
+        userId,
+        validate
+      ) {
+        return originalClaim.call(this, branchId, action, userId, async (tx) => {
+          // Detach branch from board in tx before validate is called
+          await new BranchRepository(tx).update(branchId, { board_id: null });
+          await validate(tx);
+        });
+      });
+
+      const response = await fixture.call(boardAdminKey, 'agor_branches_archive', {
+        branchId: branch.branch_id,
+        filesystemAction: 'preserved',
+      });
+      expect(response.result?.isError).toBe(true);
+      expect((await branches.findById(branch.branch_id))?.archived).toBe(false);
+    } finally {
+      await fixture.close();
+    }
+  }
+);

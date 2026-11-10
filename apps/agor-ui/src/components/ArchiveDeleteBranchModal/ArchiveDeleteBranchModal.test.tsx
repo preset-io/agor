@@ -1,5 +1,11 @@
 import { branchMaintenanceCapabilities } from '@agor/core/config/browser';
-import type { AgorClient, EffectiveBranchAccess, Repo } from '@agor-live/client';
+import type {
+  AgorClient,
+  Board,
+  EffectiveBranchAccess,
+  EffectiveCapabilityPolicyAccess,
+  Repo,
+} from '@agor-live/client';
 import { DEFAULT_REPO_CLEANUP_POLICY } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
@@ -502,4 +508,505 @@ it('describes permanent file deletion independently of unsupported archive remov
   expect(
     screen.getByRole('radio', { name: /Delete completely External workspace cleanup/ })
   ).toBeDisabled();
+});
+
+function boardFixture(options?: {
+  branchOverrides?: Partial<ReturnType<typeof makeBranch>>;
+  board?: Board | null;
+  boardAccess?: Partial<EffectiveCapabilityPolicyAccess>;
+  branchAccess?: Partial<EffectiveBranchAccess>;
+  cleanupEnabled?: boolean;
+}) {
+  const branch = makeBranch({
+    maintenance_capabilities: branchMaintenanceCapabilities({}, 'clone'),
+    board_id: 'board-1',
+    ...options?.branchOverrides,
+  });
+  let repo = makeRepo({
+    name: 'Test repo',
+    cleanup_policy: { ...DEFAULT_REPO_CLEANUP_POLICY, enabled: options?.cleanupEnabled ?? false },
+  });
+  const listeners = new Set<(value: Repo) => void>();
+  const repos = {
+    get: vi.fn(async () => repo),
+    patch: vi.fn(async (_id: string, data: Partial<Repo>) => {
+      repo = { ...repo, ...data };
+      for (const listener of listeners) listener(repo);
+      return repo;
+    }),
+    on: (_event: string, listener: (value: Repo) => void) => listeners.add(listener),
+    removeListener: (_event: string, listener: (value: Repo) => void) => listeners.delete(listener),
+  };
+  const branches = { get: vi.fn(async () => branch), on: vi.fn(), removeListener: vi.fn() };
+  const boardObj =
+    options?.board !== undefined
+      ? options.board
+      : ({
+          board_id: 'board-1',
+          name: 'Test Board',
+          primary_owner_user_id: 'board-owner-1',
+        } as Board);
+  const boards = {
+    get: vi.fn(async (id: string) => {
+      if (!boardObj || (boardObj.board_id && boardObj.board_id !== id)) {
+        throw new Error('Board not found');
+      }
+      return boardObj;
+    }),
+  };
+  const boardAccessFind = vi.fn(async () => ({
+    capabilities: ['board.view', 'board.policy.manage'],
+    fs_access: 'none' as const,
+    source: 'group' as const,
+    group_ids: [],
+    is_primary_owner: false,
+    ...options?.boardAccess,
+  }));
+  const branchAccessFind = vi.fn(
+    async (): Promise<EffectiveBranchAccess> => ({
+      can: 'view',
+      fs_access: 'none',
+      is_owner: false,
+      source: 'others',
+      ...options?.branchAccess,
+    })
+  );
+  const services: Record<string, unknown> = {
+    repos,
+    branches,
+    boards,
+    'boards/:id/effective-access': { find: boardAccessFind },
+    'branches/:id/effective-access': { find: branchAccessFind },
+  };
+  const client = {
+    service: (path: string) => services[path],
+  } as unknown as AgorClient;
+  return {
+    branch,
+    repos,
+    client,
+    access: branchAccessFind,
+    boardAccess: boardAccessFind,
+    boards,
+    branches,
+  };
+}
+
+describe('Issue #3241: Board administrator branch archive authorization', () => {
+  it('1. Branch owner can archive', async () => {
+    const { client, branch } = boardFixture({
+      branchAccess: { is_owner: true, can: 'all', fs_access: 'write' },
+    });
+    const confirm = vi.fn();
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={makeUser({ role: 'member', user_id: 'user-1' })}
+        branch={branch}
+        open
+        onConfirm={confirm}
+        onCancel={vi.fn()}
+      />
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled()
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Archive Branch' }));
+    expect(confirm).toHaveBeenCalledWith({
+      metadataAction: 'archive',
+      filesystemAction: 'preserved',
+    });
+  });
+
+  it('2. Branch manager can archive', async () => {
+    const { client, branch } = boardFixture({
+      branchAccess: { is_owner: false, can: 'all', fs_access: 'write' },
+    });
+    const confirm = vi.fn();
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={makeUser({ role: 'member', user_id: 'manager-1' })}
+        branch={branch}
+        open
+        onConfirm={confirm}
+        onCancel={vi.fn()}
+      />
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled()
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Archive Branch' }));
+    expect(confirm).toHaveBeenCalledWith({
+      metadataAction: 'archive',
+      filesystemAction: 'preserved',
+    });
+  });
+
+  it("3. Board administrator can archive another user's branch", async () => {
+    const { client, branch } = boardFixture({
+      branchAccess: { is_owner: false, can: 'view' },
+      boardAccess: { capabilities: ['board.view', 'board.policy.manage'] },
+    });
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={makeUser({ role: 'member', user_id: 'board-admin-1' })}
+        branch={branch}
+        open
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled()
+    );
+    expect(screen.getByRole('radio', { name: /Archive \(recommended\)/ })).toBeEnabled();
+    expect(screen.getByRole('radio', { name: /^Delete permanently/ })).toBeDisabled();
+    expect(
+      screen.getAllByText('Branch Manager authority is required to delete.').length
+    ).toBeGreaterThan(0);
+  });
+
+  it('4. Workspace administrator can archive when backend role semantics permit it', async () => {
+    const { client, branch } = boardFixture({
+      branchAccess: { is_owner: false, can: 'view' },
+      boardAccess: { capabilities: ['board.view'] }, // no explicit board policy manage
+    });
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={makeUser({ role: 'admin', user_id: 'workspace-admin-1' })}
+        branch={branch}
+        open
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled()
+    );
+  });
+
+  it('5. Board administrator can submit the archive operation with the expected payload', async () => {
+    const { client, branch } = boardFixture({
+      branchAccess: { is_owner: false, can: 'view' },
+      boardAccess: { capabilities: ['board.view', 'board.policy.manage'] },
+    });
+    const confirm = vi.fn();
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={makeUser({ role: 'member', user_id: 'board-admin-1' })}
+        branch={branch}
+        open
+        onConfirm={confirm}
+        onCancel={vi.fn()}
+      />
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled()
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Archive Branch' }));
+    expect(confirm).toHaveBeenCalledWith({
+      metadataAction: 'archive',
+      filesystemAction: 'preserved',
+    });
+  });
+
+  it("5a. Board administrator with fs_access: 'none' can archive with filesystemAction: 'cleaned'", async () => {
+    const { client, branch } = boardFixture({
+      branchAccess: { is_owner: false, can: 'view', fs_access: 'none' },
+      boardAccess: { capabilities: ['board.view', 'board.policy.manage'] },
+      cleanupEnabled: true,
+    });
+    const confirm = vi.fn();
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={makeUser({ role: 'member', user_id: 'board-admin-1' })}
+        branch={branch}
+        open
+        onConfirm={confirm}
+        onCancel={vi.fn()}
+      />
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled()
+    );
+    const cleanRadio = screen.getByRole('radio', { name: /^Clean —/ });
+    expect(cleanRadio).toBeEnabled();
+    expect(
+      screen.queryByText('Writable workspace access is required to clean or delete files.')
+    ).not.toBeInTheDocument();
+    fireEvent.click(cleanRadio);
+    expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Archive Branch' }));
+    expect(confirm).toHaveBeenCalledWith({
+      metadataAction: 'archive',
+      filesystemAction: 'cleaned',
+    });
+  });
+
+  it("5b. Board administrator with fs_access: 'none' can archive with filesystemAction: 'deleted'", async () => {
+    const { client, branch } = boardFixture({
+      branchAccess: { is_owner: false, can: 'view', fs_access: 'none' },
+      boardAccess: { capabilities: ['board.view', 'board.policy.manage'] },
+    });
+    const confirm = vi.fn();
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={makeUser({ role: 'member', user_id: 'board-admin-1' })}
+        branch={branch}
+        open
+        onConfirm={confirm}
+        onCancel={vi.fn()}
+      />
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled()
+    );
+    const deleteFilesystemRadio = screen.getByRole('radio', { name: /^Delete completely/ });
+    expect(deleteFilesystemRadio).toBeEnabled();
+    expect(
+      screen.queryByText('Writable workspace access is required to clean or delete files.')
+    ).not.toBeInTheDocument();
+    fireEvent.click(deleteFilesystemRadio);
+    expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Archive Branch' }));
+    expect(confirm).toHaveBeenCalledWith({
+      metadataAction: 'archive',
+      filesystemAction: 'deleted',
+    });
+  });
+
+  it("6. Regular member cannot archive another user's branch", async () => {
+    const { client, branch } = boardFixture({
+      branchAccess: { is_owner: false, can: 'view' },
+      boardAccess: { capabilities: ['board.view', 'board.edit'] }, // member has edit but not manage
+    });
+    const confirm = vi.fn();
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={makeUser({ role: 'member', user_id: 'member-1' })}
+        branch={branch}
+        open
+        onConfirm={confirm}
+        onCancel={vi.fn()}
+      />
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeDisabled()
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Archive Branch' }));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(
+      screen.getAllByText('Branch Manager authority is required to archive or delete.').length
+    ).toBeGreaterThan(0);
+  });
+
+  it('7. Administrator of another board cannot archive', async () => {
+    const { client, branch } = boardFixture({
+      branchAccess: { is_owner: false, can: 'view' },
+      boardAccess: { capabilities: ['board.view'] }, // not admin on this board
+    });
+    const confirm = vi.fn();
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={makeUser({ role: 'member', user_id: 'other-board-admin' })}
+        branch={branch}
+        open
+        onConfirm={confirm}
+        onCancel={vi.fn()}
+      />
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeDisabled()
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Archive Branch' }));
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("8. Board administrator cannot permanently delete another user's branch merely because they can archive", async () => {
+    const { client, branch } = boardFixture({
+      branchAccess: { is_owner: false, can: 'view' },
+      boardAccess: { capabilities: ['board.view', 'board.policy.manage'] },
+    });
+    const confirm = vi.fn();
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={makeUser({ role: 'member', user_id: 'board-admin-1' })}
+        branch={branch}
+        open
+        initialMetadataAction="delete"
+        onConfirm={confirm}
+        onCancel={vi.fn()}
+      />
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Delete Permanently' })).toBeDisabled()
+    );
+    expect(screen.getByRole('radio', { name: /^Delete permanently/ })).toBeDisabled();
+    expect(
+      screen.getAllByText('Branch Manager authority is required to delete.').length
+    ).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Permanently' }));
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it('9. Permission-loading failures do not accidentally grant authorization', async () => {
+    const { client, branch, access } = boardFixture({
+      boardAccess: { capabilities: ['board.view', 'board.policy.manage'] },
+    });
+    access.mockRejectedValue(new Error('Permission service failure'));
+    const confirm = vi.fn();
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={makeUser({ role: 'member', user_id: 'board-admin-1' })}
+        branch={branch}
+        open
+        onConfirm={confirm}
+        onCancel={vi.fn()}
+      />
+    );
+    await screen.findAllByText('Branch permissions could not be loaded.');
+    expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Archive Branch' }));
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it('10. A branch without an associated board does not receive board-admin authorization', async () => {
+    const { client, branch } = boardFixture({
+      branchOverrides: { board_id: undefined },
+      branchAccess: { is_owner: false, can: 'view' },
+      boardAccess: { capabilities: ['board.view', 'board.policy.manage'] },
+    });
+    const confirm = vi.fn();
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={makeUser({ role: 'admin', user_id: 'admin-1' })}
+        branch={branch}
+        open
+        onConfirm={confirm}
+        onCancel={vi.fn()}
+      />
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeDisabled()
+    );
+    expect(
+      screen.getAllByText('Branch Manager authority is required to archive or delete.').length
+    ).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Archive Branch' }));
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it('11. Switch from archive to delete and verify permissions are recalculated', async () => {
+    const { client, branch } = boardFixture({
+      branchAccess: { is_owner: true, can: 'all', fs_access: 'write' },
+    });
+    const confirm = vi.fn();
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={makeUser({ role: 'member', user_id: 'user-1' })}
+        branch={branch}
+        open
+        onConfirm={confirm}
+        onCancel={vi.fn()}
+      />
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled()
+    );
+    fireEvent.click(screen.getByRole('radio', { name: /^Delete permanently/ }));
+    expect(screen.getByRole('button', { name: 'Delete Permanently' })).toBeEnabled();
+    expect(
+      screen.getByText(/All 0 session\(s\), messages, and history will be permanently deleted/)
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Permanently' }));
+    expect(confirm).toHaveBeenCalledWith({
+      metadataAction: 'delete',
+      filesystemAction: 'deleted',
+    });
+  });
+
+  it('12. Switch from delete to archive and verify permissions are recalculated', async () => {
+    const { client, branch } = boardFixture({
+      branchAccess: { is_owner: false, can: 'view' },
+      boardAccess: { capabilities: ['board.view', 'board.policy.manage'] },
+    });
+    const confirm = vi.fn();
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={makeUser({ role: 'member', user_id: 'board-admin-1' })}
+        branch={branch}
+        open
+        initialMetadataAction="delete"
+        onConfirm={confirm}
+        onCancel={vi.fn()}
+      />
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Delete Permanently' })).toBeDisabled()
+    );
+    expect(
+      screen.getByText('Branch Manager authority is required to delete.', {
+        selector: '.ant-alert-title',
+      })
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: /Archive \(recommended\)/ }));
+    expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled();
+    expect(
+      screen.queryByText('Branch Manager authority is required to delete.', {
+        selector: '.ant-alert-title',
+      })
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^Delete permanently/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Archive Branch' }));
+    expect(confirm).toHaveBeenCalledWith({
+      metadataAction: 'archive',
+      filesystemAction: 'preserved',
+    });
+  });
+
+  it('13. Verify loading states do not allow premature submission', async () => {
+    let resolveBranch: (value: unknown) => void = () => {};
+    const delayedBranchPromise = new Promise((resolve) => {
+      resolveBranch = resolve;
+    });
+    const { client, branch } = boardFixture({
+      branchAccess: { is_owner: true, can: 'all', fs_access: 'write' },
+    });
+    (client.service('branches') as { get: ReturnType<typeof vi.fn> }).get.mockImplementation(
+      () => delayedBranchPromise
+    );
+    const confirm = vi.fn();
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={makeUser()}
+        branch={branch}
+        open
+        onConfirm={confirm}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Archive Branch' }));
+    expect(confirm).not.toHaveBeenCalled();
+    await act(async () => {
+      resolveBranch(branch);
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled()
+    );
+  });
 });

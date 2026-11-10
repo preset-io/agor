@@ -2231,6 +2231,78 @@ describe('BoardRepository normalized permission boundary', () => {
       expect(otherAccess.capabilities).toEqual([]);
     }
   );
+
+  dbTest(
+    'canManage and canManageResolved return true for primary owner and Manager, false for Editor and unauthorized members',
+    async ({ db }) => {
+      const repo = new BoardRepository(db);
+      const policies = new CapabilityPolicyRepository(db);
+      const users = new UsersRepository(db);
+
+      const ownerId = generateId() as UUID;
+      const managerId = generateId() as UUID;
+      const editorId = generateId() as UUID;
+      const memberId = generateId() as UUID;
+
+      for (const id of [ownerId, managerId, editorId, memberId]) {
+        await users.create({
+          user_id: id,
+          email: `user-${id}@agor.test`,
+          role: 'member',
+        });
+      }
+
+      const board = await repo.create(
+        createBoardData({
+          name: 'Manage Test Board',
+          created_by: ownerId,
+          access_mode: 'shared',
+        })
+      );
+
+      // Primary owner can manage
+      expect(await repo.canManage(board.board_id, ownerId)).toBe(true);
+      expect(await repo.canManageResolved(board, ownerId)).toBe(true);
+
+      // Other member cannot manage
+      expect(await repo.canManage(board.board_id, memberId)).toBe(false);
+      expect(await repo.canManageResolved(board, memberId)).toBe(false);
+
+      // Grant Manager to managerId and Editor to editorId
+      const current = await policies.getBoardPolicies(board.board_id);
+      current.board_access.entries = [
+        {
+          entry_id: generateId(),
+          principal: { principal_type: 'user', user_id: managerId },
+          preset: 'manager',
+          capabilities: ['board.view', 'board.edit', 'board.attach_branch', 'board.policy.manage'],
+          fs_access: 'none',
+        },
+        {
+          entry_id: generateId(),
+          principal: { principal_type: 'user', user_id: editorId },
+          preset: 'editor',
+          capabilities: ['board.view', 'board.edit', 'board.attach_branch'],
+          fs_access: 'none',
+        },
+      ];
+      await policies.replaceBoardPolicies(board.board_id, current, ownerId);
+
+      // Manager can manage
+      expect(await repo.canManage(board.board_id, managerId)).toBe(true);
+      expect(await repo.canManageResolved(board, managerId)).toBe(true);
+
+      // Editor cannot manage
+      expect(await repo.canManage(board.board_id, editorId)).toBe(false);
+      expect(await repo.canManageResolved(board, editorId)).toBe(false);
+
+      // Non-existent board throws EntityNotFoundError
+      const missingBoardId = generateId();
+      await expect(repo.canManage(missingBoardId, ownerId)).rejects.toBeInstanceOf(
+        EntityNotFoundError
+      );
+    }
+  );
 });
 
 describe('BoardRepository create-time Others defaults', () => {

@@ -1532,9 +1532,98 @@ describe('BranchesService.unarchive', () => {
       position: { x: 7, y: 8 },
     });
   });
+
+  it('strictly rejects unarchive by a user without branch permissions even if they are board manager', async () => {
+    const { service, branchRepo } = createServiceHarness();
+    const branchId = 'wt-unarchive-deny' as BranchID;
+    const branch = {
+      branch_id: branchId,
+      name: 'WT Deny',
+      archived: true,
+      board_id: 'board-1',
+    } as never;
+    vi.spyOn(service, 'get').mockResolvedValue(branch);
+    vi.mocked(branchRepo.resolveUserAccess).mockResolvedValue({
+      can: 'none',
+      fs_access: 'none',
+      is_owner: false,
+      source: 'none',
+    });
+    const params = {
+      provider: 'rest',
+      user: { user_id: 'board-manager' as UUID, role: 'member' },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+
+    await expect(service.unarchive(branchId, undefined, params)).rejects.toThrow(
+      'branch all permission required'
+    );
+  });
 });
 
 describe('BranchesService.archiveOrDelete', () => {
+  it("allows Board Manager to archive another member's branch on their board", async () => {
+    const { service } = createServiceHarness();
+    const branchId = 'wt-board-admin-archive' as BranchID;
+    const branch = {
+      branch_id: branchId,
+      name: 'WT Admin Archive',
+      path: '/safe/worktrees/repo/admin-archive',
+      archived: true,
+      board_id: 'board-1',
+      environment_instance: { status: 'stopped' },
+    } as never;
+    vi.spyOn(
+      service as unknown as { getCanonicalBranch: () => Promise<unknown> },
+      'getCanonicalBranch'
+    ).mockResolvedValue(branch);
+    const request = vi
+      .spyOn(service as never, 'requestWorkspaceOperation')
+      .mockResolvedValue({ branch_id: branchId, status: 'accepted' } as never);
+    const params = {
+      provider: 'rest',
+      user: { user_id: 'board-admin-1' as UUID, role: 'member' },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+    markBranchArchiveDeleteAuthorized(params, branchId, 'archive');
+
+    expect(
+      await service.archiveOrDelete(
+        branchId,
+        { metadataAction: 'archive', filesystemAction: 'preserved' },
+        params
+      )
+    ).toEqual(branch);
+    expect(request).toHaveBeenCalledWith(
+      branchId,
+      { action: 'archive', filesystemAction: 'preserved' },
+      params
+    );
+  });
+
+  it('allows Board Manager to retire an active teammate owned by another member on their board', async () => {
+    const { service } = createServiceHarness();
+    const branchId = 'wt-board-admin-retire' as BranchID;
+    const request = vi
+      .spyOn(service as never, 'requestWorkspaceOperation')
+      .mockResolvedValue({ branch_id: branchId, status: 'accepted' } as never);
+    const params = {
+      provider: 'rest',
+      user: { user_id: 'board-admin-1' as UUID, role: 'member' },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+
+    expect(await service.retireTeammate(branchId, params)).toEqual({
+      branch_id: branchId,
+      status: 'accepted',
+    });
+    expect(request).toHaveBeenCalledWith(
+      branchId,
+      { action: 'archive', filesystemAction: 'preserved' },
+      params,
+      true
+    );
+  });
   it.each(['preserved', 'cleaned', 'deleted'] as const)(
     'routes archive %s through the shared maintenance workflow',
     async (filesystemAction) => {

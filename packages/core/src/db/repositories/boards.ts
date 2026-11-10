@@ -708,6 +708,21 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     return access.capabilities.includes('board.edit');
   }
 
+  async canManage(boardId: string, userId: UUID): Promise<boolean> {
+    const board = await this.findById(boardId);
+    if (!board) throw new EntityNotFoundError('Board', boardId);
+    return this.canManageResolved(board, userId);
+  }
+
+  /** Resolve current manage authority for a canonical board loaded by this request. */
+  async canManageResolved(board: Pick<Board, 'board_id'>, userId: UUID): Promise<boolean> {
+    const access = await new CapabilityPolicyRepository(this.db).resolveBoardAccess(
+      board.board_id,
+      userId as UserID
+    );
+    return access.capabilities.includes('board.policy.manage');
+  }
+
   async canAttachBranch(boardId: string, userId: UUID): Promise<boolean> {
     const board = await this.findById(boardId);
     if (!board) throw new EntityNotFoundError('Board', boardId);

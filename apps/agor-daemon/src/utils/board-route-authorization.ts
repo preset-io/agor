@@ -6,6 +6,35 @@ import { hasMinimumRole, ROLES } from '@agor/core/types';
 export type BoardRouteAccessMode = 'view' | 'mutate';
 
 /**
+ * Check whether a user has administrative authority over a specific board.
+ *
+ * Board administrators hold the 'board.policy.manage' capability on the board
+ * (either as the board's primary owner, or via a Manager role grant on board_access),
+ * or have the workspace ADMIN role (or service account) within their tenant scope.
+ * Callers with role below MEMBER cannot administer boards.
+ */
+export async function isCallerBoardAdmin(
+  boardRepository: Pick<BoardRepository, 'canManage' | 'findById'>,
+  user: { user_id?: string; role?: string; _isServiceAccount?: boolean } | undefined,
+  boardId: string | undefined
+): Promise<boolean> {
+  if (!user?.user_id || !boardId) return false;
+  if (user._isServiceAccount || hasMinimumRole(user.role, ROLES.ADMIN)) {
+    // The bypass skips RBAC, not tenancy: a named board must resolve in caller's tenant scope.
+    const board = await boardRepository.findById(boardId).catch(() => null);
+    return Boolean(board);
+  }
+  if (!hasMinimumRole(user.role, ROLES.MEMBER)) {
+    return false;
+  }
+  try {
+    return await boardRepository.canManage(boardId, user.user_id as UUID);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Authorize an external caller against one board's current policy.
  *
  * Shared by board-content hooks and by non-transport service methods, which

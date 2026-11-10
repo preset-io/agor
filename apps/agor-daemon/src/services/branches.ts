@@ -138,7 +138,7 @@ import {
   verifyRecordedProcessGroupAbsent,
 } from '../executor-tracking.js';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
-import { authorizeCallerBoard } from '../utils/board-route-authorization.js';
+import { authorizeCallerBoard, isCallerBoardAdmin } from '../utils/board-route-authorization.js';
 import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
 import {
   ensureCanControlBranchEnvironment,
@@ -704,7 +704,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   private async resolveEnvironmentExecutorContext(
     branch: Branch,
     params?: BranchParams,
-    requiredFsAccess: Exclude<BranchFsAccessLevel, 'none'> = 'write'
+    requiredFsAccess: Exclude<BranchFsAccessLevel, 'none'> = 'write',
+    options?: { allowBoardAdminElevation?: boolean }
   ): Promise<{
     delegatedHomeKey?: string;
     env: Record<string, string>;
@@ -730,18 +731,25 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // Environment control historically permits tenant admins even when they
       // do not have an explicit branch entry. Preserve that hierarchy, while
       // ordinary Managers remain constrained by the separate filesystem
-      // dimension selected in the policy form.
-      const branchFsAccess = hasMinimumRole(requestUser?.role, ROLES.ADMIN)
-        ? 'write'
-        : await ensureBranchWorkspaceAccess(
-            this.branchRepo,
-            branch,
-            executionUserId,
-            requestUser?.role as UserRole | undefined,
-            'all',
-            requiredFsAccess,
-            config.execution?.allow_superadmin === true
-          );
+      // dimension selected in the policy form. Board administrators hold
+      // administrative authority over branches on their board strictly for
+      // authorized archive maintenance cleanup.
+      const isBoardAdmin =
+        options?.allowBoardAdminElevation && branch.board_id
+          ? await isCallerBoardAdmin(this.boardRepo, requestUser, branch.board_id)
+          : false;
+      const branchFsAccess =
+        hasMinimumRole(requestUser?.role, ROLES.ADMIN) || isBoardAdmin
+          ? 'write'
+          : await ensureBranchWorkspaceAccess(
+              this.branchRepo,
+              branch,
+              executionUserId,
+              requestUser?.role as UserRole | undefined,
+              'all',
+              requiredFsAccess,
+              config.execution?.allow_superadmin === true
+            );
       const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
         this.db,
         executionUserId,
@@ -1946,7 +1954,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const needsFiles = filesystemAction !== 'preserved';
     const externalExecutor = usesExternalBranchExecutor(config);
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
-    const authorize = async (repository: BranchRepository, current: Branch) => {
+    const authorize = async (
+      repository: BranchRepository,
+      current: Branch,
+      tx?: import('@agor/core/db').Database
+    ) => {
+      if (action === 'archive' && current.board_id) {
+        const boardRepo = tx ? new BoardRepository(tx) : this.boardRepo;
+        const isBoardAdmin = await isCallerBoardAdmin(boardRepo, user, current.board_id);
+        if (isBoardAdmin) {
+          return;
+        }
+      }
       if (needsFiles)
         return ensureBranchWorkspaceAccess(
           repository,
@@ -1993,7 +2012,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         current.storage_mode !== branch.storage_mode
       )
         throw new Conflict('Branch location changed; refresh before maintenance');
-      await authorize(repository, current);
+      await authorize(repository, current, tx);
       if (policy) {
         const currentRepo = await new RepoRepository(tx).findById(current.repo_id);
         const reason = getBranchCleanupBlockReason(
@@ -2063,7 +2082,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         )
       );
       const context = needsFiles
-        ? await this.resolveEnvironmentExecutorContext(branch, params)
+        ? await this.resolveEnvironmentExecutorContext(branch, params, 'write', {
+            allowBoardAdminElevation: action === 'archive',
+          })
         : undefined;
       if (filesystemAction === 'cleaned') {
         // Read-only executor preflight. No daemon filesystem access or fallback mkdir.

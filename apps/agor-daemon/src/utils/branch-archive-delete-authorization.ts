@@ -1,7 +1,8 @@
-import type { BranchRepository } from '@agor/core/db';
+import type { BoardRepository, BranchRepository } from '@agor/core/db';
 import { BadRequest, Forbidden } from '@agor/core/feathers';
 import type { BranchID, BranchMetadataAction, HookContext } from '@agor/core/types';
 import { isBranchArchiveOrDeleteOptions } from '@agor/core/types';
+import { isCallerBoardAdmin } from './board-route-authorization.js';
 import { cacheBranchAccess, ensureBranchPermission } from './branch-authorization.js';
 
 /**
@@ -48,6 +49,7 @@ export async function authorizeBranchArchiveDelete(
   options: {
     branchRepository: BranchRepository;
     superadminOpts?: { allowSuperadmin?: boolean };
+    boardRepository: Pick<BoardRepository, 'canManage' | 'findById'>;
   }
 ): Promise<HookContext> {
   const id = context.params.route?.id;
@@ -60,9 +62,21 @@ export async function authorizeBranchArchiveDelete(
   if (!branch) throw new Forbidden(`Branch not found: ${id}`);
 
   await cacheBranchAccess(context.params, options.branchRepository, branch);
-  ensureBranchPermission('all', 'archive or delete branches', options.superadminOpts)(context);
 
   const { metadataAction } = context.data;
+  let authorized = false;
+  if (metadataAction === 'archive' && branch.board_id) {
+    authorized = await isCallerBoardAdmin(
+      options.boardRepository,
+      context.params.user,
+      branch.board_id
+    );
+  }
+
+  if (!authorized) {
+    ensureBranchPermission('all', 'archive or delete branches', options.superadminOpts)(context);
+  }
+
   // Repository lookups accept short/uppercase prefixes but every trusted
   // boundary after this hook must use the canonical UUID. The route handler
   // reads this same params object after before hooks finish.

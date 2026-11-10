@@ -10,7 +10,8 @@ import type {
 import {
   getBranchCleanupBlockReason,
   getBranchMaintenanceBlockReason,
-  isTeammate,
+  hasMinimumRole,
+  ROLES,
   resolveRepoCleanupPolicy,
 } from '@agor-live/client';
 import { useEffect, useState } from 'react';
@@ -38,6 +39,7 @@ export function useArchiveDeleteEligibility(
     board?: Board;
     boardUnavailable: boolean;
     canEditBoard: boolean;
+    canManageBoard: boolean;
     scope: readonly unknown[] | null;
   } | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -59,13 +61,17 @@ export function useArchiveDeleteEligibility(
         let boardUnavailable = false;
         // Board visibility/control is independent of branch Manager authority.
         // Keep a successfully read primary designation even if its access read fails.
-        if (isTeammate(currentBranch) && currentBranch.board_id) {
+        if (currentBranch.board_id) {
           try {
             board = await client.service('boards').get(currentBranch.board_id);
             if (board) {
-              boardAccess = (await client.service('boards/:id/effective-access').find({
-                route: { id: board.board_id },
-              })) as unknown as EffectiveCapabilityPolicyAccess;
+              try {
+                boardAccess = (await client.service('boards/:id/effective-access').find({
+                  route: { id: board.board_id },
+                })) as unknown as EffectiveCapabilityPolicyAccess;
+              } catch {
+                // If effective access read fails, boardAccess remains undefined.
+              }
             } else {
               boardUnavailable = true;
             }
@@ -73,13 +79,33 @@ export function useArchiveDeleteEligibility(
             boardUnavailable = true;
           }
         }
+        const canManageBoard = Boolean(
+          board &&
+            !boardUnavailable &&
+            user?.user_id &&
+            hasMinimumRole(user.role, ROLES.MEMBER) &&
+            (hasMinimumRole(user.role, ROLES.ADMIN) ||
+              board.primary_owner_user_id === user.user_id ||
+              boardAccess?.capabilities.includes('board.policy.manage'))
+        );
+        const canEditBoard = Boolean(
+          board &&
+            !boardUnavailable &&
+            user?.user_id &&
+            hasMinimumRole(user.role, ROLES.MEMBER) &&
+            (hasMinimumRole(user.role, ROLES.ADMIN) ||
+              board.primary_owner_user_id === user.user_id ||
+              boardAccess?.capabilities.includes('board.edit') ||
+              boardAccess?.capabilities.includes('board.policy.manage'))
+        );
         if (operation.isCurrent())
           setLoaded({
             branch: currentBranch,
             repo,
             board,
             boardUnavailable,
-            canEditBoard: boardAccess?.capabilities.includes('board.edit') ?? false,
+            canEditBoard,
+            canManageBoard,
             access: access as unknown as EffectiveBranchAccess,
             scope: authority.operationScope,
           });
@@ -101,7 +127,17 @@ export function useArchiveDeleteEligibility(
       client.service('repos').removeListener('patched', repoChanged);
       client.service('branches').removeListener('patched', branchChanged);
     };
-  }, [client, guard, authority.operationScope, open, branch.branch_id, branch.repo_id, revision]);
+  }, [
+    client,
+    guard,
+    authority.operationScope,
+    open,
+    branch.branch_id,
+    branch.repo_id,
+    revision,
+    user?.user_id,
+    user?.role,
+  ]);
   const current =
     guard.isCurrent() &&
     loaded?.scope === authority.operationScope &&
@@ -110,24 +146,52 @@ export function useArchiveDeleteEligibility(
       ? loaded
       : null;
   const policy = current ? resolveRepoCleanupPolicy(current.repo.cleanup_policy) : null;
-  const managementReason = !current
+
+  const hasBranchManager = Boolean(current?.access.is_owner || current?.access.can === 'all');
+  const canArchive = hasBranchManager || Boolean(current?.canManageBoard);
+  const canDelete = hasBranchManager;
+
+  const archiveManagementReason = !current
     ? loadError
       ? 'Branch permissions could not be loaded.'
       : 'Loading branch permissions…'
-    : !(current.access.is_owner || current.access.can === 'all')
+    : !canArchive
       ? 'Branch Manager authority is required to archive or delete.'
       : undefined;
+
+  const deleteManagementReason = !current
+    ? loadError
+      ? 'Branch permissions could not be loaded.'
+      : 'Loading branch permissions…'
+    : !canDelete
+      ? current?.canManageBoard
+        ? 'Branch Manager authority is required to delete.'
+        : 'Branch Manager authority is required to archive or delete.'
+      : undefined;
+
+  // Board administrators are elevated to writable workspace access for authorized archive maintenance.
+  const canWriteForArchive = Boolean(
+    current?.access.fs_access === 'write' || current?.canManageBoard
+  );
+
   const writableReason =
-    managementReason ??
-    (current?.access.fs_access !== 'write'
+    archiveManagementReason ??
+    (!canWriteForArchive
       ? 'Writable workspace access is required to clean or delete files.'
       : undefined);
   const workspaceReason =
     writableReason ??
     getBranchMaintenanceBlockReason(current?.branch.maintenance_capabilities, 'archive_remove');
+
+  const deleteWritableReason =
+    deleteManagementReason ??
+    (current?.access.fs_access !== 'write'
+      ? 'Writable workspace access is required to clean or delete files.'
+      : undefined);
   const deletionReason =
-    writableReason ??
+    deleteWritableReason ??
     getBranchMaintenanceBlockReason(current?.branch.maintenance_capabilities, 'permanent_delete');
+
   const cleanupReason = !current
     ? loadError
       ? 'Cleanup policy or permissions could not be loaded.'
@@ -140,8 +204,13 @@ export function useArchiveDeleteEligibility(
     board: current?.board,
     boardUnavailable: current?.boardUnavailable ?? false,
     canEditBoard: current?.canEditBoard ?? false,
+    canManageBoard: current?.canManageBoard ?? false,
+    canArchive,
+    canDelete,
+    archiveManagementReason,
+    deleteManagementReason,
+    managementReason: archiveManagementReason,
     cleanupReason,
-    managementReason,
     workspaceReason,
     deletionReason,
     repo: current?.repo,
