@@ -1,4 +1,4 @@
-import type { AgorClient, Session, User } from '@agor-live/client';
+import type { AgorClient, DirectoryUser, Session } from '@agor-live/client';
 import { CloseOutlined } from '@ant-design/icons';
 import { Button, Space, Typography, theme } from 'antd';
 import React from 'react';
@@ -9,7 +9,7 @@ import { SessionLatestTaskPeek } from './SessionLatestTaskPeek';
 interface BranchSessionPeekSectionProps {
   client: AgorClient | null;
   sessions: Session[];
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   currentUserId?: string;
   branchName?: string;
   onCloseSession: (sessionId: string) => void;

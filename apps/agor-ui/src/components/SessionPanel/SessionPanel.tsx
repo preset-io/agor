@@ -5,6 +5,7 @@ import type {
   Branch,
   CodexApprovalPolicy,
   CodexSandboxMode,
+  DirectoryUser,
   EffortLevel,
   PermissionMode,
   Session,
@@ -12,7 +13,6 @@ import type {
   SessionStopResult,
   SpawnConfig,
   Task,
-  User,
 } from '@agor-live/client';
 import {
   getDefaultPermissionMode,
@@ -53,6 +53,7 @@ import {
   theme,
 } from 'antd';
 import React from 'react';
+import { getSignedInUserRow } from '@/utils/currentUserAuthority';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
@@ -154,7 +155,7 @@ interface PromptInputProps {
   placeholder?: string;
   autoSize?: { minRows?: number; maxRows?: number };
   client: AgorClient | null;
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   onFilesDrop?: (files: File[]) => void;
   filesDropDisabled?: boolean;
   showFilesDropOverlay?: boolean;
@@ -1993,7 +1994,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           open={forkModalOpen}
           action="fork"
           session={session}
-          currentUser={currentUserId ? (userById.get(currentUserId) ?? null) : null}
+          currentUser={getSignedInUserRow(userById, currentUserId) ?? null}
           onConfirm={handleForkModalConfirm}
           onCancel={() => setForkModalOpen(false)}
           client={client}

@@ -14,6 +14,7 @@
 import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
+  DirectoryUser,
   EffortLevel,
   MCPServer,
   Message,
@@ -21,7 +22,6 @@ import type {
   Session,
   SessionID,
   Task,
-  User,
 } from '@agor-live/client';
 import { MessageRole, SessionStatus, TaskStatus } from '@agor-live/client';
 import {
@@ -46,7 +46,7 @@ import { MULTIPLAYER_FOLLOWUP, MULTIPLAYER_PROMPT } from './scenes/multiplayer';
 import { SESSION_PANEL_WIDTH, SESSION_PROMPT } from './scenes/session';
 import type { SceneDefinition } from './timeline';
 
-const USER_BY_ID = new Map<string, User>(demoUsers.map((user) => [user.user_id, user]));
+const USER_BY_ID = new Map<string, DirectoryUser>(demoUsers.map((user) => [user.user_id, user]));
 const CURRENT_USER_ID = demoUsers[0].user_id;
 const STAGE_BRANCH = demoBranches[0]; // landing-hero-polish
 const STAGE_SESSION_ID = '019ee88d-demo-branch-0000-000000000101-session-9' as SessionID;

@@ -1,4 +1,10 @@
-import type { AgenticToolName, AgorClient, MCPServer, User } from '@agor-live/client';
+import type {
+  AgenticToolName,
+  AgorClient,
+  DirectoryUser,
+  MCPServer,
+  User,
+} from '@agor-live/client';
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Alert, Button, Checkbox, Form, Select, Space, Spin, Tooltip, Typography } from 'antd';
 import { useEffect } from 'react';
@@ -35,7 +41,7 @@ interface Props extends Omit<AgenticToolConfigFormProps, 'agenticTool' | 'client
    */
   defaultResolution?: 'save' | 'schedule-run';
   /** Current user — resolves "My default" and gates the save-as-default checkbox. */
-  currentUser?: User | null;
+  currentUser?: DirectoryUser | null;
   /** False while a persisted configuration's execution owner is still hydrating. */
   configurationOwnerResolved?: boolean;
   /** Render the MCP servers field inside the picker (default true). */

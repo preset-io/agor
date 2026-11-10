@@ -9,7 +9,7 @@
  */
 
 import type { KnowledgeDocumentID, KnowledgeSearchResult } from '@agor/core/types';
-import type { AgorClient, SessionID, User } from '@agor-live/client';
+import type { AgorClient, DirectoryUser, SessionID } from '@agor-live/client';
 import { Input, Popover, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { useEmojiAutocomplete } from '@/hooks/useEmojiAutocomplete';
@@ -89,7 +89,7 @@ interface AutocompleteTextareaProps {
   placeholder?: string;
   client: AgorClient | null;
   sessionId: SessionID | null;
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   autoSize?: {
     minRows?: number;
     maxRows?: number;
@@ -622,7 +622,7 @@ export const AutocompleteTextarea = React.forwardRef<
 
         // If no query, show all users (up to MAX_USER_RESULTS)
         if (!searchQuery.trim()) {
-          return allUsers.slice(0, MAX_USER_RESULTS).map((u: User) => ({
+          return allUsers.slice(0, MAX_USER_RESULTS).map((u: DirectoryUser) => ({
             name: u.name || u.email,
             email: u.email,
             type: 'user' as const,
@@ -633,12 +633,12 @@ export const AutocompleteTextarea = React.forwardRef<
         const lowercaseQuery = searchQuery.toLowerCase();
         return allUsers
           .filter(
-            (u: User) =>
+            (u: DirectoryUser) =>
               u.name?.toLowerCase().includes(lowercaseQuery) ||
               u.email.toLowerCase().includes(lowercaseQuery)
           )
           .slice(0, MAX_USER_RESULTS)
-          .map((u: User) => ({
+          .map((u: DirectoryUser) => ({
             name: u.name || u.email,
             email: u.email,
             type: 'user' as const,

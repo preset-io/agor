@@ -8,6 +8,7 @@
 import type {
   AgenticToolName,
   AgorClient,
+  DirectoryUser,
   MCPServer,
   Session,
   SpawnConfig,
@@ -46,7 +47,7 @@ export interface ForkSpawnModalProps {
   afterClose?: () => void;
   onCancel: () => void;
   client: AgorClient | null;
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
 }
 
 export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({

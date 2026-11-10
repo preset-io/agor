@@ -592,6 +592,14 @@ export interface User extends BaseUserFields {
 }
 
 /**
+ * A user row as a client may receive it for someone else. The daemon sends
+ * other users' role, execution home key, credentials, defaults and account
+ * state only to the user and admins, so only identity fields are guaranteed.
+ */
+export type DirectoryUser = Pick<User, 'user_id' | 'email'> &
+  Partial<Omit<User, 'user_id' | 'email'>>;
+
+/**
  * Backend/internal user shape with auth invalidation metadata.
  *
  * Public user DTOs returned to browser clients intentionally omit this marker;

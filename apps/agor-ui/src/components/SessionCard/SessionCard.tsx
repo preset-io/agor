@@ -1,4 +1,4 @@
-import type { Session, Task, User } from '@agor-live/client';
+import type { DirectoryUser, Session, Task } from '@agor-live/client';
 import {
   BranchesOutlined,
   CloseOutlined,
@@ -29,7 +29,7 @@ const SESSION_CARD_MAX_WIDTH = 560;
 interface SessionCardProps {
   session: Session;
   tasks?: Task[]; // Optional snapshot passed by parent
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   currentUserId?: string;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: () => void;

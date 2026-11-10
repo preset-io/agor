@@ -1,4 +1,4 @@
-import type { AgorClient, Group, GroupMembership, User } from '@agor-live/client';
+import type { AgorClient, DirectoryUser, Group, GroupMembership, User } from '@agor-live/client';
 import { hasMinimumRole, hasRoleAuthorityOver, ROLES } from '@agor-live/client';
 import { EditOutlined, InboxOutlined, PlusOutlined, TeamOutlined } from '@ant-design/icons';
 import {
@@ -39,7 +39,7 @@ import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 interface GroupsTableProps {
   client: AgorClient | null;
   currentUser?: User | null;
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
 }
 
 export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, userById }) => {

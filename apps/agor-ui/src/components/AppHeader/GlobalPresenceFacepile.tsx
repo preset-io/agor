@@ -1,4 +1,11 @@
-import type { ActiveUser, AgorClient, Board, BoardID, User } from '@agor-live/client';
+import type {
+  ActiveUser,
+  AgorClient,
+  Board,
+  BoardID,
+  DirectoryUser,
+  User,
+} from '@agor-live/client';
 import { useMemo } from 'react';
 import { PRESENCE_CONFIG } from '../../config/presence';
 import { IDENTITY_AVATAR_SIZE } from '../../constants/ui';
@@ -9,7 +16,7 @@ import { Facepile } from '../Facepile';
 interface GlobalPresenceFacepileProps {
   client: AgorClient | null;
   currentBoardId?: BoardID | null;
-  users: User[];
+  users: DirectoryUser[];
   currentUser?: User | null;
   boardById: Map<string, Board>;
   onUserClick?: (

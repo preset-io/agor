@@ -26,6 +26,7 @@ import {
 } from '@agor/core/types';
 import {
   type AgorClient,
+  type DirectoryUser,
   type Group,
   KNOWLEDGE_DOCUMENT_PAGINATION,
   type User,
@@ -825,7 +826,7 @@ export function KnowledgePage({
   const [namespaceError, setNamespaceError] = useState<string | null>(null);
   const [namespaceForm] = Form.useForm<KnowledgeNamespaceFormValues>();
   const namespaceSlugEditedRef = useRef(false);
-  const [namespaceUsers, setNamespaceUsers] = useState<User[]>([]);
+  const [namespaceUsers, setNamespaceUsers] = useState<DirectoryUser[]>([]);
   const [namespaceGroups, setNamespaceGroups] = useState<Group[]>([]);
   const [namespaceAclDraft, setNamespaceAclDraft] = useState<KnowledgeNamespaceAclDraftEntry[]>([]);
   const [namespaceAclLoading, setNamespaceAclLoading] = useState(false);
@@ -1384,7 +1385,7 @@ export function KnowledgePage({
     if (!client) return;
     try {
       const result = await client.service('users').findAll({});
-      setNamespaceUsers(normalizeFindResult<User>(result as User[]));
+      setNamespaceUsers(normalizeFindResult<DirectoryUser>(result as DirectoryUser[]));
     } catch (err) {
       console.error('Failed to load Knowledge namespace users:', err);
       setNamespaceUsers([]);

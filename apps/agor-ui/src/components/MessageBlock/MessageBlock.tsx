@@ -14,13 +14,13 @@ import {
   type AgorClient,
   type ContentBlock as CoreContentBlock,
   type DiffEnrichment,
+  type DirectoryUser,
   isAgenticToolName,
   type Message,
   type PermissionRequestContent,
   PermissionScope,
   PermissionStatus,
   shortId,
-  type User,
 } from '@agor-live/client';
 import {
   ClockCircleOutlined,
@@ -95,7 +95,7 @@ interface MessageBlockProps {
   message:
     | Message
     | (Message & { isStreaming?: boolean; thinkingContent?: string; isThinking?: boolean });
-  userById?: Map<string, User>;
+  userById?: Map<string, DirectoryUser>;
   currentUserId?: string;
   viewerUserId?: string; // Signed-in user, for widgets that act as the viewer
   isTaskRunning?: boolean; // Whether the task is running (for loading state)

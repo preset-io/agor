@@ -2,10 +2,10 @@ import type {
   AgorClient,
   Branch,
   BranchArchiveOrDeleteOptions,
+  DirectoryUser,
   Repo,
   Session,
   SpawnConfig,
-  User,
 } from '@agor-live/client';
 import {
   canDismissBranchWorkspaceNotification,
@@ -24,6 +24,7 @@ import {
 import { Button, Card, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { getSignedInUserRow } from '@/utils/currentUserAuthority';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useBranchAccess } from '../../hooks/useBranchAccess';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
@@ -59,7 +60,7 @@ interface BranchCardProps {
   /** Absent while the repo list loads; the card says so instead of hiding. */
   repo?: Repo;
   sessions: Session[]; // Sessions for this specific branch
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   currentUserId?: string;
   selectedSessionId?: string | null; // Currently open session in drawer
   onTaskClick?: (taskId: string) => void;
@@ -299,7 +300,7 @@ const BranchCardComponent = ({
   const isCreating = branch.filesystem_status === 'creating';
   const statusTag = getBranchStatusTag(branch);
   const isFailed = statusTag?.tone === 'error';
-  const currentUser = currentUserId ? userById.get(currentUserId) : null;
+  const currentUser = getSignedInUserRow(userById, currentUserId) ?? null;
   // One cached read per card, only for notices whose actions depend on it.
   const branchAccess = useBranchAccess(
     client,

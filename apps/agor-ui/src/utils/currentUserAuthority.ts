@@ -1,4 +1,4 @@
-import type { User } from '@agor-live/client';
+import type { DirectoryUser, User } from '@agor-live/client';
 
 function timestamp(value: unknown): number {
   return value instanceof Date
@@ -6,6 +6,14 @@ function timestamp(value: unknown): number {
     : typeof value === 'string'
       ? Date.parse(value)
       : NaN;
+}
+
+/** The signed-in user's own directory row, which the daemon sends with the full profile. */
+export function getSignedInUserRow(
+  userById: ReadonlyMap<string, DirectoryUser>,
+  signedInUserId: string | null | undefined
+): User | undefined {
+  return signedInUserId ? (userById.get(signedInUserId) as User | undefined) : undefined;
 }
 
 /**
@@ -19,7 +27,7 @@ function timestamp(value: unknown): number {
  */
 export function enrichAuthenticatedUser(
   authenticated: User | null | undefined,
-  directory: User | null | undefined
+  directory: DirectoryUser | null | undefined
 ): User | null {
   if (!authenticated) return null;
   if (!directory || directory.user_id !== authenticated.user_id) return authenticated;
@@ -53,7 +61,7 @@ export function enrichAuthenticatedUser(
  */
 export function hasObservedOnboardingCompletion(
   authenticated: User | null | undefined,
-  directory: User | null | undefined
+  directory: DirectoryUser | null | undefined
 ): boolean {
   if (!authenticated) return false;
   if (authenticated.onboarding_completed === true) return true;

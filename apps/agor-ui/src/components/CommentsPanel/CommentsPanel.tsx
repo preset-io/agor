@@ -4,8 +4,8 @@ import type {
   BoardObject,
   Branch,
   CommentReaction,
+  DirectoryUser,
   ReactionSummary,
-  User,
 } from '@agor-live/client';
 import { groupReactions, hasMinimumRole, isThreadRoot, ROLES } from '@agor-live/client';
 import {
@@ -50,7 +50,7 @@ export interface CommentsPanelProps {
   client: AgorClient | null;
   boardId: string;
   comments: BoardComment[];
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   currentUserId: string;
   boardObjects?: Record<string, BoardObject>; // For zone names
   branchById?: Map<string, Branch>; // For branch names
@@ -78,7 +78,7 @@ type FilterMode = 'all' | 'active';
 const ReactionDisplay: React.FC<{
   reactions: CommentReaction[];
   currentUserId: string;
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   onToggle: (emoji: string) => void;
 }> = ({ reactions, currentUserId, userById, onToggle }) => {
   const { token } = theme.useToken();
@@ -175,7 +175,7 @@ const EmojiPickerButton: React.FC<{
  */
 const ReplyItem: React.FC<{
   reply: BoardComment;
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   currentUserId: string;
   /** Administrators pass the server's comment-author check. */
   isAdmin: boolean;
@@ -279,7 +279,7 @@ const ReplyItem: React.FC<{
 const CommentThread: React.FC<{
   comment: BoardComment;
   replies: BoardComment[];
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   currentUserId: string;
   isAdmin: boolean;
   onReply?: (parentId: string, content: string) => void;

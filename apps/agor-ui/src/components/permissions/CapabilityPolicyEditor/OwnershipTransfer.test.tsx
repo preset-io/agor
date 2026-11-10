@@ -89,6 +89,7 @@ describe('ownership transfer command', () => {
       </ConfigProvider>
     );
     fireEvent.click(screen.getByRole('button', { name: 'Transfer ownership' }));
+    expect(screen.getByText(/needs a member or admin role/)).toBeInTheDocument();
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Successor owner' }));
     expect(await screen.findByText('Colleague')).toBeInTheDocument();
   });

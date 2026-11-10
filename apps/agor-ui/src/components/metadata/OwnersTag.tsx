@@ -1,10 +1,10 @@
-import type { User } from '@agor-live/client';
+import type { DirectoryUser } from '@agor-live/client';
 import { Space, theme } from 'antd';
 import { Tag } from '../Tag';
 import { UserAvatar } from './UserAvatar';
 
 export interface OwnersTagProps {
-  owners: User[];
+  owners: DirectoryUser[];
   currentUserId?: string;
 }
 
