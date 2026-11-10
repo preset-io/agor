@@ -42,6 +42,28 @@ export function getClaudeContextWindowLimit(modelId?: string): number | undefine
   return known?.contextWindow;
 }
 
+// Claude Code resolves the `fable` alias to Fable 5.2; it has no `mythos` alias.
+const FABLE_5_2_TIER_MODELS = new Set(['claude-fable-5-2', 'claude-mythos-5-2', 'fable']);
+
+/** Why Claude Code will skip this advisor for this model, or undefined when the pair can run. */
+export function getClaudeAdvisorPairingIssue(
+  modelId?: string,
+  advisorModelId?: string
+): string | undefined {
+  const normalize = (id?: string) =>
+    id
+      ?.trim()
+      .toLowerCase()
+      .replace(/\[1m\]$/, '');
+  const model = normalize(modelId);
+  const advisor = normalize(advisorModelId);
+  if (!model || !advisor) return undefined;
+  if (FABLE_5_2_TIER_MODELS.has(model) && !FABLE_5_2_TIER_MODELS.has(advisor)) {
+    return "Fable 5.2 only accepts a Fable 5.2 or Mythos 5.2 advisor, so this advisor won't run.";
+  }
+  return undefined;
+}
+
 /**
  * Static fallback list of Claude model aliases.
  *
@@ -54,10 +76,17 @@ export function getClaudeContextWindowLimit(modelId?: string): number | undefine
  */
 export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
   {
+    id: 'claude-fable-5-2',
+    displayName: 'Claude Fable 5.2 · 1M',
+    family: 'claude-5',
+    description: 'Most capable model for demanding reasoning and long-horizon agentic work',
+    contextWindow: CLAUDE_EXTENDED_CONTEXT_WINDOW,
+  },
+  {
     id: 'claude-fable-5-1',
     displayName: 'Claude Fable 5.1 · 1M',
     family: 'claude-5',
-    description: 'Most capable model for demanding reasoning and long-horizon agentic work',
+    description: 'Previous Fable model for demanding reasoning and long-horizon agentic work',
     contextWindow: CLAUDE_EXTENDED_CONTEXT_WINDOW,
   },
   {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AVAILABLE_CLAUDE_MODEL_ALIASES,
+  getClaudeAdvisorPairingIssue,
   getClaudeContextWindowLimit,
   hasNativeMillionContext,
   supportsClaudeExtendedContext,
@@ -19,6 +20,7 @@ describe('AVAILABLE_CLAUDE_MODEL_ALIASES', () => {
     expect(ids).toContain('claude-sonnet-4-6');
     expect(ids).toContain('claude-haiku-5-5');
     expect(ids).toContain('claude-haiku-4-5');
+    expect(ids).toContain('claude-fable-5-2');
     expect(ids).toContain('claude-fable-5-1');
     expect(ids).toContain('claude-fable-5');
   });
@@ -29,6 +31,7 @@ describe('AVAILABLE_CLAUDE_MODEL_ALIASES', () => {
     expect(ids).toContain('claude-opus-4-8[1m]');
     expect(ids).toContain('claude-opus-4-7[1m]');
     expect(ids).toContain('claude-opus-4-6[1m]');
+    expect(ids).not.toContain('claude-fable-5-2[1m]');
     expect(ids).not.toContain('claude-haiku-5-5[1m]');
     expect(ids).not.toContain('claude-sonnet-5-5[1m]');
     expect(ids).not.toContain('claude-sonnet-5[1m]');
@@ -41,6 +44,7 @@ describe('AVAILABLE_CLAUDE_MODEL_ALIASES', () => {
 
 describe('hasNativeMillionContext', () => {
   it.each([
+    'claude-fable-5-2',
     'claude-fable-5-1',
     'claude-fable-5',
     'claude-sonnet-5-5',
@@ -78,6 +82,7 @@ describe('Claude context-window accounting fallback', () => {
     expect(getClaudeContextWindowLimit('claude-sonnet-5-5')).toBe(1_000_000);
     expect(getClaudeContextWindowLimit('claude-haiku-5-5')).toBe(1_000_000);
     expect(getClaudeContextWindowLimit('claude-sonnet-5')).toBe(1_000_000);
+    expect(getClaudeContextWindowLimit('claude-fable-5-2')).toBe(1_000_000);
     expect(getClaudeContextWindowLimit('claude-fable-5-1')).toBe(1_000_000);
   });
 
@@ -88,5 +93,30 @@ describe('Claude context-window accounting fallback', () => {
     expect(getClaudeContextWindowLimit('claude-opus-4-8-preview[1m]')).toBeUndefined();
     expect(supportsClaudeExtendedContext('claude-opus-5-private')).toBe(false);
     expect(hasNativeMillionContext('claude-sonnet-5-private')).toBe(false);
+  });
+});
+
+describe('getClaudeAdvisorPairingIssue', () => {
+  it.each([
+    ['claude-fable-5-2', 'claude-fable-5-1'],
+    ['claude-fable-5-2', 'claude-opus-5-5'],
+    ['fable', 'claude-mythos-5-1'],
+    ['claude-mythos-5-2', 'opus'],
+    [' Claude-Fable-5-2[1m] ', 'claude-sonnet-5-5'],
+  ])('flags %s with a %s advisor', (model, advisor) => {
+    expect(getClaudeAdvisorPairingIssue(model, advisor)).toMatch(/won't run/);
+  });
+
+  it.each([
+    ['claude-fable-5-2', 'claude-fable-5-2'],
+    ['claude-fable-5-2', 'claude-mythos-5-2'],
+    ['claude-fable-5-2', 'fable'],
+    ['claude-mythos-5-2', 'claude-fable-5-2'],
+    ['claude-fable-5-1', 'claude-fable-5-1'],
+    ['claude-opus-5-5', 'claude-sonnet-5-5'],
+    ['claude-fable-5-2', undefined],
+    [undefined, 'claude-fable-5-1'],
+  ])('accepts %s with a %s advisor', (model, advisor) => {
+    expect(getClaudeAdvisorPairingIssue(model, advisor)).toBeUndefined();
   });
 });

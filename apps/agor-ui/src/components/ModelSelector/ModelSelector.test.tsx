@@ -408,6 +408,26 @@ describe('ModelSelector (Claude)', () => {
     expect(onCommit).not.toHaveBeenCalled();
   });
 
+  it('warns when Fable 5.2 keeps an advisor Claude Code will skip', () => {
+    const view = render(
+      <ModelSelector
+        agentic_tool="claude-code"
+        value={{ mode: 'alias', model: 'claude-fable-5-2', advisorModel: 'claude-fable-5-1' }}
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      "Fable 5.2 only accepts a Fable 5.2 or Mythos 5.2 advisor, so this advisor won't run."
+    );
+
+    view.rerender(
+      <ModelSelector
+        agentic_tool="claude-code"
+        value={{ mode: 'alias', model: 'claude-fable-5-2', advisorModel: 'claude-fable-5-2' }}
+      />
+    );
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
   it('commits one advisor selection with a pending exact draft and no blur duplicate', () => {
     const onCommit = vi.fn();
     render(
@@ -468,7 +488,7 @@ describe('ModelSelector (Claude)', () => {
     fireEvent.keyDown(input, { key: 'Enter', keyCode: 13, which: 13 });
 
     expect(onCommit).toHaveBeenCalledOnce();
-    expect(onCommit).toHaveBeenCalledWith({ mode: 'alias', model: 'claude-fable-5' });
+    expect(onCommit).toHaveBeenCalledWith({ mode: 'alias', model: 'claude-fable-5-1' });
   });
 
   it('wraps option descriptions instead of truncating them', () => {

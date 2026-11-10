@@ -527,6 +527,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         <AdvisorModelSelect
           value={value?.advisorModel}
           onChange={handleAdvisorModelChange}
+          model={currentModel}
           options={claudeServerOptions ?? undefined}
           client={client}
           size="small"
@@ -617,6 +618,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             <AdvisorModelSelect
               value={value?.advisorModel}
               onChange={handleAdvisorModelChange}
+              model={pinned ? pinnedModel : currentModel}
               options={claudeServerOptions ?? undefined}
               client={client}
               style={{ marginTop: 8 }}

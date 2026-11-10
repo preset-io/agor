@@ -13,7 +13,11 @@ import type {
   PermissionMode,
   User,
 } from '@agor-live/client';
-import { getDefaultModelForTool, getDefaultPermissionMode } from '@agor-live/client';
+import {
+  getClaudeAdvisorPairingIssue,
+  getDefaultModelForTool,
+  getDefaultPermissionMode,
+} from '@agor-live/client';
 import {
   ApiOutlined,
   DownOutlined,
@@ -235,8 +239,9 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
       : mcpCount > 0
         ? `${mcpCount} MCP server${mcpCount === 1 ? '' : 's'}`
         : 'No MCP servers';
+  const advisorInactive = Boolean(getClaudeAdvisorPairingIssue(resolvedModel, advisorModel));
   const advisorLabel = advisorModel
-    ? `Advisor: ${shortModelName(tool, advisorModel)}`
+    ? `Advisor: ${shortModelName(tool, advisorModel)}${advisorInactive ? ' (inactive)' : ''}`
     : 'Advisor: Off';
 
   const chipSummary = [
@@ -469,6 +474,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
           renderContent={(close) => (
             <AdvisorModelSelect
               value={advisorModel}
+              model={resolvedModel}
               onChange={(next) => {
                 onAdvisorChange(next);
                 close();
