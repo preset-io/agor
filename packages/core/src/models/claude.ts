@@ -42,6 +42,28 @@ export function getClaudeContextWindowLimit(modelId?: string): number | undefine
   return known?.contextWindow;
 }
 
+// Claude Code resolves the `fable` alias to Fable 5.2; it has no `mythos` alias.
+const FABLE_5_2_TIER_MODELS = new Set(['claude-fable-5-2', 'claude-mythos-5-2', 'fable']);
+
+/** Why Claude Code will skip this advisor for this model, or undefined when the pair can run. */
+export function getClaudeAdvisorPairingIssue(
+  modelId?: string,
+  advisorModelId?: string
+): string | undefined {
+  const normalize = (id?: string) =>
+    id
+      ?.trim()
+      .toLowerCase()
+      .replace(/\[1m\]$/, '');
+  const model = normalize(modelId);
+  const advisor = normalize(advisorModelId);
+  if (!model || !advisor) return undefined;
+  if (FABLE_5_2_TIER_MODELS.has(model) && !FABLE_5_2_TIER_MODELS.has(advisor)) {
+    return "Fable 5.2 only accepts a Fable 5.2 or Mythos 5.2 advisor, so this advisor won't run.";
+  }
+  return undefined;
+}
+
 /**
  * Static fallback list of Claude model aliases.
  *

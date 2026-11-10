@@ -1,4 +1,8 @@
-import { type AgorClient, AVAILABLE_CLAUDE_MODEL_ALIASES } from '@agor-live/client';
+import {
+  type AgorClient,
+  AVAILABLE_CLAUDE_MODEL_ALIASES,
+  getClaudeAdvisorPairingIssue,
+} from '@agor-live/client';
 import { Select, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { type NormalizedModelOption, normalizeModelOption } from './modelDefaults';
@@ -10,6 +14,8 @@ interface DynamicModelsResponse {
 export interface AdvisorModelSelectProps {
   value?: string;
   onChange?: (advisorModel: string | undefined) => void;
+  /** The session's main model, used to warn when Claude Code would skip this advisor. */
+  model?: string;
   /** When set, fetches the live Claude model list; otherwise uses the static aliases. */
   client?: AgorClient | null;
   /** Preloaded options — skips the fetch when the parent already has them. */
@@ -26,6 +32,7 @@ export interface AdvisorModelSelectProps {
 export const AdvisorModelSelect: React.FC<AdvisorModelSelectProps> = ({
   value,
   onChange,
+  model,
   client,
   options,
   size,
@@ -55,8 +62,9 @@ export const AdvisorModelSelect: React.FC<AdvisorModelSelectProps> = ({
   const list: NormalizedModelOption[] = options
     ? options.map(normalizeModelOption)
     : (fetched ?? AVAILABLE_CLAUDE_MODEL_ALIASES.map(normalizeModelOption));
+  const pairingIssue = getClaudeAdvisorPairingIssue(model, value);
 
-  return (
+  const select = (
     <Select
       allowClear
       showSearch
@@ -65,22 +73,34 @@ export const AdvisorModelSelect: React.FC<AdvisorModelSelectProps> = ({
       placeholder="Off — uses your Claude settings"
       value={value}
       onChange={onChange}
+      status={pairingIssue ? 'warning' : undefined}
       popupMatchSelectWidth={false}
       style={{ width: '100%', ...style }}
-      options={list.map((model) => ({ value: model.id, label: model.displayName }))}
+      options={list.map((option) => ({ value: option.id, label: option.displayName }))}
       optionRender={(option) => {
-        const model = list.find((m) => m.id === option.value);
+        const entry = list.find((m) => m.id === option.value);
         return (
           <div style={{ lineHeight: 1.3 }}>
-            <div>{model?.displayName ?? option.label}</div>
-            {model?.description && (
+            <div>{entry?.displayName ?? option.label}</div>
+            {entry?.description && (
               <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                {model.description}
+                {entry.description}
               </Typography.Text>
             )}
           </div>
         );
       }}
     />
+  );
+
+  if (!pairingIssue) return select;
+
+  return (
+    <div style={{ width: '100%' }}>
+      {select}
+      <Typography.Text type="warning" role="status" style={{ display: 'block', fontSize: 12 }}>
+        {pairingIssue}
+      </Typography.Text>
+    </div>
   );
 };

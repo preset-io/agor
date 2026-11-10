@@ -310,6 +310,22 @@ describe('AgenticConfigChipRow', () => {
     expect(chip).toHaveAttribute('aria-expanded', 'false');
   });
 
+  it('marks an inherited advisor inactive when Claude Code would skip it', async () => {
+    const userWithAdvisor = {
+      user_id: 'u5',
+      default_agentic_config: {
+        'claude-code': {
+          modelConfig: { model: 'claude-fable-5-2', advisorModel: 'claude-fable-5-1' },
+          permissionMode: 'acceptEdits',
+        },
+      },
+    } as unknown as User;
+
+    render(<Harness user={userWithAdvisor} initialSource={USER_DEFAULT_AGENTIC_CONFIGURATION} />);
+
+    expect(await screen.findByTestId('advisor-chip')).toHaveTextContent('(inactive)');
+  });
+
   it('surfaces an advisor inherited from "My default" and clears it as a custom override', async () => {
     const userWithAdvisor = {
       user_id: 'u4',
