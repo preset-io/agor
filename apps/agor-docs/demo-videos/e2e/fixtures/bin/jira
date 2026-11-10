@@ -1,0 +1,151 @@
+#!/usr/bin/env node
+// A stand-in for the Jira CLI (jira-cli's `jira` command) inside the demo
+// workspace, so agents can pull tickets from "Jira" with nothing external to
+// sign in to or reset between takes.
+//
+// The harness copies this file to <scratch>/bin/jira next to the GitHub
+// stand-in. Projects live in <scratch>/fake-jira/<KEY>.json, seeded by
+// fakeJira() (support/fixtures.ts); `jira issue move` writes back to them.
+//
+// Supported: me, project list, issue list|view|move|assign. Anything else
+// fails the way a missing permission would.
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+const STORE = path.join(path.dirname(fs.realpathSync(process.argv[1])), '..', 'fake-jira');
+const SITE = 'https://saasy-co.atlassian.net';
+const ME = 'sam@saasy.co';
+const args = process.argv.slice(2);
+
+function fail(msg, code = 1) {
+  process.stderr.write(`${msg}\n`);
+  process.exit(code);
+}
+
+function flag(name, short) {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === `--${name}` || (short && a === `-${short}`)) return args[i + 1];
+    if (a.startsWith(`--${name}=`)) return a.slice(name.length + 3);
+    if (short && a.startsWith(`-${short}`) && a.length > 2 && !a.startsWith('--')) return a.slice(2);
+  }
+  return undefined;
+}
+const has = (name) => args.includes(`--${name}`);
+
+function projects() {
+  if (!fs.existsSync(STORE)) return [];
+  return fs.readdirSync(STORE).filter((f) => f.endsWith('.json')).map((f) => {
+    const file = path.join(STORE, f);
+    return { file, data: JSON.parse(fs.readFileSync(file, 'utf8')) };
+  });
+}
+
+function project() {
+  const key = flag('project', 'p');
+  const all = projects();
+  const hit = key ? all.find((p) => p.data.key === key.toUpperCase()) : all[0];
+  if (!hit) fail(key ? `project "${key}" not found` : 'no Jira project configured');
+  return hit;
+}
+
+function findIssue(key) {
+  for (const p of projects()) {
+    const issue = p.data.issues.find((i) => i.key === String(key).toUpperCase());
+    if (issue) return { ...p, issue };
+  }
+  fail(`issue "${key}" does not exist or you do not have permission to see it`);
+}
+
+function ago(iso) {
+  const days = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 86400000));
+  return days === 0 ? 'today' : days === 1 ? '1 day ago' : `${days} days ago`;
+}
+
+const browse = (key) => `${SITE}/browse/${key}`;
+const shape = (i) => ({ ...i, url: browse(i.key) });
+
+const [cmd, sub] = args;
+
+if (cmd === 'me') {
+  console.log(ME);
+  process.exit(0);
+}
+
+if (cmd === 'project' && sub === 'list') {
+  for (const { data } of projects()) console.log(`${data.key}\t${data.name}\t${data.lead}`);
+  process.exit(0);
+}
+
+if (cmd !== 'issue') fail(`jira ${args.join(' ')}: not available in this workspace (the demo Jira supports me, project list, issue list|view|move|assign)`);
+
+switch (sub) {
+  case 'list':
+  case 'ls': {
+    const { data } = project();
+    const status = flag('status', 's');
+    const assignee = flag('assignee', 'a');
+    const type = flag('type', 't');
+    const priority = flag('priority', 'y');
+    const label = flag('label', 'l');
+    const limit = Number(flag('paginate') || 100);
+    const found = data.issues
+      .filter((i) => !status || (status.startsWith('~') ? i.status !== status.slice(1) : i.status.toLowerCase() === status.toLowerCase()))
+      .filter((i) => {
+        if (!assignee) return true;
+        if (assignee === 'x') return !i.assignee;
+        const who = assignee === '$(jira me)' || assignee === 'me' ? ME : assignee;
+        return i.assignee === who || (i.assigneeName || '').toLowerCase().includes(who.toLowerCase());
+      })
+      .filter((i) => !type || i.type.toLowerCase() === type.toLowerCase())
+      .filter((i) => !priority || i.priority.toLowerCase() === priority.toLowerCase())
+      .filter((i) => !label || (i.labels || []).includes(label))
+      .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+      .slice(0, limit);
+    if (has('raw') || has('json')) {
+      console.log(JSON.stringify(found.map(shape), null, 2));
+    } else {
+      const head = ['TYPE', 'KEY', 'SUMMARY', 'STATUS', 'ASSIGNEE', 'PRIORITY', 'CREATED'];
+      const rows = found.map((i) => [i.type, i.key, i.summary, i.status, i.assigneeName || 'Unassigned', i.priority, ago(i.createdAt)]);
+      if (!has('no-headers')) rows.unshift(head);
+      console.log(rows.map((r) => r.join('\t')).join('\n'));
+    }
+    break;
+  }
+  case 'view': {
+    const key = args[2];
+    if (!key) fail('issue key is required');
+    const { issue } = findIssue(key);
+    if (has('raw') || has('json')) {
+      console.log(JSON.stringify(shape(issue), null, 2));
+      break;
+    }
+    console.log(`${issue.type}  ${issue.key}  ${issue.status}  ${issue.priority}\n\n# ${issue.summary}\n\nReporter: ${issue.reporterName}   Assignee: ${issue.assigneeName || 'Unassigned'}   Created: ${ago(issue.createdAt)}\nLabels: ${(issue.labels || []).join(', ') || 'none'}\n\n${issue.description || ''}\n\nView this issue on Jira: ${browse(issue.key)}`);
+    break;
+  }
+  case 'move':
+  case 'transition': {
+    const [key, state] = [args[2], args[3]];
+    if (!key || !state) fail('usage: jira issue move ISSUE-KEY "STATE"');
+    const { file, data, issue } = findIssue(key);
+    if (!data.statuses.includes(state)) fail(`transition "${state}" is not available for ${issue.key}; available: ${data.statuses.join(', ')}`);
+    issue.status = state;
+    issue.updatedAt = new Date().toISOString();
+    fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+    console.log(`✓ Issue transitioned to "${state}"\n${browse(issue.key)}`);
+    break;
+  }
+  case 'assign': {
+    const [key, who] = [args[2], args[3]];
+    if (!key || !who) fail('usage: jira issue assign ISSUE-KEY ASSIGNEE');
+    const { file, data, issue } = findIssue(key);
+    issue.assignee = who === 'x' ? undefined : who;
+    issue.assigneeName = who === 'x' ? undefined : (data.people || {})[who] || who;
+    fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+    console.log(`✓ User "${issue.assigneeName || 'Unassigned'}" assigned to issue "${issue.key}"`);
+    break;
+  }
+  default:
+    fail(`jira issue ${sub || ''}: not available in this workspace`);
+}
