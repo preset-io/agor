@@ -15,6 +15,7 @@ import { hasBoardStyling } from './boardBackground';
 /** Patterns that are dangerous in CSS and must be stripped */
 const DANGEROUS_PATTERNS = [
   /url\s*\(/gi, // External resource loading, data exfiltration
+  /image-set\s*\(/gi, // Loads images from plain strings (also matches -webkit-image-set)
   /expression\s*\(/gi, // IE CSS expressions (JS execution)
   /javascript\s*:/gi, // JS protocol
   /behavior\s*:/gi, // IE .htc behaviors
@@ -38,10 +39,19 @@ const DANGEROUS_PATTERNS = [
  * so stripping both is safe and makes the subsequent pattern checks robust.
  */
 function deobfuscateCss(css: string): string {
-  return css
-    .replace(/\/\*[\s\S]*?\*\//g, '') // strip CSS comments (incl. unterminated-safe)
-    .replace(/\\/g, ''); // strip CSS escape backslashes
+  return (
+    css
+      .replace(/\/\*[\s\S]*?(\*\/|$)/g, '') // strip CSS comments, including an unterminated one
+      .replace(/\\/g, '') // strip CSS escape backslashes
+      // Braces/semicolons inside strings would desync the brace-based scoping from the parser.
+      .replace(/"[^"\n]*"|'[^'\n]*'|["']/g, (token) =>
+        token.length > 1 ? token.replace(/[{};]/g, '') : ''
+      )
+  );
 }
+
+/** Grouping at-rules whose prelude may pass through unscoped; their inner rules are scoped. */
+const GROUPING_AT_RULE_PRELUDE = /^@(media|supports|container|layer|starting-style)\b[^;&]*$/i;
 
 /**
  * Check if a CSS string contains dangerous patterns.
@@ -71,8 +81,10 @@ function scopeSelectorList(selectorList: string, scopeSelector: string): string 
     .map((raw) => {
       const selector = raw.trim();
       if (!selector) return '';
-      // At-rule prelude — keep as-is; its inner rules get scoped separately.
-      if (selector.startsWith('@')) return selector;
+      // Grouping at-rule prelude — keep as-is; its inner rules get scoped separately.
+      if (GROUPING_AT_RULE_PRELUDE.test(selector)) return selector;
+      // Only plain selectors are scoped: `;`/`@` can end the prefix early, `&` and `~`/`+` can match outside it.
+      if (/[;@&]/.test(selector) || /^[~+]/.test(selector)) return '';
       return `${scopeSelector} ${selector}`;
     })
     .filter(Boolean)
@@ -152,7 +164,86 @@ export function sanitizeBoardCss(css: string | undefined, scopeSelector: string)
     parts.push(kf);
   }
 
-  return parts.join('\n\n');
+  const output = parts.join('\n\n');
+  // The text pass above is lexical; the browser's parser decides what actually applies.
+  return parsesAsScoped(output, scopeSelector) ? output : '';
+}
+
+/** Grouping rules whose children are checked like top-level rules. */
+const GROUPING_RULE_TYPES = new Set([
+  'CSSMediaRule',
+  'CSSSupportsRule',
+  'CSSContainerRule',
+  'CSSLayerBlockRule',
+  'CSSStartingStyleRule',
+]);
+
+/** Split a serialized selector list at top-level commas. */
+function splitSelectorList(selectorText: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let quote = '';
+  let start = 0;
+  for (let i = 0; i < selectorText.length; i++) {
+    const ch = selectorText[i];
+    if (quote) {
+      if (ch === '\\') i++;
+      else if (ch === quote) quote = '';
+    } else if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === '(' || ch === '[') depth++;
+    else if (ch === ')' || ch === ']') depth--;
+    else if (ch === ',' && depth === 0) {
+      parts.push(selectorText.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  parts.push(selectorText.slice(start).trim());
+  return parts;
+}
+
+/**
+ * Whether every rule the browser parses from `css` stays inside `scopeSelector`:
+ * style rules are scoped descendants (nested ones relative to their parent),
+ * grouping rules hold only such rules, @keyframes are allowed, and nothing loads resources.
+ */
+function parsesAsScoped(css: string, scopeSelector: string): boolean {
+  if (!css) return true;
+  if (typeof document === 'undefined') return false;
+  const escapedScope = scopeSelector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const scoped = new RegExp(`^${escapedScope}(\\s+[^\\s~+]|$)`);
+  const nested = /^(&\s+)?[^\s~+&]/;
+  const checkRules = (list: CSSRuleList, insideStyleRule: boolean): boolean =>
+    Array.from(list).every((rule) => {
+      if (containsDangerousPattern(rule.cssText)) return false;
+      const type = rule.constructor.name;
+      if (type === 'CSSStyleRule') {
+        const { selectorText, cssRules } = rule as CSSStyleRule;
+        const ok = splitSelectorList(selectorText).every((selector) =>
+          insideStyleRule
+            ? nested.test(selector) && !selector.slice(1).includes('&')
+            : scoped.test(selector) && !selector.includes('&')
+        );
+        return ok && (!cssRules || checkRules(cssRules, true));
+      }
+      if (type === 'CSSKeyframesRule') return !insideStyleRule;
+      if (type === 'CSSNestedDeclarations') return insideStyleRule;
+      if (GROUPING_RULE_TYPES.has(type)) {
+        return checkRules((rule as CSSGroupingRule).cssRules, insideStyleRule);
+      }
+      return false;
+    });
+
+  // `not all` lets the browser parse the sheet without ever applying it.
+  const style = document.createElement('style');
+  style.media = 'not all';
+  style.textContent = css;
+  document.head.appendChild(style);
+  try {
+    const rules = style.sheet?.cssRules;
+    return !!rules && checkRules(rules, false);
+  } finally {
+    style.remove();
+  }
 }
 
 /**

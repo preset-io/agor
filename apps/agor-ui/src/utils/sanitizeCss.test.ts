@@ -73,6 +73,32 @@ describe('sanitizeBoardCss', () => {
     expect(typeof sanitizeBoardCss('} } {{', SCOPE)).toBe('string');
   });
 
+  it.each([
+    ['an unknown at-rule statement', '@x;body{color:red}'],
+    ['a grouping at-rule ended by a semicolon', '@media all;body{color:red}'],
+    ['an unterminated comment', '@media/*{;body{color:red}'],
+    ['a string holding braces', '@media "{";body{color:red}'],
+  ])('does not let %s escape the scope', (_label, css) => {
+    expect(sanitizeBoardCss(css, SCOPE)).not.toMatch(/(^|[;}]\s*)body/m);
+  });
+
+  it('drops selectors that start with a sibling combinator or refer to their parent', () => {
+    expect(sanitizeBoardCss('~ *, + div { color: red }', SCOPE)).not.toMatch(/[~+]/);
+    expect(sanitizeBoardCss('a { color: blue; :not(&) { color: red } }', SCOPE)).not.toMatch(/&/);
+  });
+
+  it('blocks image-set(), which loads images from plain strings', () => {
+    const out = sanitizeBoardCss(
+      'background: -webkit-image-set("https://x.test/a.png" 1x);',
+      SCOPE
+    );
+    expect(out).not.toMatch(/image-set\s*\(/i);
+  });
+
+  it('keeps quoted values that carry no structure', () => {
+    expect(sanitizeBoardCss('.x::after { content: "★" }', SCOPE)).toContain('content: "★"');
+  });
+
   it('keeps @keyframes at top level (unscoped)', () => {
     const out = sanitizeBoardCss(
       '@keyframes spin { from { opacity: 0 } to { opacity: 1 } }',

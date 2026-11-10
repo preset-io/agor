@@ -19,6 +19,7 @@ import {
   lockRowForUpdate,
   mapBoardExportBlobToCreateData,
   runWithTenantDatabaseTransaction,
+  sanitizeImportedBoardObjects,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
@@ -629,6 +630,8 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     const resolvedBoardId = await this.resolveBoardId(boardIdentifier);
     const blob = await this.boardRepo.toBlob(resolvedBoardId);
     const boardData = mapBoardExportBlobToCreateData(blob, userId, name);
+    // Like import: a copied object that no current write would accept is left out.
+    boardData.objects = sanitizeImportedBoardObjects(boardData.objects ?? {}).objects;
     // Create board through repository (not super.create to avoid double-emit issues)
     const clonedBoard = await this.boardRepo.create(boardData);
 

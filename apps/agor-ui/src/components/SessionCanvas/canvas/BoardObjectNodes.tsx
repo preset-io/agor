@@ -481,7 +481,8 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
           height: '100%',
           border: `2px solid ${borderColor}`,
           borderRadius: token.borderRadiusLG,
-          background: backgroundColor,
+          // A color property, not the `background` shorthand, so stored values cannot load images.
+          backgroundColor,
           padding: token.padding,
           display: 'flex',
           flexDirection: 'column',

@@ -30,6 +30,7 @@ import {
   attachHiddenTenant,
   BoardCommentsRepository,
   BoardObjectRepository,
+  BoardObjectValidationError,
   BoardRepository,
   type BranchRepository,
   CapabilityPolicyRepository,
@@ -4150,6 +4151,16 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           };
           if (context.result && teammateWelcomeNoteMutated.teammateWelcomeNoteMutated) {
             emitBoardPatched(context.result, context);
+          }
+          return context;
+        },
+      ],
+    },
+    error: {
+      all: [
+        (context: HookContext<Board>) => {
+          if (context.error instanceof BoardObjectValidationError) {
+            context.error = new BadRequest(context.error.message);
           }
           return context;
         },
