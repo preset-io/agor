@@ -88,7 +88,11 @@ describe('UsersService profile read scope', () => {
       role: ROLES.ADMIN,
     });
 
-    for (const params of [caller(target, ROLES.MEMBER), caller(admin, ROLES.ADMIN)]) {
+    for (const params of [
+      caller(target, ROLES.MEMBER),
+      caller(admin, ROLES.ADMIN),
+      caller(admin, ROLES.SUPERADMIN),
+    ]) {
       const row = await service.get(target.user_id, params);
       expect(row.env_vars).toEqual({
         HUBSPOT_ACCESS_TOKEN: { set: true, scope: 'global', resource_id: null },

@@ -295,7 +295,7 @@ function canReadFullProfile(params: Params | undefined, userId: string): boolean
 }
 
 function scopeProfileForReader<T extends User>(user: T, params: Params | undefined): T {
-  // The directory entry is a strict subset; callers outside the full view get only that.
+  // Internal callers keep User; transport clients type these rows as DirectoryUser.
   return canReadFullProfile(params, user.user_id) ? user : (toUserDirectoryEntry(user) as T);
 }
 

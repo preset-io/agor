@@ -2890,9 +2890,15 @@ describe('configureRealtimePublish default-deny allowlist', () => {
       const owner = { user: user('changed-user', ROLES.MEMBER) };
       const member = { user: user('member', ROLES.MEMBER) };
       const admin = { user: user('admin', ROLES.ADMIN) };
+      // Superadmins outrank admins whether or not the superadmin bypass is enabled, as in UsersService.
+      const superadmin = { user: user('superadmin', ROLES.SUPERADMIN) };
       const service = { user: { _isServiceAccount: true, role: 'service' } };
-      const app = allowlistApp([owner, member, admin, service]);
-      configureRealtimePublish({ app, ...repos({ branch: branch('b1'), permissions: {} }) });
+      const app = allowlistApp([owner, member, admin, superadmin, service]);
+      configureRealtimePublish({
+        app,
+        allowSuperadmin: false,
+        ...repos({ branch: branch('b1'), permissions: {} }),
+      });
 
       const row = {
         user_id: 'changed-user',
@@ -2908,7 +2914,7 @@ describe('configureRealtimePublish default-deny allowlist', () => {
         params: {},
       })) as unknown as FakeChannel[];
 
-      expect(channels[0]?.connections).toEqual([owner, admin, service]);
+      expect(channels[0]?.connections).toEqual([owner, admin, superadmin, service]);
       expect(channels[0]?.data).toBeUndefined();
       expect(channels[1]?.connections).toEqual([member]);
       expect(channels[1]?.data).toEqual({ user_id: 'changed-user', name: 'Changed' });
