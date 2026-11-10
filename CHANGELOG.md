@@ -35,7 +35,7 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ## 0.28.0 (2026-11-10)
 
-Release preparation covers merged changes from `v0.27.0` (`e653dfc8`) through `d1ab1100`, plus the Claude Fable 5.2 model and runtime update in this release: [compare merged changes](https://github.com/preset-io/agor/compare/v0.27.0...d1ab1100c3eccaa03c1b4e8733915fad4a414a38). This entry does not imply publication or deployment.
+Release preparation covers merged changes from `v0.27.0` (`e653dfc8`) through `b1d39be5`, plus the Claude Fable 5.2 model and runtime update in this release: [compare merged changes](https://github.com/preset-io/agor/compare/v0.27.0...b1d39be5cdfdc82738b1c0e923360c3476e4e166). This entry does not imply publication or deployment.
 
 ### Features
 
@@ -80,6 +80,7 @@ Release preparation covers merged changes from `v0.27.0` (`e653dfc8`) through `d
 - **MCP OAuth completion is bound to its user** — only the user who started an OAuth flow can complete it, and hosted workspaces get their own callback URL. Existing grants keep their stored redirect URI. `test-oauth` no longer echoes provider resource metadata. ([#3149](https://github.com/preset-io/agor/pull/3149), [#3072](https://github.com/preset-io/agor/pull/3072))
 - **Brotli request bodies are refused** — the daemon answers `415` to `Content-Encoding: br` request bodies and warns at startup when Node is unpatched or end-of-life. ([#3170](https://github.com/preset-io/agor/pull/3170))
 - **Operator-pinned private outbound destinations** — `security.private_outbound_destinations` lets the daemon reach specific internal HTTPS hosts that the outbound private-address guard would otherwise block. Each listed host must resolve only to IPv4 addresses inside its configured private or CGNAT CIDRs, and unlisted hosts are unchanged. ([#3091](https://github.com/preset-io/agor/pull/3091))
+- **Patched dependency advisories** — DOMPurify, which the UI pulls in through Mermaid, moves to 3.4.17 (GHSA-cg2g-xh64-v4q7), and the docs site's Next.js moves to 15.5.28 (GHSA-2464-fhr4-w9xw). ([#3230](https://github.com/preset-io/agor/pull/3230))
 
 ### Breaking
 
@@ -93,10 +94,11 @@ Release preparation covers merged changes from `v0.27.0` (`e653dfc8`) through `d
 
 - **Node pins** — `.nvmrc` moves to Node 22.23.4 and CI's Node 24 pin to 24.22.1. ([#3170](https://github.com/preset-io/agor/pull/3170))
 - **agor.live site updates** — a quote section on the home page, removal of an unused hero variant, and the Agent Modeling 201 post is no longer marked Draft. These are marketing-site changes, not product changes. ([#3027](https://github.com/preset-io/agor/pull/3027), [#3025](https://github.com/preset-io/agor/pull/3025), [#3155](https://github.com/preset-io/agor/pull/3155))
+- **Dependency updates** — minor and patch updates across the workspace, including the pinned Cursor SDK (1.0.31 → 1.3.0) and the Microsoft 365 Agents SDK used by Teams (1.8.1 → 1.10.1). ([#3230](https://github.com/preset-io/agor/pull/3230))
 
 ### Upgrade
 
-This release pins Claude Agent SDK 0.3.321 (Claude Code 2.1.321) and adds three database migrations: the Teams gateway tables, branch deletion recovery, and the Knowledge namespace defaults. The Knowledge migration requires an offline cutover (see Breaking). After publication and verification of all eight npm packages, packaged installations should drain active tasks and stop every daemon on the database. They should then install `agor-live@0.28.0` and run `agor db migrate --offline-cutover --yes`, `agor install --sync` and `agor doctor`, before starting only new daemons, according to [PUBLISH.md](PUBLISH.md). Re-enable Teams channels afterwards. Agor Cloud rollout is a separate operator action, not a consequence of npm publication.
+This release pins Claude Agent SDK 0.3.321 (Claude Code 2.1.321) and Cursor SDK 1.3.0, and adds three database migrations: the Teams gateway tables, branch deletion recovery, and the Knowledge namespace defaults. The Knowledge migration requires an offline cutover (see Breaking). After publication and verification of all eight npm packages, packaged installations should drain active tasks and stop every daemon on the database. They should then install `agor-live@0.28.0` and run `agor db migrate --offline-cutover --yes`, `agor install --sync` and `agor doctor`, before starting only new daemons, according to [PUBLISH.md](PUBLISH.md). Re-enable Teams channels afterwards. Agor Cloud rollout is a separate operator action, not a consequence of npm publication.
 
 ## 0.27.0 (2026-10-13)
 
