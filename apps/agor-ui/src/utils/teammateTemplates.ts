@@ -248,6 +248,9 @@ export const TEAMMATE_TEMPLATES = [
 /** Stable source-template identifiers derived from the canonical definitions. */
 export type TeammateTemplateId = (typeof TEAMMATE_TEMPLATES)[number]['id'];
 
+/** Avatar a new teammate starts with until a template or the user sets one. */
+export const DEFAULT_TEAMMATE_EMOJI = '🤖';
+
 /**
  * The blank starter card, shown first. Kept separate from TEAMMATE_TEMPLATES so
  * it is never categorized. Its `sourceBranch` is the framework repo default; the
