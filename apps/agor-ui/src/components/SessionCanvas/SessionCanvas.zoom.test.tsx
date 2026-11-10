@@ -358,7 +358,57 @@ describe('SessionCanvas zoom shortcuts', () => {
         expect.objectContaining({
           _action: 'upsertObject',
           objectId: 'zone-1',
-          objectData: expect.objectContaining({ type: 'zone', width: 1000, height: 700 }),
+          objectData: expect.objectContaining({
+            type: 'zone',
+            x: 0,
+            y: 0,
+            width: 1000,
+            height: 700,
+          }),
+        })
+      );
+    });
+
+    it('persists the moved origin when a resize comes from the left or top edge', async () => {
+      const { client, patch } = makeClient();
+      // getNode still reports the pre-resize origin. React Flow delivers the new
+      // origin as a position change in the same batch, and applies it only after
+      // onNodesChange returns.
+      const { onNodesChange } = renderCanvas(client);
+
+      vi.useFakeTimers();
+      act(() =>
+        onNodesChange([
+          { type: 'position', id: 'zone-1', position: { x: -80, y: -40 } },
+          {
+            type: 'dimensions',
+            id: 'zone-1',
+            resizing: true,
+            dimensions: { width: 1280, height: 940 },
+          },
+        ])
+      );
+
+      expect(patch).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      vi.useRealTimers();
+
+      expect(client.service).toHaveBeenCalledWith('boards');
+      expect(patch).toHaveBeenCalledWith(
+        'board-1',
+        expect.objectContaining({
+          _action: 'upsertObject',
+          objectId: 'zone-1',
+          objectData: expect.objectContaining({
+            type: 'zone',
+            x: -80,
+            y: -40,
+            width: 1280,
+            height: 940,
+          }),
         })
       );
     });
