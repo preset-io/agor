@@ -7,3 +7,6 @@ coverage
 pnpm-lock.yaml
 .turbo
 storybook-static
+# Machine-recorded API cassettes (apps/agor-docs/demo-videos/e2e) — regenerated
+# verbatim by the record proxy; formatting them would churn every re-record.
+apps/agor-docs/demo-videos/e2e/cassettes
