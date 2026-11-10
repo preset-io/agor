@@ -464,8 +464,55 @@ describe('HA Feathers publication relay', () => {
 
     expect(app.emit).toHaveBeenCalledOnce();
     const channel = app.emit.mock.calls[0]?.[2] as FakeChannel;
-    expect(channel.connections).toEqual([member, admin]);
+    expect(new Set(channel.connections)).toEqual(new Set([member, admin]));
     expect(channel.connections).not.toContain(viewer);
+  });
+
+  it('keeps relayed user profiles inside the tenant and re-projects them per reader', async () => {
+    const member = { user: user('member', ROLES.MEMBER) };
+    const admin = { user: user('admin', ROLES.ADMIN) };
+    const otherTenantAdmin = { user: user('other-admin', ROLES.ADMIN) };
+    let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
+    const app = makeApp(
+      [member, admin, otherTenantAdmin],
+      {},
+      { 'tenant:tenant-a': [member, admin], 'tenant:tenant-b': [otherTenantAdmin] }
+    );
+    configureRealtimePublish({
+      app,
+      branchRepository: {} as never,
+      sessionsRepository: {} as never,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'unused' as never,
+        auth_claim: 'tenant_id',
+      },
+      realtimeRelay: {
+        relay: vi.fn(),
+        setRelayHandler: vi.fn((handler) => {
+          remoteHandler = handler;
+        }),
+      },
+    });
+
+    await remoteHandler?.({
+      version: REALTIME_RELAY_VERSION,
+      tenantId: 'tenant-a',
+      path: 'users',
+      event: 'patched',
+      method: 'patch',
+      id: 'changed-user',
+      data: { user_id: 'changed-user', name: 'Changed', env_vars: { NOTION_API_KEY: {} } },
+    });
+
+    const combined = app.emit.mock.calls[0]?.[2] as {
+      connections: unknown[];
+      dataFor: (connection: unknown) => unknown;
+    };
+    expect(combined.connections).toEqual([admin, member]);
+    expect(combined.connections).not.toContain(otherTenantAdmin);
+    expect(combined.dataFor(admin)).toBeUndefined();
+    expect(combined.dataFor(member)).toEqual({ user_id: 'changed-user', name: 'Changed' });
   });
 
   it('relays a branch tombstone snapshot and re-applies tenant/RBAC containment on the receiving replica', async () => {
@@ -2835,8 +2882,40 @@ describe('configureRealtimePublish default-deny allowlist', () => {
         { path: 'users', method: 'patch', event: 'patched', params: {} }
       );
 
-      expect(delivered(result)).toEqual([member, admin, service]);
+      expect(new Set(delivered(result))).toEqual(new Set([member, admin, service]));
       expect(delivered(result)).not.toContain(viewer);
+    });
+
+    it('sends the full user row only to its owner, admins and services', async () => {
+      const owner = { user: user('changed-user', ROLES.MEMBER) };
+      const member = { user: user('member', ROLES.MEMBER) };
+      const admin = { user: user('admin', ROLES.ADMIN) };
+      const service = { user: { _isServiceAccount: true, role: 'service' } };
+      const app = allowlistApp([owner, member, admin, service]);
+      configureRealtimePublish({ app, ...repos({ branch: branch('b1'), permissions: {} }) });
+
+      const row = {
+        user_id: 'changed-user',
+        name: 'Changed',
+        role: ROLES.MEMBER,
+        env_vars: { HUBSPOT_ACCESS_TOKEN: { set: true, scope: 'global', resource_id: null } },
+        avatar_source_id: 'U0SLACKID',
+      };
+      const channels = (await app.runPublish(row, {
+        path: 'users',
+        method: 'patch',
+        event: 'patched',
+        params: {},
+      })) as unknown as FakeChannel[];
+
+      expect(channels[0]?.connections).toEqual([owner, admin, service]);
+      expect(channels[0]?.data).toBeUndefined();
+      expect(channels[1]?.connections).toEqual([member]);
+      expect(channels[1]?.data).toEqual({
+        user_id: 'changed-user',
+        name: 'Changed',
+        role: ROLES.MEMBER,
+      });
     });
 
     it('enforces the board-object read-role floor after branch visibility admits a viewer', async () => {

@@ -107,6 +107,7 @@ import {
   toAgenticToolsStatus,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
+import { toUserDirectoryEntry } from '../auth/user-redaction.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveOwnerHomeStore } from '../utils/sandbox-context.js';
 import type { ClaudeUserCredentialPatchCoordinator } from './claude-credential-mutation.js';
@@ -276,6 +277,23 @@ function isServiceAccount(params: Params | undefined): boolean {
 
 function isAdmin(params: Params | undefined): boolean {
   return hasMinimumRole((params as AuthenticatedParams | undefined)?.user?.role, ROLES.ADMIN);
+}
+
+/** Transport callers see another user's full profile only as an admin or service account. */
+function canReadFullProfile(params: Params | undefined, userId: string): boolean {
+  if (
+    !params?.provider ||
+    isLocalAuthenticationLookup(params) ||
+    isAuthenticationUserLookup(params)
+  )
+    return true;
+  const callerId = (params as AuthenticatedParams).user?.user_id;
+  return callerId === userId || isServiceAccount(params) || isAdmin(params);
+}
+
+function scopeProfileForReader<T extends User>(user: T, params: Params | undefined): T {
+  // The directory entry is a strict subset; callers outside the full view get only that.
+  return canReadFullProfile(params, user.user_id) ? user : (toUserDirectoryEntry(user) as T);
 }
 
 function isSelfEmailLookup(params: Params | undefined, email: string): boolean {
@@ -827,7 +845,12 @@ export class UsersService {
     const includeAuthMetadata = shouldIncludeAuthMetadata(params, includePassword);
     const results = [];
     for (const row of pageRows) {
-      results.push(await this.rowToUser(row, includePassword, requesterId, includeAuthMetadata));
+      results.push(
+        scopeProfileForReader(
+          await this.rowToUser(row, includePassword, requesterId, includeAuthMetadata),
+          params
+        )
+      );
     }
 
     return {
@@ -854,7 +877,10 @@ export class UsersService {
     const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as
       | UserID
       | undefined;
-    return this.rowToUser(row, false, requesterId, shouldIncludeAuthMetadata(params));
+    return scopeProfileForReader(
+      await this.rowToUser(row, false, requesterId, shouldIncludeAuthMetadata(params)),
+      params
+    );
   }
 
   /**

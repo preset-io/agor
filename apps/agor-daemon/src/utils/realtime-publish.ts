@@ -36,6 +36,7 @@ import {
   type User,
   type UserID,
 } from '@agor/core/types';
+import { toUserDirectoryEntry } from '../auth/user-redaction.js';
 import {
   executorTaskRoomName,
   isExecutorTaskRoomName,
@@ -1196,6 +1197,27 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         })
         .send(redactMcpRecoveryTopology(taskData));
       delivery = [full, redacted];
+    }
+    if (context.path === 'users') {
+      // Same split as UsersService reads: full profile to its owner and admins, directory entry to others.
+      const authorizedConnections = new Set(combinePublishChannels(delivery).connections);
+      const ownerId = pickString(asRecord(data), 'user_id');
+      const seesFullProfile = (connection: unknown) =>
+        isServiceConnection(connection) ||
+        isAdminConnection(connection, allowSuperadmin) ||
+        (ownerId !== undefined && userFromConnection(connection)?.user_id === ownerId);
+      delivery = [
+        tenantScoped.filter(
+          (connection: unknown) =>
+            authorizedConnections.has(connection) && seesFullProfile(connection)
+        ),
+        tenantScoped
+          .filter(
+            (connection: unknown) =>
+              authorizedConnections.has(connection) && !seesFullProfile(connection)
+          )
+          .send(toUserDirectoryEntry(data as Partial<User>)),
+      ];
     }
     if (context.path === 'branches' && context.event === 'removed') {
       const removedBranchId = extractBranchId(data, context);

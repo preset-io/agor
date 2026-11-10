@@ -178,7 +178,8 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
   server.registerTool(
     'agor_users_get',
     {
-      description: 'Get detailed information about a specific user',
+      description:
+        'Get a user. Returns the full profile for yourself (any user for admins); other users return their public directory entry.',
       annotations: { readOnlyHint: true },
       inputSchema: z.strictObject({
         userId: mcpRequiredId('userId', 'User', 'User ID (UUIDv7 or short ID)'),

@@ -195,7 +195,7 @@ export const REALTIME_PUBLISH_POLICY = {
   users: {
     audience: 'tenant',
     minimumRole: 'member',
-    why: 'useAgorData keeps the user directory current for attribution. rowToUser computes agentic_tools_public_values PER REQUESTER (decrypted plaintext, owner only), so redactUserOwnerOnlyFieldsForBroadcast strips it from context.dispatch — the audience is tenant-wide, so the payload must carry nothing the row owner alone may see.',
+    why: 'useAgorData keeps the user directory current for attribution. rowToUser computes agentic_tools_public_values PER REQUESTER (decrypted plaintext, owner only), so redactUserOwnerOnlyFieldsForBroadcast strips it from context.dispatch — the audience is tenant-wide, so the payload must carry nothing the row owner alone may see. configureRealtimePublish then sends the full row only to its owner, admins and service connections; everyone else gets toUserDirectoryEntry.',
   },
   'mcp-servers': {
     audience: 'tenant',
