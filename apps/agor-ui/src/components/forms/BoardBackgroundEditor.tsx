@@ -15,14 +15,16 @@ import {
   theme,
 } from 'antd';
 import type { AggregationColor } from 'antd/es/color-picker/color';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { hasBoardStyling } from '../../utils/boardBackground';
-import { validateBoardCss } from '../../utils/sanitizeCss';
+import { buildScopedBoardCss, validateBoardCss } from '../../utils/sanitizeCss';
 import { FIELD_WIDTHS, SectionDivider } from '../SettingsModal/panelPrimitives';
 import { BoardBackgroundPreview } from './BoardBackgroundPreview';
 import { ANIMATION_PRESETS, BACKGROUND_PRESETS, findPresetByValue } from './boardBackgroundPresets';
 
 export type BackgroundMode = 'default' | 'preset' | 'custom';
+
+const BOARD_CSS_DROPPED_ISSUE = 'This CSS will not be applied to the board';
 
 /** Derive which editing mode a board's stored values correspond to. */
 export function deriveBackgroundMode(
@@ -121,9 +123,23 @@ export function BoardBackgroundEditor({ form, resetSignal }: BoardBackgroundEdit
     form.setFieldsValue({ background_color: value, custom_css: undefined });
   };
 
+  // The canvas drops all board CSS when the safety check rejects it; say so here.
+  const droppedEntirely = useMemo(
+    () =>
+      hasBoardStyling(bgString, customCss) &&
+      !buildScopedBoardCss({ backgroundColor: bgString, customCss, scopeClass: 'board-css-check' }),
+    [bgString, customCss]
+  );
+
   // Dedupe so the same blocked-pattern warning from both fields renders once
   // (and never produces duplicate React keys).
-  const allIssues = [...new Set([...validateBoardCss(bgString), ...validateBoardCss(customCss)])];
+  const allIssues = [
+    ...new Set([
+      ...validateBoardCss(bgString),
+      ...validateBoardCss(customCss),
+      ...(droppedEntirely ? [BOARD_CSS_DROPPED_ISSUE] : []),
+    ]),
+  ];
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>

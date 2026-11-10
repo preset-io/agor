@@ -23,7 +23,11 @@ import { boardAccessPolicies, boards as boardsTable } from '../schema';
 import { ownedDbTest as dbTest } from '../test-helpers';
 import { ArtifactRepository } from './artifacts';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
-import { BoardRepository } from './boards';
+import {
+  BoardObjectValidationError,
+  BoardRepository,
+  sanitizeImportedBoardObjects,
+} from './boards';
 import { BranchRepository } from './branches';
 import { CapabilityPolicyRepository } from './capability-policies';
 import { RepoRepository } from './repos';
@@ -1264,6 +1268,91 @@ describe('BoardRepository.upsertBoardObject', () => {
     await expect(repo.upsertBoardObject('99999999', 'text-1', textObject)).rejects.toThrow(
       EntityNotFoundError
     );
+  });
+});
+
+describe('BoardRepository board object style fields', () => {
+  const text = (fields: Record<string, unknown>) =>
+    ({ type: 'text', x: 0, y: 0, content: 'Hi', ...fields }) as unknown as BoardObject;
+
+  dbTest('rejects style fields that carry CSS text instead of values', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(createBoardData());
+    for (const fields of [
+      { fontSize: '100px; color: red' },
+      { color: 'red;}body{color:blue' },
+      { background: 'url(https://example.test/x.png)' },
+    ]) {
+      await expect(repo.upsertBoardObject(board.board_id, 't', text(fields))).rejects.toThrow(
+        BoardObjectValidationError
+      );
+    }
+    await expect(
+      repo.update(board.board_id, { objects: { t: text({ color: 'red;}' }) } })
+    ).rejects.toThrow(BoardObjectValidationError);
+    await expect(
+      repo.create(createBoardData({ objects: { t: text({ fontSize: '1em' }) } }))
+    ).rejects.toThrow(BoardObjectValidationError);
+    expect((await repo.findById(board.board_id))?.objects ?? {}).toEqual({});
+  });
+
+  dbTest('accepts plain colors and numbers', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(createBoardData());
+    const zone = {
+      type: 'zone',
+      x: 0,
+      y: 0,
+      width: 400,
+      height: 300,
+      label: 'Z',
+      borderColor: '#d9d9d9',
+      backgroundColor: 'rgba(22, 119, 255, 0.1)',
+      color: 'transparent',
+      fontSize: 18,
+    } as BoardObject;
+    const updated = await repo.upsertBoardObject(board.board_id, 'zone-1', zone);
+    expect(updated.objects?.['zone-1']).toEqual(zone);
+  });
+
+  dbTest('keeps writing a board whose stored objects predate the check', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(createBoardData());
+    const legacy = text({ color: 'var(--legacy)' });
+    const row = await select(db)
+      .from(boardsTable)
+      .where(eq(boardsTable.board_id, board.board_id))
+      .one();
+    await update(db, boardsTable)
+      .set({ data: { ...(row?.data as Record<string, unknown>), objects: { legacy } } })
+      .where(eq(boardsTable.board_id, board.board_id))
+      .run();
+    const updated = await repo.upsertBoardObject(board.board_id, 'new', text({}));
+    expect(Object.keys(updated.objects ?? {}).sort()).toEqual(['legacy', 'new']);
+    // The stored object can still move; only a changed style field is checked.
+    const moved = await repo.upsertBoardObject(board.board_id, 'legacy', { ...legacy, x: 5 });
+    expect(moved.objects?.legacy).toMatchObject({ x: 5, color: 'var(--legacy)' });
+    await expect(
+      repo.upsertBoardObject(board.board_id, 'legacy', text({ color: 'var(--other)' }))
+    ).rejects.toThrow(BoardObjectValidationError);
+  });
+
+  dbTest('writes no object of a batch that holds an unusable one', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(createBoardData());
+    await expect(
+      repo.batchUpsertBoardObjects(board.board_id, { a: text({}), b: text({ color: 'red;}' }) })
+    ).rejects.toThrow(BoardObjectValidationError);
+    expect((await repo.findById(board.board_id))?.objects ?? {}).toEqual({});
+  });
+
+  it('skips imported objects with unusable style fields', () => {
+    const { objects, skipped } = sanitizeImportedBoardObjects({
+      ok: text({ color: '#fff' }),
+      bad: text({ color: 'red;}' }),
+    });
+    expect(Object.keys(objects)).toEqual(['ok']);
+    expect(skipped).toMatchObject([{ object_id: 'bad', reason: 'invalid' }]);
   });
 });
 

@@ -481,7 +481,8 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
           height: '100%',
           border: `2px solid ${borderColor}`,
           borderRadius: token.borderRadiusLG,
-          background: backgroundColor,
+          // A color property, not the `background` shorthand, so stored values cannot load images.
+          backgroundColor,
           padding: token.padding,
           display: 'flex',
           flexDirection: 'column',
@@ -565,7 +566,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
                               width: 14,
                               height: 14,
                               borderRadius: token.borderRadiusSM,
-                              background: borderColor,
+                              backgroundColor: borderColor,
                               display: 'inline-block',
                             }}
                           />
@@ -608,7 +609,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
                               height: 14,
                               borderRadius: token.borderRadiusSM,
                               border: `1px solid ${token.colorBorder}`,
-                              background: backgroundColor,
+                              backgroundColor,
                               display: 'inline-block',
                             }}
                           />
@@ -649,7 +650,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
                         height: 9,
                         borderRadius: '50%',
                         border: `1px solid ${token.colorBorder}`,
-                        background: backgroundColor,
+                        backgroundColor,
                       }}
                     />
                   </span>

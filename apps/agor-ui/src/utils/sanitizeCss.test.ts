@@ -43,7 +43,6 @@ describe('sanitizeBoardCss', () => {
     expect(out).not.toMatch(/@import/i);
     expect(out).not.toMatch(/expression\s*\(/i);
     expect(out).not.toMatch(/javascript\s*:/i);
-    expect(out).toContain('/* blocked */');
   });
 
   it('blocks tokens hidden behind CSS comments', () => {
@@ -52,7 +51,6 @@ describe('sanitizeBoardCss', () => {
     const out = sanitizeBoardCss('background: url/**/(http://evil/x);', SCOPE);
     // No live url() token survives (the leftover URL text is inert, not fetched).
     expect(out).not.toMatch(/url\s*\(/i);
-    expect(out).toContain('/* blocked */');
   });
 
   it('blocks tokens hidden behind CSS escapes', () => {
@@ -73,13 +71,49 @@ describe('sanitizeBoardCss', () => {
     expect(typeof sanitizeBoardCss('} } {{', SCOPE)).toBe('string');
   });
 
-  it('keeps @keyframes at top level (unscoped)', () => {
+  it.each([
+    ['an unknown at-rule statement', '@x;body{color:red}'],
+    ['a grouping at-rule ended by a semicolon', '@media all;body{color:red}'],
+    ['an unterminated comment', '@media/*{;body{color:red}'],
+    ['a string holding braces', '@media "{";body{color:red}'],
+  ])('does not let %s escape the scope', (_label, css) => {
+    expect(sanitizeBoardCss(css, SCOPE)).not.toMatch(/(^|[;}]\s*)body/m);
+  });
+
+  it('drops selectors that start with a sibling combinator or refer to their parent', () => {
+    expect(sanitizeBoardCss('~ *, + div { color: red }', SCOPE)).not.toMatch(/[~+]/);
+    expect(sanitizeBoardCss('a { color: blue; :not(&) { color: red } }', SCOPE)).not.toMatch(/&/);
+  });
+
+  it('blocks image-set(), which loads images from plain strings', () => {
+    const out = sanitizeBoardCss(
+      'background: -webkit-image-set("https://x.test/a.png" 1x);',
+      SCOPE
+    );
+    expect(out).not.toMatch(/image-set\s*\(/i);
+  });
+
+  it('keeps quoted values that carry no structure', () => {
+    expect(sanitizeBoardCss('.x::after { content: "★" }', SCOPE)).toContain('content: "★"');
+  });
+
+  it('keeps @keyframes at top level, named under the board scope', () => {
     const out = sanitizeBoardCss(
       '@keyframes spin { from { opacity: 0 } to { opacity: 1 } }',
       SCOPE
     );
-    expect(out).toContain('@keyframes spin');
+    expect(out).toContain('@keyframes board-css-abc-spin');
     expect(out).not.toContain(`${SCOPE} @keyframes`);
+  });
+
+  it('keeps every query of a grouping at-rule list', () => {
+    expect(sanitizeBoardCss('@media screen, print { .x { color: red } }', SCOPE)).toContain(
+      '@media screen, print'
+    );
+  });
+
+  it('accepts a trailing @layer statement', () => {
+    expect(sanitizeBoardCss('.x { color: red } @layer a, b;', SCOPE)).toContain('@layer a, b;');
   });
 
   it('returns empty string for empty input', () => {
@@ -102,7 +136,7 @@ describe('buildScopedBoardCss', () => {
       scopeClass: 'board-x',
     });
     expect(out).toContain('.board-x {');
-    expect(out).toContain('background: linear-gradient(180deg, #000, #111);');
+    expect(out).toMatch(/background: linear-gradient\(180deg, (#000|rgb\(0, 0, 0\)),/);
   });
 
   it('appends a reduced-motion override covering the root AND descendants', () => {

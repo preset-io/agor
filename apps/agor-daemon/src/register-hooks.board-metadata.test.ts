@@ -135,3 +135,43 @@ dbTest(
     }
   }
 );
+
+dbTest(
+  'board object writes with CSS text in style fields are bad requests',
+  async ({ db: rawDb }) => {
+    const owner = await new UsersRepository(rawDb).create({
+      email: 'style-owner@example.test',
+      role: 'member',
+    });
+    const boards = new BoardRepository(rawDb);
+    const board = await boards.create({ name: 'Styles', created_by: owner.user_id });
+    const db = createTenantScopedDatabaseProxy(rawDb, { label: 'board-object-style-test' });
+    const server = await boardMetadataTestApp(db, {
+      database: { dialect: 'sqlite' },
+      multi_tenancy: { mode: 'static', static_tenant_id: 'board-object-style-test' },
+      execution: {},
+    } as RegisterHooksContext['config']);
+    const patch = (data: unknown) =>
+      fetch(`${server.url}/boards/${board.board_id}`, {
+        method: 'PATCH',
+        headers: server.headers(owner.user_id),
+        body: JSON.stringify(data),
+      });
+    const text = (color: string) => ({ type: 'text', x: 0, y: 0, content: 'Hi', color });
+    try {
+      for (const data of [
+        { _action: 'upsertObject', objectId: 't', objectData: text('red;}body{color:blue') },
+        { _action: 'batchUpsertObjects', objects: { t: text('red;}') } },
+        { objects: { t: text('red;}') } },
+      ]) {
+        const response = await patch(data);
+        expect(response.status, await response.clone().text()).toBe(400);
+      }
+      expect((await boards.findById(board.board_id))?.objects ?? {}).toEqual({});
+      const ok = await patch({ _action: 'upsertObject', objectId: 't', objectData: text('#fff') });
+      expect(ok.status, await ok.clone().text()).toBe(200);
+    } finally {
+      await server.close();
+    }
+  }
+);
