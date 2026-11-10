@@ -1189,7 +1189,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 agentic_tool={agentic_tool}
                 userById={userById}
                 currentUserId={task.created_by}
-                viewerUserId={currentUserId}
                 isTaskRunning={runtimeLive}
                 sessionId={sessionId}
                 onPermissionDecision={onPermissionDecision}

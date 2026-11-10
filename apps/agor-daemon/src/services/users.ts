@@ -787,7 +787,7 @@ export class UsersService {
    * - `email` exact lookup for authorized callers; password is included only
    *   for the internal local-authentication lookup marker
    * - `search` / `query` / `q` case-insensitive substring lookup across
-   *   name, email, and unix_username
+   *   name, email, and (for admins and service accounts) unix_username
    * - Feathers-style `$limit` / `$skip`, plus plain `limit` / `skip` /
    *   `offset` for MCP/client ergonomics
    */

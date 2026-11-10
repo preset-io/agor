@@ -69,7 +69,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
           .describe('Number of results to skip'),
         search: mcpOptionalString(
           'search',
-          'Case-insensitive search across name, email, and execution home key'
+          'Case-insensitive search across name, email, and (admins only) execution home key'
         ),
         lean: z
           .boolean()
@@ -107,13 +107,13 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       inputSchema: z.strictObject({
         search: mcpOptionalString(
           'search',
-          'Case-insensitive search across name, email, and execution home key'
+          'Case-insensitive search across name, email, and (admins only) execution home key'
         ),
         email: mcpOptionalString('email', 'Email to search for (case-insensitive substring)'),
         name: mcpOptionalString('name', 'Name to search for (case-insensitive substring)'),
         unix_username: mcpOptionalString(
           'unix_username',
-          'Execution home key to search for (case-insensitive substring)'
+          'Execution home key to search for (case-insensitive substring; admins only)'
         ),
         limit: z
           .number({ error: 'limit must be a positive integer when provided.' })
