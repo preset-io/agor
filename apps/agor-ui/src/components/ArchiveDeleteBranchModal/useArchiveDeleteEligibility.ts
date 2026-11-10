@@ -120,12 +120,17 @@ export function useArchiveDeleteEligibility(
     const branchChanged = (current: Branch) => {
       if (current.branch_id === branch.branch_id) refresh();
     };
+    const boardChanged = (patchedBoard: Board) => {
+      if (branch.board_id && patchedBoard.board_id === branch.board_id) refresh();
+    };
     client.service('repos').on('patched', repoChanged);
     client.service('branches').on('patched', branchChanged);
+    client.service('boards').on('patched', boardChanged);
     return () => {
       operation.cancel();
       client.service('repos').removeListener('patched', repoChanged);
       client.service('branches').removeListener('patched', branchChanged);
+      client.service('boards').removeListener('patched', boardChanged);
     };
   }, [
     client,
@@ -134,6 +139,7 @@ export function useArchiveDeleteEligibility(
     open,
     branch.branch_id,
     branch.repo_id,
+    branch.board_id,
     revision,
     user?.user_id,
     user?.role,

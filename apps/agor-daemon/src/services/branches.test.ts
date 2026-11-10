@@ -2472,6 +2472,234 @@ describe('BranchesService managed environment control authorization', () => {
   });
 });
 
+describe('resolveEnvironmentExecutorContext board administrator filesystem elevation', () => {
+  function paramsFor(
+    user_id: string,
+    role: 'viewer' | 'member' | 'admin' | 'superadmin' = 'member'
+  ) {
+    return {
+      provider: 'rest',
+      user: { user_id, role },
+    } as never;
+  }
+
+  type ResolveContextFn = (
+    branch: Branch,
+    params?: unknown,
+    requiredFsAccess?: 'read' | 'write',
+    options?: { allowBoardAdminElevation?: boolean }
+  ) => Promise<{
+    executionUserId: UserID;
+    branchFsAccess: 'read' | 'write';
+  }>;
+
+  async function setupElevationHarness(db: Database) {
+    const users = new UsersRepository(db);
+    const repos = new RepoRepository(db);
+    const boards = new BoardRepository(db);
+    const branches = new BranchRepository(db);
+    const policies = new CapabilityPolicyRepository(db);
+
+    const branchOwner = await users.create({
+      email: 'elevation-branch-owner@example.com',
+      role: 'member',
+    });
+    const boardOwner = await users.create({
+      email: 'elevation-board-owner@example.com',
+      role: 'member',
+    });
+    const boardManager = await users.create({
+      email: 'elevation-board-manager@example.com',
+      role: 'member',
+    });
+    const boardEditor = await users.create({
+      email: 'elevation-board-editor@example.com',
+      role: 'member',
+    });
+    const otherBoardManager = await users.create({
+      email: 'elevation-other-board-manager@example.com',
+      role: 'member',
+    });
+
+    const repo = await repos.create({
+      name: 'elevation-repo',
+      slug: 'elevation-repo',
+      repo_type: 'local',
+      local_path: '/tmp/elevation-repo',
+      default_branch: 'main',
+    });
+
+    const boardA = await boards.create({
+      name: 'Board A',
+      created_by: boardOwner.user_id,
+      access_mode: 'shared',
+    });
+    const boardB = await boards.create({
+      name: 'Board B',
+      created_by: otherBoardManager.user_id,
+      access_mode: 'shared',
+    });
+
+    const boardAPolicy = await policies.getBoardPolicies(boardA.board_id);
+    boardAPolicy.board_access.sharing_mode = 'shared';
+    boardAPolicy.board_access.entries = [
+      {
+        entry_id: generateId(),
+        principal: { principal_type: 'user', user_id: boardManager.user_id },
+        preset: 'manager',
+        capabilities: ['board.view', 'board.edit', 'board.attach_branch', 'board.policy.manage'],
+        fs_access: 'none',
+      },
+      {
+        entry_id: generateId(),
+        principal: { principal_type: 'user', user_id: boardEditor.user_id },
+        preset: 'editor',
+        capabilities: ['board.view', 'board.edit', 'board.attach_branch'],
+        fs_access: 'none',
+      },
+    ];
+    await policies.replaceBoardPolicies(boardA.board_id, boardAPolicy, boardOwner.user_id);
+
+    const branchA = await branches.create({
+      branch_id: generateId() as BranchID,
+      repo_id: repo.repo_id,
+      name: 'elevation-branch-a',
+      ref: 'elevation-branch-a',
+      path: '/tmp/elevation-repo/elevation-branch-a',
+      board_id: boardA.board_id,
+      created_by: branchOwner.user_id as UUID,
+      branch_unique_id: 9601,
+      new_branch: true,
+      permission_binding: 'override',
+      others_can: 'none',
+      others_fs_access: 'none',
+    });
+
+    const detachedBranch = await branches.create({
+      branch_id: generateId() as BranchID,
+      repo_id: repo.repo_id,
+      name: 'elevation-detached-branch',
+      ref: 'elevation-detached-branch',
+      path: '/tmp/elevation-repo/elevation-detached-branch',
+      created_by: branchOwner.user_id as UUID,
+      branch_unique_id: 9602,
+      new_branch: true,
+      permission_binding: 'override',
+      others_can: 'none',
+      others_fs_access: 'none',
+    });
+
+    const service = new BranchesService(db, {
+      get: () => ({ execution: { unix_user_mode: 'simple' } }),
+    } as unknown as Application);
+
+    const resolveContext = (
+      service as unknown as {
+        resolveEnvironmentExecutorContext: ResolveContextFn;
+      }
+    ).resolveEnvironmentExecutorContext.bind(service);
+
+    return {
+      branchOwner,
+      boardOwner,
+      boardManager,
+      boardEditor,
+      otherBoardManager,
+      boardA,
+      boardB,
+      branchA,
+      detachedBranch,
+      service,
+      resolveContext,
+    };
+  }
+
+  dbTest(
+    'Case A: grants filesystem write access to same-board administrator when elevation is enabled',
+    async ({ db }) => {
+      const h = await setupElevationHarness(db);
+
+      // Board Manager with board.policy.manage
+      const managerContext = await h.resolveContext(
+        h.branchA,
+        paramsFor(h.boardManager.user_id, 'member'),
+        'write',
+        { allowBoardAdminElevation: true }
+      );
+      expect(managerContext.branchFsAccess).toBe('write');
+      expect(managerContext.executionUserId).toBe(h.boardManager.user_id);
+
+      // Primary board owner
+      const ownerContext = await h.resolveContext(
+        h.branchA,
+        paramsFor(h.boardOwner.user_id, 'member'),
+        'write',
+        { allowBoardAdminElevation: true }
+      );
+      expect(ownerContext.branchFsAccess).toBe('write');
+      expect(ownerContext.executionUserId).toBe(h.boardOwner.user_id);
+    }
+  );
+
+  dbTest(
+    'Case B: rejects same-board administrator when elevation is false or omitted',
+    async ({ db }) => {
+      const h = await setupElevationHarness(db);
+
+      // allowBoardAdminElevation: false
+      await expect(
+        h.resolveContext(h.branchA, paramsFor(h.boardManager.user_id, 'member'), 'write', {
+          allowBoardAdminElevation: false,
+        })
+      ).rejects.toThrow(/permission required|filesystem write access required/);
+
+      // allowBoardAdminElevation omitted
+      await expect(
+        h.resolveContext(h.branchA, paramsFor(h.boardManager.user_id, 'member'), 'write')
+      ).rejects.toThrow(/permission required|filesystem write access required/);
+    }
+  );
+
+  dbTest(
+    'Case C: rejects board Editor on same board even with elevation enabled',
+    async ({ db }) => {
+      const h = await setupElevationHarness(db);
+
+      await expect(
+        h.resolveContext(h.branchA, paramsFor(h.boardEditor.user_id, 'member'), 'write', {
+          allowBoardAdminElevation: true,
+        })
+      ).rejects.toThrow(/permission required|filesystem write access required/);
+    }
+  );
+
+  dbTest(
+    'Case D: rejects administrator of another board even with elevation enabled',
+    async ({ db }) => {
+      const h = await setupElevationHarness(db);
+
+      await expect(
+        h.resolveContext(h.branchA, paramsFor(h.otherBoardManager.user_id, 'member'), 'write', {
+          allowBoardAdminElevation: true,
+        })
+      ).rejects.toThrow(/permission required|filesystem write access required/);
+    }
+  );
+
+  dbTest(
+    'Case E: rejects board administrator when branch is detached (board_id is null)',
+    async ({ db }) => {
+      const h = await setupElevationHarness(db);
+
+      await expect(
+        h.resolveContext(h.detachedBranch, paramsFor(h.boardManager.user_id, 'member'), 'write', {
+          allowBoardAdminElevation: true,
+        })
+      ).rejects.toThrow(/permission required|filesystem write access required/);
+    }
+  );
+});
+
 describe('BranchesService teammate home Knowledge namespace guard', () => {
   async function createTeammateKbHarness(db: Database) {
     const users = new UsersRepository(db);

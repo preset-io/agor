@@ -21,7 +21,7 @@ export async function isCallerBoardAdmin(
   if (!user?.user_id || !boardId) return false;
   if (user._isServiceAccount || hasMinimumRole(user.role, ROLES.ADMIN)) {
     // The bypass skips RBAC, not tenancy: a named board must resolve in caller's tenant scope.
-    const board = await boardRepository.findById(boardId).catch(() => null);
+    const board = await boardRepository.findById(boardId);
     return Boolean(board);
   }
   if (!hasMinimumRole(user.role, ROLES.MEMBER)) {
@@ -29,8 +29,11 @@ export async function isCallerBoardAdmin(
   }
   try {
     return await boardRepository.canManage(boardId, user.user_id as UUID);
-  } catch {
-    return false;
+  } catch (error) {
+    if (error instanceof EntityNotFoundError) {
+      return false;
+    }
+    throw error;
   }
 }
 

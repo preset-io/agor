@@ -489,17 +489,12 @@ dbTest(
           generateCommandToken: vi.fn().mockResolvedValue('disposable-unused-token'),
         },
       });
-      vi.spyOn(
+      const resolveContextSpy = vi.spyOn(
         fixture.service as unknown as {
           resolveEnvironmentExecutorContext: (typeof fixture.service)['resolveEnvironmentExecutorContext'];
         },
         'resolveEnvironmentExecutorContext'
-      ).mockResolvedValue({
-        env: {},
-        sandboxMounts: {},
-        executionUserId: boardAdmin.user_id,
-        branchFsAccess: 'write',
-      });
+      );
 
       // 1. Regular member cannot archive another member's branch
       const memberDenied = await fixture.call(memberKey, 'agor_branches_archive', {
@@ -587,6 +582,17 @@ dbTest(
       });
       expect(allowedCleaned.result?.isError, JSON.stringify(allowedCleaned)).not.toBe(true);
       expect((await branches.findById(branch.branch_id))?.archived).toBe(true);
+      expect(resolveContextSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ branch_id: branch.branch_id }),
+        expect.anything(),
+        'write',
+        { allowBoardAdminElevation: true }
+      );
+      const lastContext = await resolveContextSpy.mock.results.at(-1)?.value;
+      expect(lastContext).toMatchObject({
+        branchFsAccess: 'write',
+        executionUserId: boardAdmin.user_id,
+      });
     } finally {
       await fixture.close();
     }

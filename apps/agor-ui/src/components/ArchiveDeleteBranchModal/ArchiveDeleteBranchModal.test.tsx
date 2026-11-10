@@ -32,6 +32,7 @@ function fixture(enabled = false) {
     removeListener: (_event: string, listener: (value: Repo) => void) => listeners.delete(listener),
   };
   const branches = { get: vi.fn(async () => branch), on: vi.fn(), removeListener: vi.fn() };
+  const boards = { get: vi.fn(), on: vi.fn(), removeListener: vi.fn() };
   const access = {
     find: vi.fn(
       async (): Promise<EffectiveBranchAccess> => ({
@@ -42,7 +43,7 @@ function fixture(enabled = false) {
       })
     ),
   };
-  const services = { repos, branches, 'branches/:id/effective-access': access };
+  const services = { repos, branches, boards, 'branches/:id/effective-access': access };
   const client = {
     service: (path: keyof typeof services) => services[path],
   } as unknown as AgorClient;
@@ -538,7 +539,8 @@ function boardFixture(options?: {
     removeListener: (_event: string, listener: (value: Repo) => void) => listeners.delete(listener),
   };
   const branches = { get: vi.fn(async () => branch), on: vi.fn(), removeListener: vi.fn() };
-  const boardObj =
+  const boardListeners = new Set<(value: Board) => void>();
+  let boardObj =
     options?.board !== undefined
       ? options.board
       : ({
@@ -553,6 +555,22 @@ function boardFixture(options?: {
       }
       return boardObj;
     }),
+    patch: vi.fn(async (_id: string, data: Partial<Board>) => {
+      if (boardObj) {
+        boardObj = { ...boardObj, ...data };
+        for (const listener of boardListeners) listener(boardObj);
+      }
+      return boardObj;
+    }),
+    emit: (event: string, value: Board) => {
+      if (event === 'patched') {
+        for (const listener of boardListeners) listener(value);
+      }
+    },
+    on: vi.fn((_event: string, listener: (value: Board) => void) => boardListeners.add(listener)),
+    removeListener: vi.fn((_event: string, listener: (value: Board) => void) =>
+      boardListeners.delete(listener)
+    ),
   };
   const boardAccessFind = vi.fn(async () => ({
     capabilities: ['board.view', 'board.policy.manage'],
@@ -1008,5 +1026,114 @@ describe('Issue #3241: Board administrator branch archive authorization', () => 
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled()
     );
+  });
+
+  it('14. Emitting a board update event for Board A refreshes eligibility when the branch is on Board A', async () => {
+    const { client, branch, boards, boardAccess } = boardFixture({
+      board: {
+        board_id: 'board-1',
+        name: 'Test Board A',
+        primary_owner_user_id: 'board-owner-1',
+      } as Board,
+      boardAccess: { capabilities: ['board.view', 'board.policy.manage'] },
+    });
+    const user = makeUser({ user_id: 'manager-user', role: 'member' });
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={user}
+        branch={branch}
+        open
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(await screen.findByRole('button', { name: 'Archive Branch' })).toBeEnabled();
+
+    // Revoke board management rights on backend
+    boardAccess.mockResolvedValueOnce({
+      capabilities: ['board.view'],
+      fs_access: 'none',
+      source: 'group',
+      group_ids: [],
+      is_primary_owner: false,
+    });
+
+    // Emit boards:patched event for board-1
+    await act(async () => {
+      boards.emit('patched', {
+        board_id: 'board-1',
+        name: 'Test Board A Updated',
+        primary_owner_user_id: 'board-owner-1',
+      } as Board);
+    });
+
+    // Eligibility refreshes and archive button becomes disabled
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeDisabled();
+    });
+  });
+
+  it('15. Emitting a board update event for Board B does not trigger refresh when branch is on Board A', async () => {
+    const { client, branch, boards } = boardFixture({
+      board: {
+        board_id: 'board-1',
+        name: 'Test Board A',
+        primary_owner_user_id: 'board-owner-1',
+      } as Board,
+    });
+    const user = makeUser({ user_id: 'manager-user', role: 'member' });
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={user}
+        branch={branch}
+        open
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(await screen.findByRole('button', { name: 'Archive Branch' })).toBeEnabled();
+
+    const initialBoardGetCalls = boards.get.mock.calls.length;
+
+    // Emit boards:patched event for unrelated board-2
+    await act(async () => {
+      boards.emit('patched', {
+        board_id: 'board-2',
+        name: 'Unrelated Board B',
+        primary_owner_user_id: 'someone-else',
+      } as Board);
+    });
+
+    // boards.get was not called again
+    expect(boards.get.mock.calls.length).toBe(initialBoardGetCalls);
+    expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled();
+  });
+
+  it('16. The boards event listener is cleanly removed when the modal unmounts', async () => {
+    const { client, branch, boards } = boardFixture();
+    const user = makeUser({ user_id: 'manager-user', role: 'member' });
+    const { unmount } = render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={user}
+        branch={branch}
+        open
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    await screen.findByRole('button', { name: 'Archive Branch' });
+
+    expect(boards.on).toHaveBeenCalledWith('patched', expect.any(Function));
+    const registeredListener = boards.on.mock.calls.find(
+      (call: [string, unknown]) => call[0] === 'patched'
+    )?.[1];
+    expect(registeredListener).toBeDefined();
+
+    unmount();
+
+    expect(boards.removeListener).toHaveBeenCalledWith('patched', registeredListener);
   });
 });
