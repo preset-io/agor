@@ -70,7 +70,7 @@ export function useArchiveDeleteEligibility(
                   route: { id: board.board_id },
                 })) as unknown as EffectiveCapabilityPolicyAccess;
               } catch {
-                // If effective access read fails, boardAccess remains undefined.
+                boardUnavailable = true;
               }
             } else {
               boardUnavailable = true;
@@ -123,14 +123,14 @@ export function useArchiveDeleteEligibility(
     const boardChanged = (patchedBoard: Board) => {
       if (branch.board_id && patchedBoard.board_id === branch.board_id) refresh();
     };
-    client.service('repos').on('patched', repoChanged);
-    client.service('branches').on('patched', branchChanged);
-    client.service('boards').on('patched', boardChanged);
+    client.service('repos')?.on?.('patched', repoChanged);
+    client.service('branches')?.on?.('patched', branchChanged);
+    client.service('boards')?.on?.('patched', boardChanged);
     return () => {
       operation.cancel();
-      client.service('repos').removeListener('patched', repoChanged);
-      client.service('branches').removeListener('patched', branchChanged);
-      client.service('boards').removeListener('patched', boardChanged);
+      client.service('repos')?.removeListener?.('patched', repoChanged);
+      client.service('branches')?.removeListener?.('patched', branchChanged);
+      client.service('boards')?.removeListener?.('patched', boardChanged);
     };
   }, [
     client,

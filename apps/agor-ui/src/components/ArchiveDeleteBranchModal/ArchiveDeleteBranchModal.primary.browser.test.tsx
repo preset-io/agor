@@ -44,6 +44,8 @@ function mount(
         return board;
       },
       clearPrimaryTeammate: clear,
+      on: vi.fn(),
+      removeListener: vi.fn(),
     },
     'boards/:id/effective-access': {
       find: async () => {
