@@ -39,6 +39,7 @@ function makeStubClient(
     shouldFail?: boolean;
     fieldErrors?: Record<string, string>;
     envVars?: Record<string, { set: true; scope: 'global' | 'session' }>;
+    envVarsByUser?: Record<string, Record<string, { set: true; scope: 'global' | 'session' }>>;
   } = {}
 ): {
   client: AgorClient;
@@ -49,8 +50,8 @@ function makeStubClient(
     service(path: string) {
       return {
         async get(id: string) {
-          if (path === 'sessions' && id === 'sess-1') return { created_by: 'user-creator' };
           if (path === 'users' && id === 'user-creator') return { env_vars: opts.envVars ?? {} };
+          if (path === 'users') return { env_vars: opts.envVarsByUser?.[id] ?? {} };
           return {};
         },
         async create(body: unknown) {
@@ -217,7 +218,12 @@ describe('EnvVarRequestWidget — pending state', () => {
       envVars: { HUBSPOT_API_KEY: { set: true, scope: 'global' } },
     });
     renderWithApp(
-      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+      <EnvVarRequestWidget
+        message={makeMessage(widget)}
+        widget={widget}
+        client={client}
+        viewerUserId="user-creator"
+      />
     );
 
     expect(await screen.findByText('Set (encrypted)')).toBeTruthy();
@@ -248,12 +254,51 @@ describe('EnvVarRequestWidget — pending state', () => {
       envVars: { HUBSPOT_API_KEY: { set: true, scope: 'session' } },
     });
     renderWithApp(
-      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+      <EnvVarRequestWidget
+        message={makeMessage(widget)}
+        widget={widget}
+        client={client}
+        viewerUserId="user-creator"
+      />
     );
 
     expect(await screen.findByText('Set (encrypted)')).toBeTruthy();
     expect(screen.queryByLabelText(/Use saved encrypted value/i)).toBeNull();
     expect(screen.getByText(/Session-scoped saved values/i)).toBeTruthy();
+  });
+
+  it("offers the submitting viewer's saved values, not the session creator's", async () => {
+    const widget = makeWidget({
+      params: { names: ['HUBSPOT_API_KEY', 'STRIPE_SECRET_KEY'], reason: 'two integrations' },
+    });
+    const { client, calls } = makeStubClient({
+      envVars: { HUBSPOT_API_KEY: { set: true, scope: 'global' } },
+      envVarsByUser: { 'user-collaborator': { STRIPE_SECRET_KEY: { set: true, scope: 'global' } } },
+    });
+    renderWithApp(
+      <EnvVarRequestWidget
+        message={makeMessage(widget)}
+        widget={widget}
+        client={client}
+        viewerUserId="user-collaborator"
+      />
+    );
+
+    fireEvent.click(await screen.findByLabelText(/Use saved encrypted value/i));
+    expect(screen.getAllByText('Set (encrypted)')).toHaveLength(1);
+    fireEvent.change(screen.getByLabelText(/Value for HUBSPOT_API_KEY/i), {
+      target: { value: 'typed-by-collaborator' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+    expect(calls[0].body).toEqual({
+      values: { HUBSPOT_API_KEY: 'typed-by-collaborator' },
+      use_existing: ['STRIPE_SECRET_KEY'],
+      scope: 'global',
+    });
   });
 
   it('dismisses via widgets/:id/dismiss with an empty body', async () => {
@@ -370,7 +415,12 @@ describe('EnvVarRequestWidget — pending state', () => {
       envVars: { HUBSPOT_API_KEY: { set: true, scope: 'global' } },
     });
     renderWithApp(
-      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+      <EnvVarRequestWidget
+        message={makeMessage(widget)}
+        widget={widget}
+        client={client}
+        viewerUserId="user-creator"
+      />
     );
 
     fireEvent.click(await screen.findByLabelText(/Use saved encrypted value/i));

@@ -29,6 +29,8 @@ export interface WidgetComponentProps {
    * `null` if no session is active.
    */
   client: AgorClient | null;
+  /** Signed-in user answering the widget; the daemon authorizes submissions as this user. */
+  viewerUserId?: string;
 }
 
 /**
@@ -45,17 +47,14 @@ export function registerWidgetComponent(
   widgetComponents.set(type, component);
 }
 
-interface WidgetBlockProps {
-  message: Message;
-  client: AgorClient | null;
-}
+type WidgetBlockProps = Pick<WidgetComponentProps, 'message' | 'client' | 'viewerUserId'>;
 
 /**
  * Render a `type === 'widget_request'` message. Looks up the registered
  * component for `widget.widget_type`; falls back to a forward-compat
  * placeholder.
  */
-export const WidgetBlock: React.FC<WidgetBlockProps> = ({ message, client }) => {
+export const WidgetBlock: React.FC<WidgetBlockProps> = ({ message, client, viewerUserId }) => {
   const { token } = theme.useToken();
   const widget = message.metadata?.widget;
 
@@ -114,7 +113,9 @@ export const WidgetBlock: React.FC<WidgetBlockProps> = ({ message, client }) => 
     );
   }
 
-  return <Component message={message} widget={widget} client={client} />;
+  return (
+    <Component message={message} widget={widget} client={client} viewerUserId={viewerUserId} />
+  );
 };
 
 function renderStatusBadge(status: WidgetMessageMetadata['status']): React.ReactNode {

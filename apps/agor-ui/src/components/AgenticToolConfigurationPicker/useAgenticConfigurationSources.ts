@@ -8,7 +8,7 @@ import type {
   AgenticToolPreset,
   AgorClient,
   DefaultAgenticToolConfig,
-  User,
+  DirectoryUser,
 } from '@agor-live/client';
 import {
   canonicalTenantAgenticTool,
@@ -26,7 +26,7 @@ export { USER_DEFAULT_AGENTIC_CONFIGURATION, WORKSPACE_DEFAULT_AGENTIC_CONFIGURA
 
 /** Match the daemon's raw-tool-first lookup while retaining canonical fallback. */
 export function getUserAgenticToolDefault(
-  currentUser: User | null | undefined,
+  currentUser: DirectoryUser | null | undefined,
   tool: AgenticToolName
 ) {
   const canonicalTool = canonicalTenantAgenticTool(tool);
@@ -41,7 +41,7 @@ export function getUserAgenticToolDefault(
 }
 
 export function getUserDefaultConfigurationSource(
-  currentUser: User | null | undefined,
+  currentUser: DirectoryUser | null | undefined,
   tool: AgenticToolName
 ): string | undefined {
   const { selection, configuration } = getUserAgenticToolDefault(currentUser, tool);
@@ -68,7 +68,7 @@ export function summarizeAgenticConfiguration(
 interface Options {
   tool: AgenticToolName;
   client: AgorClient | null;
-  currentUser?: User | null;
+  currentUser?: DirectoryUser | null;
   allowInlineSelection?: boolean;
   preserveInlineSelection?: boolean;
 }

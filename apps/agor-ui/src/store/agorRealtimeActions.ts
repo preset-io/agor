@@ -42,11 +42,11 @@ import type {
   Branch,
   CardType,
   CardWithType,
+  DirectoryUser,
   GatewayChannel,
   MCPServer,
   Repo,
   Session,
-  User,
 } from '@agor-live/client';
 import { removeCollapsedBranchNode } from '../utils/collapsedBranchNodes';
 import { bumpRevision } from './agorHydration';
@@ -386,7 +386,7 @@ export function branchRemoved(branch: Branch) {
 }
 
 // ── Users ─────────────────────────────────────────────────────────────────--
-export function userCreated(user: User) {
+export function userCreated(user: DirectoryUser) {
   setMap('userById', (prev) => {
     if (prev.has(user.user_id)) return prev; // Already exists, shouldn't happen
     const next = new Map(prev);
@@ -394,10 +394,10 @@ export function userCreated(user: User) {
     return next;
   });
 }
-export function userPatched(user: User) {
+export function userPatched(user: DirectoryUser) {
   setMap('userById', (prev) => replaceIfChanged(prev, user.user_id, user));
 }
-export function userRemoved(user: User) {
+export function userRemoved(user: DirectoryUser) {
   setMap('userById', (prev) => {
     if (!prev.has(user.user_id)) return prev; // Doesn't exist, nothing to remove
     const next = new Map(prev);

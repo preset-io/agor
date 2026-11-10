@@ -3,6 +3,7 @@ import { EXECUTION_HOME_KEY_PATTERN } from '@agor/core/types';
 import type {
   AgorClient,
   CreateUserInput,
+  DirectoryUser,
   GatewayChannel,
   Group,
   GroupMembership,
@@ -54,7 +55,7 @@ import { UserAvatarsTab } from './UserAvatarsTab';
 import { UserSettingsModal } from './UserSettingsModal';
 
 interface UsersTableProps {
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   gatewayChannelById?: Map<string, GatewayChannel>;
   client: AgorClient | null;
   currentUser?: User | null;
@@ -107,8 +108,11 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   const isCreating = canCreateUsers && drill?.mode === 'create';
   // Edit user also drills in place of the list (embedded UserSettingsModal),
   // driven by the shell drill state so the breadcrumb + leave-guards apply.
+  // Only self or admin-viewed rows are editable, and both carry the full profile.
   const editingUser =
-    drill?.mode === 'edit' && drill.recordId ? (userById.get(drill.recordId) ?? null) : null;
+    drill?.mode === 'edit' && drill.recordId
+      ? ((userById.get(drill.recordId) as User | undefined) ?? null)
+      : null;
   // Reset the form to create defaults each time the drill-in opens.
   useEffect(() => {
     if (isCreating) {
@@ -125,11 +129,11 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     canAssignUserRole(currentUser?.role, option.value)
   );
 
-  const canEditUser = (target: User): boolean =>
+  const canEditUser = (target: DirectoryUser): boolean =>
     currentUser?.user_id === target.user_id ||
     (isAdmin && hasRoleAuthorityOver(currentUser?.role, target.role));
 
-  const canDeleteUser = (target: User): boolean =>
+  const canDeleteUser = (target: DirectoryUser): boolean =>
     !!currentUser &&
     currentUser.user_id !== target.user_id &&
     isAdmin &&
@@ -237,7 +241,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     }
   };
 
-  const getRoleColor = (role: User['role']) => {
+  const getRoleColor = (role: DirectoryUser['role']) => {
     switch (role) {
       case 'superadmin':
         return 'purple';
@@ -257,7 +261,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       title: 'User',
       dataIndex: 'email',
       key: 'email',
-      render: (email: string, user: User) => (
+      render: (email: string, user: DirectoryUser) => (
         <Space>
           <UserIdentityAvatar user={user} size={28} fontSize="20px" />
           <span>
@@ -276,18 +280,25 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         </Typography.Text>
       ),
     },
-    {
-      title: 'Role',
-      dataIndex: 'role',
-      key: 'role',
-      width: 120,
-      render: (role: User['role']) => <Tag color={getRoleColor(role)}>{role.toUpperCase()}</Tag>,
-    },
+    // The daemon returns other users' roles to admins only.
+    ...(isAdmin
+      ? [
+          {
+            title: 'Role',
+            dataIndex: 'role',
+            key: 'role',
+            width: 120,
+            render: (role: DirectoryUser['role']) => (
+              <Tag color={getRoleColor(role)}>{role?.toUpperCase()}</Tag>
+            ),
+          },
+        ]
+      : []),
     {
       title: 'Groups',
       key: 'groups',
       width: 280,
-      render: (_: unknown, user: User) => {
+      render: (_: unknown, user: DirectoryUser) => {
         const userGroupIds = groupsByUser.get(user.user_id) || [];
         if (userGroupIds.length === 0) {
           return <Typography.Text type="secondary">—</Typography.Text>;
@@ -312,7 +323,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       title: 'Actions',
       key: 'actions',
       width: 88,
-      render: (_: unknown, user: User) => {
+      render: (_: unknown, user: DirectoryUser) => {
         const showEdit = canEditUser(user);
         const showDelete = canDeleteUser(user);
         if (!showEdit && !showDelete) return null;

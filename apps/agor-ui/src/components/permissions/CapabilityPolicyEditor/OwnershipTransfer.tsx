@@ -1,4 +1,10 @@
-import type { AgorClient, OwnershipTransferResult, User, UserID } from '@agor-live/client';
+import type {
+  AgorClient,
+  DirectoryUser,
+  OwnershipTransferResult,
+  User,
+  UserID,
+} from '@agor-live/client';
 import { hasMinimumRole, OWNERSHIP_TRANSFER_SERVICES, ROLES } from '@agor-live/client';
 import { EditOutlined } from '@ant-design/icons';
 import { Alert, Button, Flex, Modal, Select, Tooltip, Typography } from 'antd';
@@ -10,7 +16,7 @@ interface OwnershipTransferProps {
   resourceId: string;
   ownerUserId: UserID;
   currentUser?: User | null;
-  users: User[];
+  users: DirectoryUser[];
   client: AgorClient | null;
   disabled?: boolean;
   onTransferred: () => void;
@@ -38,8 +44,11 @@ export function OwnershipTransfer({
       (currentUser.user_id === ownerUserId || hasMinimumRole(currentUser.role, ROLES.ADMIN))
   );
   if (!allowed) return null;
+  // Non-admins don't receive other users' roles; the daemon rejects a successor below member.
   const candidates = users.filter(
-    (user) => user.user_id !== ownerUserId && hasMinimumRole(user.role, ROLES.MEMBER)
+    (user) =>
+      user.user_id !== ownerUserId &&
+      (user.role === undefined || hasMinimumRole(user.role, ROLES.MEMBER))
   );
   const finish = () => {
     if (busy) return;
@@ -131,19 +140,24 @@ export function OwnershipTransfer({
               }
             />
           ) : (
-            <Select
-              aria-label="Successor owner"
-              placeholder="Choose a workspace member"
-              showSearch
-              optionFilterProp="label"
-              value={target}
-              disabled={busy}
-              onChange={setTarget}
-              options={candidates.map((user) => ({
-                value: user.user_id,
-                label: user.name || user.email,
-              }))}
-            />
+            <Flex vertical gap="small">
+              <Select
+                aria-label="Successor owner"
+                placeholder="Choose a workspace member"
+                showSearch
+                optionFilterProp="label"
+                value={target}
+                disabled={busy}
+                onChange={setTarget}
+                options={candidates.map((user) => ({
+                  value: user.user_id,
+                  label: user.name || user.email,
+                }))}
+              />
+              <Typography.Text type="secondary">
+                The new owner needs a member or admin role. Viewers can’t own a {kind}.
+              </Typography.Text>
+            </Flex>
           )}
           {error && <Alert type="error" showIcon description={error} />}
         </Flex>

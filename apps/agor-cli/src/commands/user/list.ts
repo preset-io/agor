@@ -55,7 +55,7 @@ export default class UserList extends BaseCommand {
           chalk.gray(idShort),
           user.email,
           user.name || chalk.gray('(not set)'),
-          roleColor(user.role),
+          roleColor(user.role ?? '—'), // Other users' roles are admin-only
           new Date(user.created_at).toLocaleDateString(),
         ]);
       }

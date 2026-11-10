@@ -1,10 +1,10 @@
 import type { CapabilityPolicyPrincipalDescriptor } from '@agor/core/types';
 import {
+  type DirectoryUser,
   type Group,
   type GroupID,
   type GroupMembership,
   shortId,
-  type User,
   type UserID,
 } from '@agor-live/client';
 import type { EffectiveAccessSubject } from './effectiveAccessPreviewModel';
@@ -14,7 +14,7 @@ const asGroupId = (value: string): GroupID => value as GroupID;
 
 /** Hydrate canonical user/group pointers for selectors and on-demand previews. */
 export function buildCapabilityPolicyDirectory(options: {
-  users: readonly User[];
+  users: readonly DirectoryUser[];
   groups: readonly Group[];
   memberships?: readonly GroupMembership[];
   requiredUserIds?: readonly (UserID | string)[];

@@ -1,4 +1,4 @@
-import type { Branch, Repo, User } from '@agor-live/client';
+import type { Branch, DirectoryUser, Repo } from '@agor-live/client';
 import { Flex, theme } from 'antd';
 import { OwnersTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
@@ -9,7 +9,7 @@ interface BranchMetadataRowProps {
   /** Leading branch pill; renders first so the metadata links flow after it. */
   children: React.ReactNode;
   /** Current branch owners (from the owners API). */
-  owners?: User[];
+  owners?: DirectoryUser[];
   /** Suppresses the owner tag when the sole owner is the current viewer. */
   currentUserId?: string;
   style?: React.CSSProperties;

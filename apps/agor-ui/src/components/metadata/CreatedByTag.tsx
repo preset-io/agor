@@ -1,4 +1,4 @@
-import type { User } from '@agor-live/client';
+import type { DirectoryUser } from '@agor-live/client';
 import type { CSSProperties } from 'react';
 import { Tag } from '../Tag';
 import { UserAvatar } from './UserAvatar';
@@ -6,7 +6,7 @@ import { UserAvatar } from './UserAvatar';
 export interface CreatedByTagProps {
   createdBy: string; // user_id
   currentUserId?: string; // logged-in user's ID
-  userById: Map<string, User>; // all users for lookup
+  userById: Map<string, DirectoryUser>; // all users for lookup
   prefix?: string; // e.g., "Created by" or "Prompted by"
   /** Merged over the tag's own styling; used where the tag renders chrome-free. */
   style?: CSSProperties;

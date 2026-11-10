@@ -3,6 +3,7 @@ import type {
   BoardCapabilityPolicies,
   BranchCapabilityPolicy,
   CapabilityPolicyWorkspacePreferences,
+  DirectoryUser,
   Group,
   GroupMembership,
   Session,
@@ -64,7 +65,7 @@ export const BoardCapabilityPolicyModalEditor: React.FC<{
   value: BoardCapabilityPolicies;
   onChange: (value: BoardCapabilityPolicies) => void;
   client: AgorClient | null;
-  users: User[];
+  users: DirectoryUser[];
   groups: Group[];
   currentUser?: User | null;
   workspacePreferences: CapabilityPolicyWorkspacePreferences;
@@ -133,7 +134,7 @@ export const BranchCapabilityPolicyModalEditor: React.FC<{
   onChange: (value: BranchCapabilityPolicy) => void;
   client: AgorClient | null;
   currentUser?: User | null;
-  users: User[];
+  users: DirectoryUser[];
   groups: Group[];
   sessions?: Session[];
   workspacePreferences: CapabilityPolicyWorkspacePreferences;

@@ -53,6 +53,15 @@ describe('UsersTable role authority', () => {
     expect(screen.queryByRole('button', { name: /new user/i })).not.toBeInTheDocument();
   });
 
+  it('lists directory entries without roles for a member and hides the Role column', () => {
+    const member = user('member', 'member');
+    const { role: _hidden, ...colleague } = user('colleague', 'admin');
+    renderTable(member, [member, colleague as User]);
+
+    expect(screen.getByText('colleague@example.test')).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Role' })).not.toBeInTheDocument();
+  });
+
   it('hides superadmin mutation actions from admins but keeps member actions', () => {
     const admin = user('admin', 'admin');
     const superadmin = user('superadmin', 'superadmin');

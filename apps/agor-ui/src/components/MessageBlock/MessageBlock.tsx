@@ -14,13 +14,13 @@ import {
   type AgorClient,
   type ContentBlock as CoreContentBlock,
   type DiffEnrichment,
+  type DirectoryUser,
   isAgenticToolName,
   type Message,
   type PermissionRequestContent,
   PermissionScope,
   PermissionStatus,
   shortId,
-  type User,
 } from '@agor-live/client';
 import {
   ClockCircleOutlined,
@@ -95,8 +95,9 @@ interface MessageBlockProps {
   message:
     | Message
     | (Message & { isStreaming?: boolean; thinkingContent?: string; isThinking?: boolean });
-  userById?: Map<string, User>;
+  userById?: Map<string, DirectoryUser>;
   currentUserId?: string;
+  viewerUserId?: string; // Signed-in user, for widgets that act as the viewer
   isTaskRunning?: boolean; // Whether the task is running (for loading state)
   agentic_tool?: string; // Agentic tool name for showing tool icon
   sessionId?: string | null;
@@ -413,8 +414,9 @@ export function hasRevealableInlineDetail(message: Message): boolean {
 //     and passed through useMemo'd AppActionsContext
 const MessageBlockInner: React.FC<MessageBlockProps> = ({
   message,
-  userById = new Map(),
+  userById = new Map<string, DirectoryUser>(),
   currentUserId,
+  viewerUserId,
   isTaskRunning = false,
   agentic_tool,
   sessionId,
@@ -495,7 +497,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   if (message.type === 'widget_request') {
     return (
       <div style={{ margin: blockMargin }}>
-        <WidgetBlock message={message} client={client} />
+        <WidgetBlock message={message} client={client} viewerUserId={viewerUserId} />
       </div>
     );
   }

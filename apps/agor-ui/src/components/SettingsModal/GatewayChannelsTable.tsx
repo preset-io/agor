@@ -40,6 +40,7 @@ import type {
   Branch,
   ChannelType,
   DefaultModelConfig,
+  DirectoryUser,
   EffortLevel,
   GatewayAgenticConfig,
   GatewayChannel,
@@ -163,7 +164,7 @@ interface GatewayChannelsTableProps {
   gatewayChannelById: Map<string, GatewayChannel>;
   /** The store's branches (targets ensured by id); only match a search against a target name. */
   branchById: Map<string, Branch>;
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   mcpServerById: Map<string, MCPServer>;
   currentUser?: User | null;
   onCreate?: (data: GatewayChannelCreateData) => void;
@@ -233,7 +234,7 @@ const PlatformIdentityFields: React.FC<{
   alignDescription: string;
   alignUsers: boolean;
   alignedContent: React.ReactNode;
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   /** Initial choice on create; aligned identity is the safer default where supported. */
   defaultAligned?: boolean;
 }> = ({
@@ -1075,7 +1076,7 @@ const SecretStatusTag: React.FC<{ stored: boolean }> = ({ stored }) =>
 const GatewayAgentConfigurationFields: React.FC<{
   client: AgorClient | null;
   currentUser: User | null | undefined;
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   mcpServerById: Map<string, MCPServer>;
   selectedAgent: AgenticToolName | null;
   onAgentChange: (agent: AgenticToolName) => void;
@@ -1494,7 +1495,7 @@ const SlackSetupWizard: React.FC<{
   client: AgorClient | null;
   currentUser: User | null | undefined;
   form: FormInstance;
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   mcpServerById: Map<string, MCPServer>;
   selectedAgent: AgenticToolName | null;
   onAgentChange: (agent: AgenticToolName) => void;
@@ -1847,7 +1848,7 @@ const DiscordSetupFields: React.FC<{
   mode: 'create' | 'edit';
   step: number;
   editingChannel?: GatewayChannel | null;
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   testResult: GatewayConnectionTestResult | null;
   testLoading: boolean;
   draftCreated?: boolean;
@@ -2434,7 +2435,7 @@ const ChannelFormFields: React.FC<{
   mode: 'create' | 'edit';
   channelType: ChannelType;
   onChannelTypeChange: (type: ChannelType) => void;
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   mcpServerById: Map<string, MCPServer>;
   selectedAgent: AgenticToolName | null;
   onAgentChange: (agent: AgenticToolName) => void;

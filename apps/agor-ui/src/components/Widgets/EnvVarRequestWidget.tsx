@@ -16,7 +16,7 @@
  *   - already_present  ✓ NAME already configured
  */
 
-import type { AgorClient, EnvVarScope, Message, WidgetMessageMetadata } from '@agor-live/client';
+import type { AgorClient, EnvVarScope, WidgetMessageMetadata } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   LockOutlined,
@@ -207,12 +207,12 @@ const VarRow: React.FC<VarRowProps> = ({
 
 interface PendingFormProps {
   widgetId: string;
-  message: Message;
   params: EnvVarsParams;
   client: AgorClient | null;
+  viewerUserId?: string;
 }
 
-const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, client }) => {
+const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client, viewerUserId }) => {
   const { token } = theme.useToken();
   const { showSuccess, showInfo } = useThemedMessage();
   const classifyFailure = useWidgetReplay<LocalResolution>();
@@ -247,17 +247,14 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, cl
     let cancelled = false;
 
     const loadExisting = async () => {
-      if (!client) return;
-      const session = (await client.service('sessions').get(message.session_id)) as {
-        created_by?: string;
-      };
-      if (!session.created_by) return;
-      const creator = (await client.service('users').get(session.created_by)) as {
+      if (!client || !viewerUserId) return;
+      // The daemon resolves "use saved value" against the submitter, so offer the viewer's own.
+      const viewer = (await client.service('users').get(viewerUserId)) as {
         env_vars?: Record<string, EnvVarExistingStatus>;
       };
       const next: Record<string, EnvVarExistingStatus> = {};
       for (const name of orderedNames) {
-        const existing = creator.env_vars?.[name];
+        const existing = viewer.env_vars?.[name];
         if (existing?.set) next[name] = existing;
       }
       if (!cancelled) setExistingByName(next);
@@ -270,7 +267,7 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, cl
     return () => {
       cancelled = true;
     };
-  }, [client, message.session_id, orderedNames]);
+  }, [client, viewerUserId, orderedNames]);
 
   const allFilled = useMemo(
     () => orderedNames.every((name) => useExisting[name] || values[name]?.trim().length > 0),
@@ -602,9 +599,9 @@ const AlreadyPresentSummary: React.FC<{ widget: WidgetMessageMetadata }> = ({ wi
 };
 
 export const EnvVarRequestWidget: React.FC<WidgetComponentProps> = ({
-  message,
   widget,
   client,
+  viewerUserId,
 }) => {
   const params = readParams(widget);
   const widgetId = widget.widget_id as unknown as string;
@@ -617,7 +614,14 @@ export const EnvVarRequestWidget: React.FC<WidgetComponentProps> = ({
     case 'already_present':
       return <AlreadyPresentSummary widget={widget} />;
     default:
-      return <PendingForm widgetId={widgetId} message={message} params={params} client={client} />;
+      return (
+        <PendingForm
+          widgetId={widgetId}
+          params={params}
+          client={client}
+          viewerUserId={viewerUserId}
+        />
+      );
   }
 };
 

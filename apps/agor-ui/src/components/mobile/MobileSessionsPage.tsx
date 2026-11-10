@@ -1,4 +1,11 @@
-import type { AgorClient, Branch, Session, SpawnConfig, User } from '@agor-live/client';
+import type {
+  AgorClient,
+  Branch,
+  DirectoryUser,
+  Session,
+  SpawnConfig,
+  User,
+} from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { Button, Empty, List, Segmented, Spin, theme } from 'antd';
 import { useMemo } from 'react';
@@ -19,7 +26,7 @@ type SessionScope = 'yours' | 'assistant';
 interface MobileSessionsPageProps {
   sessionById: Map<string, Session>;
   branchById: Map<string, Branch>;
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   sessionsByBranch: Map<string, Session[]>;
   currentUser?: User | null;
   client: AgorClient | null;

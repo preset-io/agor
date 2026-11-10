@@ -1,4 +1,4 @@
-import type { AgorClient, BoardID, User } from '@agor-live/client';
+import type { AgorClient, BoardID, DirectoryUser, User } from '@agor-live/client';
 import { theme } from 'antd';
 import { useMemo } from 'react';
 import { useViewport } from 'reactflow';
@@ -29,7 +29,7 @@ export interface StaticRemoteCursor {
 interface RemoteCursorLayerProps {
   client: AgorClient | null;
   boardId: BoardID | null;
-  users: User[];
+  users: DirectoryUser[];
   enabled?: boolean;
   /** Demo/screenshot-only override: render fixed cursors without socket presence. */
   staticCursors?: StaticRemoteCursor[];

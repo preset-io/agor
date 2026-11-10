@@ -5,7 +5,7 @@
  * Compact, read-only design focused on quick context ("what is this session?")
  */
 
-import type { Branch, Repo, Session, User } from '@agor-live/client';
+import type { Branch, DirectoryUser, Repo, Session } from '@agor-live/client';
 import { FolderOutlined } from '@ant-design/icons';
 import { Space, Typography, theme } from 'antd';
 import type React from 'react';
@@ -22,7 +22,7 @@ export interface SessionMetadataCardProps {
   session: Session;
   branch?: Branch;
   repo?: Repo;
-  userById?: Map<string, User>;
+  userById?: Map<string, DirectoryUser>;
   currentUserId?: string;
   compact?: boolean; // Always true for popover use case
 }
@@ -31,7 +31,7 @@ export const SessionMetadataCard: React.FC<SessionMetadataCardProps> = ({
   session,
   branch,
   repo,
-  userById = new Map(),
+  userById = new Map<string, DirectoryUser>(),
   currentUserId,
   compact = true,
 }) => {
