@@ -276,13 +276,20 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         </Typography.Text>
       ),
     },
-    {
-      title: 'Role',
-      dataIndex: 'role',
-      key: 'role',
-      width: 120,
-      render: (role: User['role']) => <Tag color={getRoleColor(role)}>{role.toUpperCase()}</Tag>,
-    },
+    // The daemon returns other users' roles to admins only.
+    ...(isAdmin
+      ? [
+          {
+            title: 'Role',
+            dataIndex: 'role',
+            key: 'role',
+            width: 120,
+            render: (role: User['role']) => (
+              <Tag color={getRoleColor(role)}>{role.toUpperCase()}</Tag>
+            ),
+          },
+        ]
+      : []),
     {
       title: 'Groups',
       key: 'groups',

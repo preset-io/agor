@@ -17,6 +17,8 @@ const PRIVATE_PROFILE_FIELDS = [
   'avatar_source_id',
   'must_change_password',
   'onboarding_completed',
+  'role',
+  'unix_username',
 ] as const;
 
 function caller(user: Pick<User, 'user_id' | 'email'>, role: UserRole): AuthenticatedParams {
@@ -33,6 +35,8 @@ async function seedTarget(service: UsersService): Promise<User> {
     avatar_source: 'slack',
     avatar_source_id: 'U0SLACKID',
     must_change_password: true,
+    role: ROLES.ADMIN,
+    unix_username: 'tgtkey',
   });
   await service.patch(target.user_id, {
     env_vars: { HUBSPOT_ACCESS_TOKEN: 'hubspot-canary' },
@@ -90,6 +94,8 @@ describe('UsersService profile read scope', () => {
         HUBSPOT_ACCESS_TOKEN: { set: true, scope: 'global', resource_id: null },
       });
       expect(row).toMatchObject({
+        role: ROLES.ADMIN,
+        unix_username: 'tgtkey',
         avatar_source_id: 'U0SLACKID',
         must_change_password: true,
         primary_agentic_tool: 'codex',
@@ -111,5 +117,29 @@ describe('UsersService profile read scope', () => {
     const row = await service.get(target.user_id as UserID, caller(viewer, ROLES.VIEWER));
     expect(row).not.toHaveProperty('env_vars');
     expect(row.name).toBe('Target');
+  });
+
+  dbTest('does not let a member search by hidden fields', async ({ db }) => {
+    const service = new UsersService(db);
+    const target = await seedTarget(service);
+    const member = await service.create({
+      email: 'member@example.com',
+      password: 'test-password-1234',
+    });
+    const admin = await service.create({
+      email: 'admin@example.com',
+      password: 'test-password-1234',
+      role: ROLES.ADMIN,
+    });
+    const search = (params: AuthenticatedParams, term: string) =>
+      service.find({ ...params, query: { search: term } });
+
+    expect((await search(caller(member, ROLES.MEMBER), 'tgtkey')).total).toBe(0);
+    expect((await search(caller(member, ROLES.MEMBER), 'target@')).data[0]?.user_id).toBe(
+      target.user_id
+    );
+    expect((await search(caller(admin, ROLES.ADMIN), 'tgtkey')).data[0]?.user_id).toBe(
+      target.user_id
+    );
   });
 });

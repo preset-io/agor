@@ -28,7 +28,9 @@ export const UserAvatar: React.FC<UserAvatarProps> = ({
   const { token } = theme.useToken();
 
   return (
-    <Tooltip title={`${user.name || user.email} (${user.role})`}>
+    <Tooltip
+      title={user.role ? `${user.name || user.email} (${user.role})` : user.name || user.email}
+    >
       <Space size={4}>
         <UserIdentityAvatar user={user} size={sizes.avatar} fontSize={`${sizes.font}px`} />
         {showName && (

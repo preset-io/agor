@@ -279,16 +279,19 @@ function isAdmin(params: Params | undefined): boolean {
   return hasMinimumRole((params as AuthenticatedParams | undefined)?.user?.role, ROLES.ADMIN);
 }
 
-/** Transport callers see another user's full profile only as an admin or service account. */
-function canReadFullProfile(params: Params | undefined, userId: string): boolean {
-  if (
+/** Transport callers see every user's full profile only as an admin or service account. */
+function canReadAllProfiles(params: Params | undefined): boolean {
+  return (
     !params?.provider ||
     isLocalAuthenticationLookup(params) ||
-    isAuthenticationUserLookup(params)
-  )
-    return true;
-  const callerId = (params as AuthenticatedParams).user?.user_id;
-  return callerId === userId || isServiceAccount(params) || isAdmin(params);
+    isAuthenticationUserLookup(params) ||
+    isServiceAccount(params) ||
+    isAdmin(params)
+  );
+}
+
+function canReadFullProfile(params: Params | undefined, userId: string): boolean {
+  return canReadAllProfiles(params) || (params as AuthenticatedParams).user?.user_id === userId;
 }
 
 function scopeProfileForReader<T extends User>(user: T, params: Params | undefined): T {
@@ -824,8 +827,10 @@ export class UsersService {
 
     if (search) {
       const needle = search.toLowerCase();
+      // Only fields the caller may read are searchable, so matches cannot reveal hidden ones.
+      const searchesExecutionHome = canReadAllProfiles(params);
       rows = rows.filter((row) =>
-        [row.name, row.email, row.unix_username].some((value) =>
+        [row.name, row.email, searchesExecutionHome ? row.unix_username : null].some((value) =>
           (value ?? '').toLowerCase().includes(needle)
         )
       );

@@ -2911,11 +2911,7 @@ describe('configureRealtimePublish default-deny allowlist', () => {
       expect(channels[0]?.connections).toEqual([owner, admin, service]);
       expect(channels[0]?.data).toBeUndefined();
       expect(channels[1]?.connections).toEqual([member]);
-      expect(channels[1]?.data).toEqual({
-        user_id: 'changed-user',
-        name: 'Changed',
-        role: ROLES.MEMBER,
-      });
+      expect(channels[1]?.data).toEqual({ user_id: 'changed-user', name: 'Changed' });
     });
 
     it('enforces the board-object read-role floor after branch visibility admits a viewer', async () => {

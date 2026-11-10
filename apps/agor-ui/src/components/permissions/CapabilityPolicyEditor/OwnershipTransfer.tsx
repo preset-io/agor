@@ -38,8 +38,11 @@ export function OwnershipTransfer({
       (currentUser.user_id === ownerUserId || hasMinimumRole(currentUser.role, ROLES.ADMIN))
   );
   if (!allowed) return null;
+  // Non-admins don't receive other users' roles; the daemon rejects a successor below member.
   const candidates = users.filter(
-    (user) => user.user_id !== ownerUserId && hasMinimumRole(user.role, ROLES.MEMBER)
+    (user) =>
+      user.user_id !== ownerUserId &&
+      (user.role === undefined || hasMinimumRole(user.role, ROLES.MEMBER))
   );
   const finish = () => {
     if (busy) return;

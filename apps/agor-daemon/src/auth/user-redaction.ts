@@ -6,8 +6,6 @@ const USER_DIRECTORY_FIELDS = [
   'email',
   'name',
   'emoji',
-  'role',
-  'unix_username',
   'avatar_url',
   'avatar',
   'avatar_source',
@@ -22,8 +20,9 @@ export type UserDirectoryEntry = Partial<Pick<User, (typeof USER_DIRECTORY_FIELD
 /**
  * Project a user to what callers other than the user and admins may read.
  *
- * Credential inventory (`env_vars`, `agentic_*`), defaults, external identity
- * links and account state stay with the owner and admins. `use_slack_avatar`
+ * Role, execution home key, credential inventory (`env_vars`, `agentic_*`),
+ * defaults, external identity links and account state stay with the owner and
+ * admins. Email stays because attribution and pickers fall back to it. `use_slack_avatar`
  * is kept because avatar rendering honours it for every viewer.
  */
 export function toUserDirectoryEntry(user: Partial<User>): UserDirectoryEntry {
