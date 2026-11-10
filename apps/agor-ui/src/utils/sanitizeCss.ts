@@ -269,12 +269,23 @@ function renameBoardKeyframes(
   for (const rule of keyframes) rule.name = renamed.get(rule.name) ?? rule.name;
   for (const style of declarations) {
     const names = style.getPropertyValue('animation-name');
-    if (!names) continue;
-    const next = names
-      .split(',')
-      .map((name) => renamed.get(name.trim().replace(/^["']|["']$/g, '')) ?? name.trim())
-      .join(', ');
-    style.setProperty('animation-name', next, style.getPropertyPriority('animation-name'));
+    if (names && !names.includes('var(')) {
+      const next = names
+        .split(',')
+        .map((name) => renamed.get(name.trim().replace(/^["']|["']$/g, '')) ?? name.trim())
+        .join(', ');
+      style.setProperty('animation-name', next, style.getPropertyPriority('animation-name'));
+      continue;
+    }
+    // A value with var() stays unresolved until computed, so rename its matching idents in place.
+    for (const property of ['animation', 'animation-name']) {
+      const value = style.getPropertyValue(property);
+      if (!value.includes('var(')) continue;
+      const next = value.replace(/(^|[\s,(])([A-Za-z_][\w-]*)(?=$|[\s,)])/g, (match, lead, name) =>
+        renamed.has(name) ? `${lead}${renamed.get(name)}` : match
+      );
+      style.setProperty(property, next, style.getPropertyPriority(property));
+    }
   }
 }
 

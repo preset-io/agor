@@ -83,6 +83,13 @@ describe('sanitizeBoardCss in a real CSS parser', () => {
     expect(getComputedStyle(inside).color).toBe(MARKED);
   });
 
+  it('runs board keyframes referenced from an animation that uses var()', () => {
+    const { inside } = render(
+      '@keyframes spin { from, to { color: red } } .x { --d: 1s; animation: spin var(--d) infinite paused }'
+    );
+    expect(getComputedStyle(inside).color).toBe(MARKED);
+  });
+
   it.each(ANIMATION_PRESETS.map((preset) => [preset.label, preset.value]))(
     'runs the %s animation preset under its board-scoped keyframes',
     (_label, css) => {

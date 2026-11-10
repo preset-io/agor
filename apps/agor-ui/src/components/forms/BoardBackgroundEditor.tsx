@@ -24,8 +24,7 @@ import { ANIMATION_PRESETS, BACKGROUND_PRESETS, findPresetByValue } from './boar
 
 export type BackgroundMode = 'default' | 'preset' | 'custom';
 
-const BOARD_CSS_DROPPED_ISSUE =
-  'This CSS will not be applied: it has rules that could style outside the board';
+const BOARD_CSS_DROPPED_ISSUE = 'This CSS will not be applied to the board';
 
 /** Derive which editing mode a board's stored values correspond to. */
 export function deriveBackgroundMode(
