@@ -92,6 +92,14 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
 
       const foreignTask = sign(tenantA, a.sessionId, a.userId as UserID, b.taskId);
       expect(await validateSessionToken(app, foreignTask)).toBeNull();
+
+      // The task lookup itself is tenant-scoped, independent of the session binding.
+      const ownedIn = (tenant: string, task: typeof a) =>
+        runWithTenantDatabaseScope(db, tenant, (scoped) =>
+          new TaskRepository(scoped).isOwnedByLiveExecutor(task.taskId, task.sessionId)
+        );
+      expect(await ownedIn(tenantB, b)).toBe(true);
+      expect(await ownedIn(tenantA, b)).toBe(false);
     });
   }
 );

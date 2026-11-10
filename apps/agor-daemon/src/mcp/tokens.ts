@@ -317,6 +317,9 @@ export type McpTokenRejectionReason =
   | 'missing_identity'
   | 'missing_lifetime';
 
+/** Server-state rejections, decided after the token itself verified. */
+export type McpTokenStateRejection = 'session_missing' | 'task_not_live';
+
 type McpTokenVerification =
   | { context: McpTokenContext; reason?: never }
   | { context: null; reason: McpTokenRejectionReason };
@@ -403,19 +406,22 @@ export function verifySessionToken(app: Application, token: string): McpTokenCon
  */
 export async function validateVerifiedSessionToken(
   context: McpTokenContext
-): Promise<McpTokenContext | null> {
+): Promise<
+  { context: McpTokenContext; reason?: never } | { context: null; reason: McpTokenStateRejection }
+> {
   const s = requireState();
-  const { taskId } = context;
-  const valid = await runWithTenantContext(context.tenantId, () =>
-    runWithTenantDatabaseScope(
-      s.db,
-      context.tenantId,
-      async () =>
-        (await s.sessionRepo.exists(context.sessionId)) &&
-        (!taskId || (await s.taskRepo.isOwnedByLiveExecutor(taskId)))
-    )
+  const { sessionId, taskId } = context;
+  const reason = await runWithTenantContext(context.tenantId, () =>
+    runWithTenantDatabaseScope(s.db, context.tenantId, async () => {
+      if (!(await s.sessionRepo.exists(sessionId))) return 'session_missing' as const;
+      // Tokens from older releases carry no task and keep their exp-bounded lifetime.
+      if (taskId && !(await s.taskRepo.isOwnedByLiveExecutor(taskId, sessionId))) {
+        return 'task_not_live' as const;
+      }
+      return undefined;
+    })
   );
-  return valid ? context : null;
+  return reason ? { context: null, reason } : { context };
 }
 
 /**
@@ -433,5 +439,5 @@ export async function validateSessionToken(
   if (expectedTenantId && expectedTenantId !== context.tenantId) {
     return null;
   }
-  return validateVerifiedSessionToken(context);
+  return (await validateVerifiedSessionToken(context)).context;
 }

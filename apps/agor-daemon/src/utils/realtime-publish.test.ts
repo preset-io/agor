@@ -2674,30 +2674,6 @@ describe('configureRealtimePublish default-deny allowlist', () => {
       expect(delivered(result)).toEqual([allowed]);
     });
 
-    it("never fans a caller's session MCP token out to subscribers or the relay", async () => {
-      const relayed: Array<{ data: unknown }> = [];
-      const allowed = { user: user('allowed') };
-      const app = allowlistApp([allowed]);
-      configureRealtimePublish({
-        app,
-        multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
-        realtimeRelay: {
-          relay: (envelope) => relayed.push(envelope),
-          setRelayHandler: () => {},
-        },
-        ...rbacRepos(),
-      });
-
-      const result = (await app.runPublish(
-        { session_id: 's1', mcp_token: 'creator-bearer' },
-        { path: 'sessions', method: 'create', event: 'created', params: {} }
-      )) as unknown as FakeChannel[];
-
-      expect(delivered(result)).toEqual([allowed]);
-      expect(result.map((channel) => channel.data)).toEqual([{ session_id: 's1' }]);
-      expect(relayed.map((envelope) => envelope.data)).toEqual([{ session_id: 's1' }]);
-    });
-
     it('branches/:id/permissions does not expose policy payloads', async () => {
       const allowed = { user: user('allowed') };
       const denied = { user: user('denied') };

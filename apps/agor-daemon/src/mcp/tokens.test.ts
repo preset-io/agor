@@ -38,6 +38,7 @@ import {
   MCP_TOKEN_ISSUER,
   shutdownMcpTokens,
   validateSessionToken,
+  validateVerifiedSessionToken,
   verifySessionTokenDetailed,
 } from './tokens.js';
 
@@ -513,6 +514,36 @@ describe('task-bound tokens', () => {
     expect(
       await validateSessionToken(makeApp(), await mintForTask(sessionId, task.task_id))
     ).toBeNull();
+  });
+
+  dbTest("rejects a token bound to another session's live task", async ({ db }) => {
+    initTestMcpTokens(db);
+    const sessionId = await seedSession(db);
+    const otherSessionId = await seedSession(db);
+    const otherTask = await seedTask(db, otherSessionId);
+
+    expect(
+      await validateSessionToken(makeApp(), await mintForTask(sessionId, otherTask.task_id))
+    ).toBeNull();
+  });
+
+  dbTest('names why server state refused a verified token', async ({ db }) => {
+    initTestMcpTokens(db);
+    const sessionId = await seedSession(db);
+    const task = await seedTask(db, sessionId);
+    const verified = (token: string) => verifySessionTokenDetailed(makeApp(), token).context!;
+    const live = verified(await mintForTask(sessionId, task.task_id));
+
+    await new TaskRepository(db).update(task.task_id, { status: TaskStatus.COMPLETED });
+    expect(await validateVerifiedSessionToken(live)).toEqual({
+      context: null,
+      reason: 'task_not_live',
+    });
+    await deleteFrom(db, sessions).where(eq(sessions.session_id, sessionId)).run();
+    expect(await validateVerifiedSessionToken(live)).toEqual({
+      context: null,
+      reason: 'session_missing',
+    });
   });
 
   dbTest('never serves one task a token cached for another', async ({ db }) => {
