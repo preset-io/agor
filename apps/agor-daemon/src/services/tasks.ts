@@ -41,6 +41,8 @@ import {
   type TaskTerminationCoordinationClaimInput,
   type TaskTerminationCoordinationClaimResult,
   type TenantScopeAwareDatabase,
+  type TerminalCleanupClaimInput,
+  type TerminalCleanupSettlementInput,
   type TerminationClaimInput,
   type TerminationClaimResult,
   type TerminationSettlementInput,
@@ -695,6 +697,24 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     params?: TaskParams
   ): Promise<Task | null> {
     const task = await this.taskRepo.beginCleanupAttempt(taskId, claimToken);
+    if (task) await this.publishRecoveryTask(task, params);
+    return task;
+  }
+
+  async beginTerminalCleanup(
+    input: TerminalCleanupClaimInput,
+    params?: TaskParams
+  ): Promise<Task | null> {
+    const task = await this.taskRepo.beginTerminalCleanup(input);
+    if (task) await this.publishRecoveryTask(task, params);
+    return task;
+  }
+
+  async finishTerminalCleanup(
+    input: TerminalCleanupSettlementInput,
+    params?: TaskParams
+  ): Promise<Task | null> {
+    const task = await this.taskRepo.finishTerminalCleanup(input);
     if (task) await this.publishRecoveryTask(task, params);
     return task;
   }
