@@ -31,7 +31,7 @@ export const SessionMetadataCard: React.FC<SessionMetadataCardProps> = ({
   session,
   branch,
   repo,
-  userById = new Map(),
+  userById = new Map<string, DirectoryUser>(),
   currentUserId,
   compact = true,
 }) => {

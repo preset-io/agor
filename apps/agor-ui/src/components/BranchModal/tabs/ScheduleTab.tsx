@@ -138,7 +138,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   client,
   mcpServerById = new Map(),
   currentUser,
-  userById = new Map(),
+  userById = new Map<string, DirectoryUser>(),
   onOpenSession,
   onDraftChange,
 }) => {

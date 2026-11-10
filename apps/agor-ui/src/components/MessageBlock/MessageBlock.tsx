@@ -414,7 +414,7 @@ export function hasRevealableInlineDetail(message: Message): boolean {
 //     and passed through useMemo'd AppActionsContext
 const MessageBlockInner: React.FC<MessageBlockProps> = ({
   message,
-  userById = new Map(),
+  userById = new Map<string, DirectoryUser>(),
   currentUserId,
   viewerUserId,
   isTaskRunning = false,
