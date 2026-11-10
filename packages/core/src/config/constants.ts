@@ -205,8 +205,8 @@ export const GIT = {
 export const MCP_TOKEN = {
   /**
    * Default lifetime for internal MCP session tokens in milliseconds.
-   * Keep short to bound the blast radius of a leaked token — there is no
-   * revocation mechanism; `exp` is the only backstop.
+   * Keep short to bound a leaked token; task executor tokens also stop
+   * authenticating when their task ends.
    */
   DEFAULT_EXPIRATION_MS: 24 * 60 * 60 * 1000, // 24 hours
 } as const;

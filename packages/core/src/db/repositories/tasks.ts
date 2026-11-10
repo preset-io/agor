@@ -1532,6 +1532,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     return { outcome: 'authorized' as const, observedAt: access.observed_at };
   }
 
+  /** Whether a connected executor still owns this Task and no Stop has been requested. */
+  async isOwnedByLiveExecutor(id: TaskID): Promise<boolean> {
+    const row = await select(this.db).from(tasks).where(eq(tasks.task_id, id)).one();
+    return !!row && executorOwnsTask(row) && !row.data.termination_request;
+  }
+
   /** No heartbeat/lease write can be used to authorize retrieval of a provider bearer. */
   async assertRuntimeCredentialAuthority(
     id: TaskID,

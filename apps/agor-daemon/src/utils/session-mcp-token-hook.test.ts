@@ -7,12 +7,19 @@ import {
   RepoRepository,
   sessions,
   shortId,
+  TaskRepository,
 } from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
-import type { Session, SessionID } from '@agor/core/types';
+import { type Session, type SessionID, TaskStatus } from '@agor/core/types';
+import express from 'express';
 import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect } from 'vitest';
 import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
+import {
+  EXECUTOR_SESSION_TOKEN_PURPOSE,
+  EXECUTOR_SESSION_TOKEN_TYPE,
+} from '../auth/executor-session-token.js';
+import { setupMCPRoutes } from '../mcp/server.js';
 import { initMcpTokens, shutdownMcpTokens } from '../mcp/tokens.js';
 import { createSessionMcpTokenAfterHooks } from './session-mcp-token-hook.js';
 
@@ -125,6 +132,81 @@ describe('sessions MCP-token after hook', () => {
       role: 'member',
     });
   });
+
+  dbTest(
+    'binds a task executor token to its task so /mcp refuses it after the task ends',
+    async ({ db }) => {
+      initMcpTokens({ db, multiTenancy: resolveMultiTenancyConfig({}) });
+      const session = await seedSession(db);
+      const tasks = new TaskRepository(db);
+      const task = await tasks.create({
+        session_id: session.session_id,
+        created_by: 'test-user',
+        status: TaskStatus.RUNNING,
+        executor_connected_at: new Date().toISOString(),
+      });
+      const app = makeApp(session);
+      const user = { user_id: 'test-user', role: 'member' };
+      const executorParams = {
+        user,
+        provider: 'socketio',
+        authentication: {
+          strategy: 'jwt',
+          payload: {
+            type: EXECUTOR_SESSION_TOKEN_TYPE,
+            purpose: EXECUTOR_SESSION_TOKEN_PURPOSE,
+            session_id: session.session_id,
+            task_id: task.task_id,
+          },
+        },
+      };
+      const executorToken = (
+        (await app.service('sessions').get(session.session_id, executorParams as never)) as Session
+      ).mcp_token!;
+      const memberToken = (
+        (await app.service('sessions').get(session.session_id, { user } as never)) as Session
+      ).mcp_token!;
+      expect((jwt.decode(executorToken) as { tsk?: string }).tsk).toBe(task.task_id);
+      expect((jwt.decode(memberToken) as { tsk?: string }).tsk).toBeUndefined();
+
+      const web = express();
+      web.use(express.json());
+      web.set('authentication', { secret: JWT_SECRET });
+      Object.assign(web, {
+        service: (name: string) =>
+          name === 'users'
+            ? { get: async () => ({ ...user, email: 'u@example.com' }) }
+            : app.service(name),
+      });
+      setupMCPRoutes(web as never, db, false);
+      const server = web.listen(0, '127.0.0.1');
+      await new Promise<void>((resolve) => server.once('listening', resolve));
+      try {
+        const { port } = server.address() as { port: number };
+        const listTools = (token: string) =>
+          fetch(`http://127.0.0.1:${port}/mcp`, {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json, text/event-stream',
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+          }).then(async (response) => {
+            await response.text();
+            return response.status;
+          });
+
+        expect(await listTools(executorToken)).toBe(200);
+        await tasks.update(task.task_id, { status: TaskStatus.COMPLETED });
+        expect(await listTools(executorToken)).toBe(401);
+        // Interactive caller tokens are not task-bound and keep their session-scoped lifetime.
+        expect(await listTools(memberToken)).toBe(200);
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    }
+  );
 
   dbTest(
     'attaches a default-static token through executor/background Feathers sessions.get',

@@ -387,6 +387,14 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+/** A session's MCP token belongs to its caller's response, never to subscribers or the relay. */
+function sessionWithoutMcpToken(path: string | undefined, data: unknown): unknown {
+  const record = path === 'sessions' ? asRecord(data) : null;
+  if (!record || !('mcp_token' in record)) return data;
+  const { mcp_token: _mcpToken, ...session } = record;
+  return session;
+}
+
 function pickString(obj: Record<string, unknown> | null, ...keys: string[]): string | undefined {
   if (!obj) return undefined;
   for (const key of keys) {
@@ -1160,6 +1168,11 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         channel.send(stripWidgetSlackConnectDelivery(messageData))
       );
     }
+    const sessionData = sessionWithoutMcpToken(context.path, data);
+    if (sessionData !== data) {
+      const channels = Array.isArray(delivery) ? delivery : [delivery];
+      delivery = channels.map((channel) => channel.send(sessionData));
+    }
     const taskData = data as Task | undefined;
     if (
       context.path === 'tasks' &&
@@ -1235,7 +1248,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
           : context.dispatch !== undefined
             ? context.dispatch
             : data;
-      const relayData = safeRelayData(dispatchedData);
+      const relayData = safeRelayData(sessionWithoutMcpToken(context.path, dispatchedData));
       if (relayData !== undefined) {
         const removedBranchId = extractBranchId(relayData, context) as BranchID | undefined;
         const removalVisibility = removedBranchId

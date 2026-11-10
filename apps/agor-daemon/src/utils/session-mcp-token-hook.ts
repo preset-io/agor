@@ -1,6 +1,7 @@
 import type { AgorConfig } from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
-import type { AuthenticatedParams, HookContext, Session, UserID } from '@agor/core/types';
+import type { AuthenticatedParams, HookContext, Session, TaskID, UserID } from '@agor/core/types';
+import { authenticatedTaskExecutorRuntimeScope } from '../auth/executor-runtime-scope.js';
 import { generateSessionToken } from '../mcp/tokens.js';
 import { canReceiveMcpTokenForSession } from './mcp-token-authorization.js';
 
@@ -20,8 +21,10 @@ export interface SessionMcpTokenAfterHooksOptions
  * Build the shared sessions after:get / after:create MCP-token hook.
  *
  * Token issuance owns tenant binding semantics; this hook owns only caller
- * authorization and response enrichment. Keeping both session paths on this
- * function prevents request and background fetch behavior from drifting.
+ * authorization and response enrichment. A task executor's token is bound to
+ * its task, so it stops authenticating once that task's executor is done.
+ * Keeping both session paths on this function prevents request and background
+ * fetch behavior from drifting.
  */
 export function createSessionMcpTokenHook(options: SessionMcpTokenHookOptions) {
   return async (context: HookContext): Promise<HookContext> => {
@@ -46,7 +49,15 @@ export function createSessionMcpTokenHook(options: SessionMcpTokenHookOptions) {
     }
 
     const session = context.result as Session;
-    const mcpToken = await generateSessionToken(options.app, session.session_id, userId as UserID);
+    const taskId = authenticatedTaskExecutorRuntimeScope(context.params)?.taskId as
+      | TaskID
+      | undefined;
+    const mcpToken = await generateSessionToken(
+      options.app,
+      session.session_id,
+      userId as UserID,
+      taskId
+    );
 
     context.result = { ...session, mcp_token: mcpToken };
     options.onAttached?.(session);

@@ -520,17 +520,27 @@ tenant-scoped units of work.
 MCP session tokens are short-lived JWTs (aud `agor:mcp:internal`) embedding
 the session (`sub`), authenticated caller (`uid`), tenant (`tid`), a
 per-issuance ID (`jti`), and an expiry (`exp`). A still-valid token may be
-reused from a cache keyed by tenant, session, and user; otherwise `GET
+reused from a cache keyed by tenant, session, user, and task; otherwise `GET
 /sessions/:id` or `POST /sessions` mints a new one.
 
-There is no revocation mechanics, no per-jti ledger, no session-generation
-counter. The authorised blast radius of a leak is bounded by `exp` (default
-24h). Validation additionally rejects tokens whose session has been deleted
-from the signed tenant. Tokens issued before the tenant binding was introduced
-are rejected and are replaced the next time the session is fetched or created.
-These session tokens are for daemon-to-executor use; external clients should
-use personal API keys rather than treating this JWT format as a general-purpose
-authentication protocol.
+A token handed to an agent's executor is also bound to that executor's task.
+It stops working as soon as the task completes, fails, or is stopped, so an
+agent keeps its Agor tools for the whole turn but a copied token does not
+outlive it. The next turn receives a fresh token.
+
+Every `/mcp` request also re-checks, from current server state, that the
+session still exists in the signed tenant, that the user still exists (and,
+with [one-time launch auth](/guide/one-time-launch-auth), is still a member),
+and that the user can still read the session's branch. There is no
+per-token denylist; otherwise a token lasts until `exp` (default 24h). Agor
+does not store MCP tokens: they are minted for each caller and returned only
+in that caller's `GET`/`POST /sessions` response, never in realtime session
+events. A token saved by an older release is ignored on read and removed the
+next time its session's settings or state are updated. Tokens issued before the tenant binding
+was introduced are rejected and are replaced the next time the session is
+fetched or created. These session tokens are for daemon-to-executor use;
+external clients should use personal API keys rather than treating this JWT
+format as a general-purpose authentication protocol.
 
 ### Access gating
 
