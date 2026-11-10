@@ -332,7 +332,8 @@ daemon sends a JSON `POST` with the same bearer credential as the exchange:
 ```
 
 `subject` is the launch assertion `sub` the session signed in with, and
-`tenant_id` comes only from the daemon's signed refresh token. `instance_id` is
+`tenant_id` comes only from the daemon's signed refresh token or MCP session
+token, or from the tenant a personal API key verified under. `instance_id` is
 sent only when configured. A current member gets a `200` with
 `{ "assertion": "<signed JWT>" }`, built from current membership. It is verified
 like a launch assertion and must also carry `purpose: "session_revalidation"`;
@@ -372,14 +373,35 @@ open one until it expires, so about 75 minutes in all. During an issuer outage a
 removal can't be seen: refreshes continue for up to the hour of grace, and a
 socket opened at its end lasts one more hour, so about two hours at worst. With `identity.role_authority: claims`, a demotion applies at the next refresh.
 On an install that also allows local sign-in, a refused member can still sign in
-with a password, and each such session lasts until its first refresh is refused. The
+with a password, and each such session lasts until a refresh is refused or a later
+refusal of one of their personal API keys or MCP session tokens ends it. The
 absolute lifetime still applies to every launched session, and closes any socket
 still open at that deadline.
 
-These bounds cover browser sessions. A request that authenticates directly with
-a personal API key (REST, CLI, or MCP) doesn't contact the issuer, so direct key use
-by someone who never refreshes isn't covered: the key keeps working until a refresh
-for that user is refused or its owner deletes it.
+Direct use of a personal API key (REST, CLI, or MCP) is checked against the same
+endpoint. For an account with a launch identity at this issuer, each daemon asks
+once the user's last check is 15 minutes old, or after a minute if the issuer
+couldn't answer. A refusal has the same effect as one at refresh, so a removal stops the
+key within 15 minutes while the issuer is reachable, and a role change applies at
+the same check. Browser tokens signed in with a key before that refusal follow
+the browser-session bounds above. On PostgreSQL, a service call runs in a database
+transaction and doesn't wait for a due check: it uses the last known answer (or
+proceeds, if there is none), so it can still succeed while the check runs. If the
+issuer can't answer, the key keeps working for up to one hour after that daemon
+last confirmed the user; after that, requests return a retryable `503` and the
+key is kept. That confirmation is held in memory, so a daemon that restarts during
+an outage returns the `503` straight away. The issuer is never asked about keys
+on accounts with no launch identity at this issuer. A response the daemon can't
+accept, such as a bad signature or the wrong subject or tenant, rejects the key
+until a retry a minute later. A daemon that saw a refusal keeps rejecting that
+user's keys and MCP session tokens for 15 minutes, even after they launch again,
+and after that until the issuer next confirms the user.
+
+The session tokens agents use for MCP take the same check, so a refusal rejects
+them too. These tokens are checked per daemon, with no durable record of a
+refusal. So during an issuer outage a token keeps working until it expires unless
+the daemon handling it has already seen a refusal, and a running agent keeps its
+tools.
 
 ## Compatibility and upgrade notes
 

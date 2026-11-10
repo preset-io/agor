@@ -75,6 +75,20 @@ describe('ApiKeyStrategy tenant propagation', () => {
     expect(isAuthenticationUserLookup(params)).toBe(false);
   });
 
+  it('checks membership in the key row tenant when the request carries none', async () => {
+    const strategy = new ApiKeyStrategy();
+    const apiKeysRepo = {
+      verifyKey: vi.fn(async () => ({ id: 'key-1', user_id: 'user-1', tenant_id: 'tenant-a' })),
+      updateLastUsed: vi.fn(async () => undefined),
+    };
+    const usersService = { get: vi.fn(async () => ({ user_id: 'user-1' })) };
+    const check = vi.fn(async () => 'allowed' as const);
+    strategy.setDependencies(apiKeysRepo as never, usersService as never, db);
+    strategy.setMembershipCheck(check);
+    await strategy.authenticate({ apiKey: 'agor_sk_test' }, {});
+    expect(check).toHaveBeenCalledWith({ tenantId: 'tenant-a', userId: 'user-1' });
+  });
+
   it.each([
     ['key row', { id: 'key-1', user_id: 'user-1', tenant_id: 'tenant-b' }, 'tenant-a'],
     ['owning user', { id: 'key-1', user_id: 'user-1', tenant_id: 'tenant-a' }, 'tenant-b'],

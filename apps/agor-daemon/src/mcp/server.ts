@@ -45,6 +45,7 @@ import { createMcpHandler, type ListToolsResult, McpServer } from '@modelcontext
 import type { Request, Response } from 'express';
 import { toJSONSchema } from 'zod/v4-mini';
 import { createApiKeyHostTenantResolver } from '../auth/api-key-host-tenant.js';
+import type { ApiKeyMembershipCheck } from '../auth/api-key-membership-check.js';
 import type { AuthenticatedParams, AuthenticatedUser } from '../declarations.js';
 import type { McpPromptProvenanceStamp } from '../utils/prompt-provenance.js';
 import { createMcpAuthRejectionLogger } from './auth-rejection-log.js';
@@ -445,7 +446,7 @@ export function setupMCPRoutes(
   config: Pick<AgorConfig, 'multi_tenancy' | 'metrics' | 'external_launch'> = {
     multi_tenancy: undefined,
   },
-  options: { serverVersion?: string } = {}
+  options: { serverVersion?: string; apiKeyMembershipCheck?: ApiKeyMembershipCheck } = {}
 ): void {
   const serverVersion = options.serverVersion ?? '0.0.0';
   const tracing = createMcpTracing(config.metrics?.apm?.trace_services ?? 'off');
@@ -681,6 +682,30 @@ export function setupMCPRoutes(
           });
         }
 
+        if (options.apiKeyMembershipCheck) {
+          const outcome = await options.apiKeyMembershipCheck({
+            tenantId: tenant.tenant_id,
+            userId: keyRow.user_id as UserID,
+          });
+          if (outcome === 'unavailable') {
+            return res.status(503).json({
+              ...jsonRpcError(req, -32000, 'Account check is temporarily unavailable'),
+            });
+          }
+          if (outcome === 'rejected') {
+            logAuthRejection(
+              'invalid_personal_key',
+              req.method,
+              credentialSource,
+              req.body,
+              req.headers[MCP_CLIENT_HINT_HEADER]
+            );
+            return res.status(401).json({
+              ...jsonRpcError(req, -32001, 'Invalid personal API key'),
+            });
+          }
+        }
+
         void runWithTenantContext(tenant.tenant_id, () =>
           runWithTenantDatabaseScope(db, tenant.tenant_id, () =>
             personalApiKeys.updateLastUsed(keyRow.id)
@@ -752,6 +777,24 @@ export function setupMCPRoutes(
 
         userId = context.userId;
         sessionId = context.sessionId;
+
+        // An outage leaves a token nobody refused working until it expires, so a running agent keeps its tools.
+        const membership = await options.apiKeyMembershipCheck?.({
+          tenantId: tenant.tenant_id,
+          userId,
+        });
+        if (membership === 'rejected') {
+          logAuthRejection(
+            'session_missing',
+            req.method,
+            credentialSource,
+            req.body,
+            req.headers[MCP_CLIENT_HINT_HEADER]
+          );
+          return res.status(401).json({
+            ...jsonRpcError(req, -32001, 'Invalid or expired session token'),
+          });
+        }
 
         try {
           authenticatedUser = await runWithTenantContext(tenant.tenant_id, () =>

@@ -10,6 +10,7 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import type { ApiKeyMembershipCheck } from '../auth/api-key-membership-check.js';
 import { createUsersService } from '../services/users.js';
 import { buildRegistry, coerceJsonRecord, setupMCPRoutes } from './server.js';
 import { initMcpTokens, MCP_TOKEN_AUDIENCE, MCP_TOKEN_ISSUER } from './tokens.js';
@@ -529,7 +530,8 @@ describe('POST /mcp with personal API keys', () => {
     fn: (baseUrl: string) => Promise<void>,
     config: Parameters<typeof setupMCPRoutes>[3] = { multi_tenancy: undefined },
     toolSearchEnabled = false,
-    serverVersion = 'test-product-version'
+    serverVersion = 'test-product-version',
+    apiKeyMembershipCheck?: ApiKeyMembershipCheck
   ) {
     const webApp = express();
     webApp.use(express.json());
@@ -540,7 +542,10 @@ describe('POST /mcp with personal API keys', () => {
       return svc;
     };
 
-    setupMCPRoutes(webApp as never, testSqliteDb(), toolSearchEnabled, config, { serverVersion });
+    setupMCPRoutes(webApp as never, testSqliteDb(), toolSearchEnabled, config, {
+      serverVersion,
+      apiKeyMembershipCheck,
+    });
 
     const httpServer = webApp.listen(0);
     try {
@@ -564,6 +569,47 @@ describe('POST /mcp with personal API keys', () => {
       error?: { message: string };
     };
   }
+
+  it.each([
+    { outcome: 'rejected' as const, status: 401, message: 'Invalid personal API key' },
+    {
+      outcome: 'unavailable' as const,
+      status: 503,
+      message: 'Account check is temporarily unavailable',
+    },
+  ])(
+    'stops a personal API key when the membership check is $outcome',
+    async ({ outcome, status, message }) => {
+      await mockPersonalApiKeyUser();
+      const check = vi.fn(async () => outcome);
+      const get = vi.fn();
+      await withMcpServer(
+        { users: { get } },
+        async (baseUrl) => {
+          const resp = await fetch(`${baseUrl}/mcp`, {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json, text/event-stream',
+              'Content-Type': 'application/json',
+              'X-API-Key': 'agor_sk_valid',
+            },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 201, method: 'tools/list' }),
+          });
+          expect(resp.status).toBe(status);
+          expect((await resp.json()) as unknown).toMatchObject({ error: { message } });
+        },
+        { multi_tenancy: undefined },
+        false,
+        'test-product-version',
+        check
+      );
+      expect(check).toHaveBeenCalledWith({
+        tenantId: expect.any(String),
+        userId: 'user-1',
+      });
+      expect(get).not.toHaveBeenCalled();
+    }
+  );
 
   it.each([
     { search: false, facade: false },
@@ -757,6 +803,69 @@ describe('POST /mcp with personal API keys', () => {
           error: { message: 'Invalid or expired session token' },
         });
       });
+    }
+  );
+
+  it.each([
+    { outcome: 'rejected' as const, status: 401, userLookups: 0 },
+    { outcome: 'unavailable' as const, status: 200, userLookups: 1 },
+  ])(
+    'answers $status for a session token when the membership check is $outcome',
+    async ({ outcome, status, userLookups }) => {
+      initMcpTokens({ db: testSqliteDb(), multiTenancy: resolveMultiTenancyConfig({}) });
+      vi.spyOn(SessionRepository.prototype, 'exists').mockResolvedValue(true);
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const now = Math.floor(Date.now() / 1000);
+      const token = jwt.sign(
+        {
+          sub: 'session-for-member',
+          uid: 'user-1',
+          tid: 'default',
+          aud: MCP_TOKEN_AUDIENCE,
+          iss: MCP_TOKEN_ISSUER,
+          iat: now,
+          exp: now + 60,
+          jti: `membership-${outcome}`,
+        },
+        'mcp-server-test-secret',
+        { algorithm: 'HS256' }
+      );
+      const check = vi.fn(async () => outcome);
+      const getUser = vi.fn(async () => ({
+        user_id: 'user-1',
+        email: 'alice@example.com',
+        role: 'member',
+      }));
+      await withMcpServer(
+        {
+          users: { get: getUser },
+          sessions: {
+            get: vi.fn(async () => ({
+              session_id: 'session-for-member',
+              agentic_tool: 'claude-code',
+              branch_id: 'branch-1',
+            })),
+          },
+        },
+        async (baseUrl) => {
+          const resp = await fetch(`${baseUrl}/mcp`, {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json, text/event-stream',
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 202, method: 'tools/list' }),
+          });
+          expect(resp.status).toBe(status);
+        },
+        { multi_tenancy: undefined },
+        false,
+        'test-product-version',
+        check
+      );
+      expect(check).toHaveBeenCalledWith({ tenantId: 'default', userId: 'user-1' });
+      expect(getUser).toHaveBeenCalledTimes(userLookups);
     }
   );
 

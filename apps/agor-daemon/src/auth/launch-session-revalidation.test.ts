@@ -18,6 +18,11 @@ import {
 import type { InternalUser, User, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  API_KEY_MEMBERSHIP_CHECK_INTERVAL_MS,
+  API_KEY_MEMBERSHIP_RETRY_MS,
+  createApiKeyMembershipCheck,
+} from './api-key-membership-check.js';
 import { ApiKeyStrategy } from './api-key-strategy.js';
 import { finalizeAuthenticatedConnectionAuthority } from './authenticated-connection-authority.js';
 import { createIssueBrowserTokensHook } from './issue-browser-tokens-hook.js';
@@ -26,6 +31,7 @@ import {
   createLaunchProjectionSerializer,
   createLaunchSessionRevalidator,
   LAUNCH_REVALIDATION_OUTAGE_GRACE_SECONDS,
+  LaunchMembershipRefusedError,
   launchSessionsAreRevalidated,
   resolveLaunchConnectionBounds,
 } from './launch-auth.js';
@@ -204,6 +210,7 @@ describe('refresh-time launch membership revalidation', () => {
     const params = { tenant: { tenant_id: 'tenant-a' } };
     return {
       keys,
+      strategy,
       authenticate: (apiKey: string) => strategy.authenticate({ apiKey }, params),
       signIn: async (apiKey: string) => {
         const result = await strategy.authenticate({ apiKey }, params);
@@ -284,6 +291,152 @@ describe('refresh-time launch membership revalidation', () => {
     await expect(keys.listByUser(signedIn.user.user_id)).resolves.toEqual([]);
     await expect(authenticate(rawKey)).rejects.toThrow(/Invalid API key/);
     await expect(signIn(rawKey)).rejects.toThrow(/Invalid API key/);
+  });
+
+  describe('direct personal API key use', () => {
+    async function keyHolder(state: { exchange: string; revalidate: RevalidationHandler }) {
+      const fetchMock = stubIssuer(state);
+      const all = services();
+      const signedIn = await all.launch.create({ launchCode: 'code' });
+      const { keys, authenticate, strategy, signIn } = apiKeySignIn(all.usersService);
+      strategy.setMembershipCheck(
+        createApiKeyMembershipCheck({ revalidate: all.revalidateLaunchSession! })
+      );
+      const { rawKey } = await keys.create(signedIn.user.user_id, 'laptop');
+      const issuerCalls = () =>
+        fetchMock.mock.calls.filter(([url]) => url === REVALIDATION_URL).length;
+      return { all, signedIn, keys, authenticate, signIn, rawKey, issuerCalls };
+    }
+
+    const member = () => ({
+      exchange: assertion(),
+      revalidate: (() => Response.json({ assertion: revalidation() })) as RevalidationHandler,
+    });
+    const refused = () => Response.json({ error: 'membership_inactive' }, { status: 403 });
+    const down = () => new Response('bad gateway', { status: 502 });
+
+    it('cuts off a removed user who never refreshes', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        vi.setSystemTime(Date.parse('2026-06-01T10:00:00Z'));
+        const state = member();
+        const { signedIn, keys, authenticate, signIn, rawKey, issuerCalls } =
+          await keyHolder(state);
+
+        await expect(authenticate(rawKey)).resolves.toMatchObject({
+          authentication: { strategy: 'api-key' },
+        });
+        expect(issuerCalls()).toBe(1);
+
+        state.revalidate = refused;
+        // Inside the interval the key still works, and the issuer isn't asked again.
+        vi.advanceTimersByTime(API_KEY_MEMBERSHIP_CHECK_INTERVAL_MS - 1);
+        await expect(authenticate(rawKey)).resolves.toBeDefined();
+        expect(issuerCalls()).toBe(1);
+
+        vi.advanceTimersByTime(1);
+        await expect(authenticate(rawKey)).rejects.toMatchObject({
+          name: 'NotAuthenticated',
+          message: 'Invalid API key',
+        });
+        await expect(keys.listByUser(signedIn.user.user_id)).resolves.toEqual([]);
+        expect(invalidated).toHaveBeenCalledWith('tenant-a', signedIn.user.user_id);
+        // The same fence as a refresh refusal: browser tokens stop working too.
+        const row = await select(db)
+          .from(users)
+          .where(eq(users.user_id, signedIn.user.user_id))
+          .one();
+        expect(row?.credential_generation).toBe(1);
+        await expect(signIn(rawKey)).rejects.toThrow(/Invalid API key/);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('refuses to mint browser tokens for a removed user on first use', async () => {
+      const state = member();
+      const { signIn, rawKey } = await keyHolder(state);
+      state.revalidate = refused;
+      await expect(signIn(rawKey)).rejects.toThrow(/Invalid API key/);
+    });
+
+    it('applies a demotion from the issuer to the request that found it', async () => {
+      const state = member();
+      const { signedIn, authenticate, rawKey } = await keyHolder(state);
+      expect(signedIn.user.role).toBe('admin');
+      state.revalidate = () => Response.json({ assertion: revalidation({ role: 'member' }) });
+      await expect(authenticate(rawKey)).resolves.toMatchObject({ user: { role: 'member' } });
+      expect(invalidated).toHaveBeenCalledWith('tenant-a', signedIn.user.user_id);
+    });
+
+    it('allows the outage grace after a confirmation, then returns a retryable 503', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        const start = Date.parse('2026-06-01T10:00:00Z');
+        vi.setSystemTime(start);
+        const state = member();
+        const { signedIn, keys, authenticate, rawKey } = await keyHolder(state);
+        await authenticate(rawKey);
+
+        state.revalidate = down;
+        vi.setSystemTime(start + API_KEY_MEMBERSHIP_CHECK_INTERVAL_MS);
+        await expect(authenticate(rawKey)).resolves.toBeDefined();
+
+        vi.setSystemTime(start + LAUNCH_REVALIDATION_OUTAGE_GRACE_SECONDS * 1000);
+        await expect(authenticate(rawKey)).rejects.toMatchObject({ code: 503 });
+        // An outage never costs the user their key, and it recovers on its own.
+        await expect(keys.listByUser(signedIn.user.user_id)).resolves.toHaveLength(1);
+        state.revalidate = () => Response.json({ assertion: revalidation() });
+        vi.advanceTimersByTime(API_KEY_MEMBERSHIP_RETRY_MS);
+        await expect(authenticate(rawKey)).resolves.toBeDefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('returns 503 when the issuer has never confirmed the user on this replica', async () => {
+      const state = member();
+      const { authenticate, rawKey } = await keyHolder(state);
+      state.revalidate = down;
+      await expect(authenticate(rawKey)).rejects.toMatchObject({ code: 503 });
+    });
+
+    it('marks only a membership refusal as one', async () => {
+      const state = member();
+      const { all } = await keyHolder(state);
+      const payload = {
+        sub: 'x',
+        tenant_id: 'tenant-a',
+        [AUTH_LAUNCH_SUBJECT_CLAIM]: 'user:cloud-1',
+      };
+      const revalidate = (userId: UserID) =>
+        all.revalidateLaunchSession!({ userId, payload }).catch((error: unknown) => error);
+      const row = await select(db).from(users).one();
+      const userId = row?.user_id as UserID;
+
+      state.revalidate = () => Response.json({ assertion: 'not-a-jwt' });
+      const badResponse = await revalidate(userId);
+      expect(badResponse).toMatchObject({ name: 'NotAuthenticated' });
+      expect(badResponse).not.toBeInstanceOf(LaunchMembershipRefusedError);
+
+      state.revalidate = refused;
+      await expect(revalidate(userId)).resolves.toBeInstanceOf(LaunchMembershipRefusedError);
+    });
+
+    it('leaves keys of accounts with no launch identity alone', async () => {
+      const state = member();
+      const { keys, authenticate, issuerCalls } = await keyHolder(state);
+      const localId = 'local-user-1' as UserID;
+      await executeRaw(
+        db,
+        sql`INSERT INTO users (user_id, email, password, name, role, created_at, data) VALUES (${localId}, 'local@example.test', 'x', 'Local', 'member', ${Date.now()}, '{}')`
+      );
+      const { rawKey: localKey } = await keys.create(localId, 'laptop');
+      state.revalidate = refused;
+      await expect(authenticate(localKey)).resolves.toMatchObject({ user: { user_id: localId } });
+      expect(issuerCalls()).toBe(0);
+      await expect(keys.listByUser(localId)).resolves.toHaveLength(1);
+    });
   });
 
   it('skips the user write when the assertion changes nothing and keeps last_login_at', async () => {

@@ -10,9 +10,10 @@ import {
   type TenantScopeAwareDatabase,
   type UserApiKeysRepository,
 } from '@agor/core/db';
-import { AuthenticationBaseStrategy, NotAuthenticated } from '@agor/core/feathers';
-import { isUserApiKeySource, PERSONAL_API_KEY_PREFIX } from '@agor/core/types';
+import { AuthenticationBaseStrategy, NotAuthenticated, Unavailable } from '@agor/core/feathers';
+import { isUserApiKeySource, PERSONAL_API_KEY_PREFIX, type UserID } from '@agor/core/types';
 import { markAuthenticationUserLookup } from '../services/users.js';
+import type { ApiKeyMembershipCheck } from './api-key-membership-check.js';
 import { isSocketIoHandshakeRequest } from './socket-handshake-request.js';
 
 export class ApiKeyStrategy extends AuthenticationBaseStrategy {
@@ -20,6 +21,7 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
   private db: TenantScopeAwareDatabase | null = null;
   // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
   private usersService: any = null;
+  private membershipCheck: ApiKeyMembershipCheck | undefined;
 
   setDependencies(
     apiKeysRepo: UserApiKeysRepository,
@@ -30,6 +32,11 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
     this.apiKeysRepo = apiKeysRepo;
     this.usersService = usersService;
     this.db = db;
+  }
+
+  /** Set only on installs that re-check launched users with their issuer. */
+  setMembershipCheck(check: ApiKeyMembershipCheck | undefined) {
+    this.membershipCheck = check;
   }
 
   // biome-ignore lint/suspicious/noExplicitAny: Feathers type compatibility
@@ -61,6 +68,18 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
     const keyTenantId = (keyRow as { tenant_id?: unknown }).tenant_id;
     if (requestTenantId && typeof keyTenantId === 'string' && keyTenantId !== requestTenantId) {
       throw new NotAuthenticated('Invalid API key');
+    }
+
+    // Runs before the user lookup so a role change from a check this request waited for applies to it.
+    if (this.membershipCheck) {
+      const outcome = await this.membershipCheck({
+        tenantId: requestTenantId ?? (typeof keyTenantId === 'string' ? keyTenantId : undefined),
+        userId: keyRow.user_id as UserID,
+      });
+      if (outcome === 'unavailable') {
+        throw new Unavailable('Account check is temporarily unavailable');
+      }
+      if (outcome === 'rejected') throw new NotAuthenticated('Invalid API key');
     }
 
     // Update last_used_at (non-blocking)
