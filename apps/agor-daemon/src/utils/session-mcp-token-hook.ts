@@ -23,6 +23,8 @@ export function createSessionMcpTokenHook(options: SessionMcpTokenHookOptions) {
   return async (context: HookContext): Promise<HookContext> => {
     if (options.config.daemon?.mcpEnabled === false) return context;
 
+    // Internal re-reads may carry an executor's params, and their results can be broadcast.
+    if (!context.params.provider) return context;
     const session = context.result as Session;
     // Only a task executor reading its own session receives a token, bound to that task.
     const scope = authenticatedTaskExecutorRuntimeScope(context.params);

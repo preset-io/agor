@@ -133,6 +133,19 @@ describe('sessions MCP-token after hook', () => {
     expect(claims).toMatchObject({ tid: 'default', tsk: task.task_id });
   });
 
+  dbTest('returns no token to an internal re-read that carries executor params', async ({ db }) => {
+    initMcpTokens({ db, multiTenancy: resolveMultiTenancyConfig({}) });
+    const session = await seedSession(db);
+    const task = await seedRunningTask(db, session);
+    const internal = { ...executorParams(session, task.task_id), provider: undefined };
+
+    expect(
+      await makeApp(session)
+        .service('sessions')
+        .get(session.session_id, internal as never)
+    ).not.toHaveProperty('mcp_token');
+  });
+
   dbTest("returns no token for a session other than the executor's own", async ({ db }) => {
     initMcpTokens({ db, multiTenancy: resolveMultiTenancyConfig({}) });
     const own = await seedSession(db);

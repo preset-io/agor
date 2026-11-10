@@ -118,6 +118,7 @@ dbTest(
       });
       return {
         user,
+        provider: 'socketio',
         authentication: {
           strategy: 'jwt',
           payload: {

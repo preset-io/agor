@@ -540,6 +540,51 @@ describe('setupQuery - live MCP reprojection', () => {
     vi.useRealTimers();
   });
 
+  it('applies a refresh queued during startup after the startup sets, never before', async () => {
+    let connectAgor!: (value: unknown) => void;
+    const setMcpServers = vi.fn((servers: Record<string, unknown>) =>
+      Object.keys(servers).join() === 'agor'
+        ? new Promise((resolve) => {
+            connectAgor = resolve;
+          })
+        : Promise.resolve({ added: [], removed: [], errors: {} })
+    );
+    claudeQuery.mockReturnValue({ setMcpServers } as any);
+    vi.mocked(getMcpServersForSession).mockResolvedValueOnce([
+      { server: { name: 'stale', transport: 'http', url: 'https://stale.example/mcp' } } as any,
+    ]);
+    const reportRefresh = vi.fn().mockResolvedValue(undefined);
+    const deps = {
+      ...refreshDeps(vi.fn().mockResolvedValue(readyProjection()), reportRefresh, undefined, {
+        mcp_token: 'test-token',
+      }),
+      mcpServerRepo: {} as any,
+    };
+
+    const setup = await setupQuery('test-session' as SessionID, 'test prompt', deps, {
+      taskId: 'test-task' as TaskID,
+    });
+    const input = claudeQuery.mock.calls[0][0].prompt[Symbol.asyncIterator]();
+    const first = input.next();
+    await vi.waitFor(() => expect(setMcpServers).toHaveBeenCalledTimes(1));
+    // A refresh lands while the blocking Agor apply is still connecting.
+    const refresh = setup.refreshMcp?.({
+      request_id: 'refresh-1',
+      reason: 'authority_changed',
+      expected_generation: 3,
+    });
+    connectAgor({ added: ['agor'], removed: [], errors: {} });
+    await first;
+    void input.next();
+    await refresh;
+
+    expect(setMcpServers.mock.calls.map(([servers]) => Object.keys(servers).sort())).toEqual([
+      ['agor'],
+      ['agor', 'stale'],
+      ['agor', 'fresh'],
+    ]);
+  });
+
   it('never applies an older projection after a newer refresh succeeds', async () => {
     const setMcpServers = vi.fn().mockResolvedValue({ added: [], removed: [], errors: {} });
     claudeQuery.mockReturnValue({

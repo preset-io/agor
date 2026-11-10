@@ -738,7 +738,18 @@ export async function setupQuery(
     // sees their tools. The SDK reads the prompt inside query(), so this is queued
     // before any refresh can be.
     const blockingApply = applyStartupMcpServers(blockingMcpServers);
-    refreshApplyTail = blockingApply;
+    // The full set joins the refresh queue now, ahead of any refresh, and runs once the
+    // CLI has taken the first message, so it no longer holds that message.
+    let markFirstMessageSent: () => void = () => {};
+    const firstMessageSent = new Promise<void>((resolve) => {
+      markFirstMessageSent = resolve;
+    });
+    refreshApplyTail =
+      Object.keys(startupMcpServers).length > Object.keys(blockingMcpServers).length
+        ? blockingApply
+            .then(() => firstMessageSent)
+            .then(() => applyStartupMcpServers(startupMcpServers))
+        : blockingApply;
     await blockingApply;
     yield {
       type: 'user' as const,
@@ -749,10 +760,7 @@ export async function setupQuery(
       // Session state; synthesized prompts deliberately leave it undefined.
       ...(promptOrigin ? { origin: promptOrigin } : {}),
     };
-    // The CLI has taken the first message, so the remaining servers connect without holding it.
-    if (Object.keys(startupMcpServers).length > Object.keys(blockingMcpServers).length) {
-      refreshApplyTail = refreshApplyTail.then(() => applyStartupMcpServers(startupMcpServers));
-    }
+    markFirstMessageSent();
     // Hold the iterable open until releaseInput() is called, keeping stdin alive
     await inputHeldPromise;
   }
