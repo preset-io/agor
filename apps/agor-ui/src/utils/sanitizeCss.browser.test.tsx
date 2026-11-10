@@ -1,6 +1,7 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: sanitizer tests assert on literal CSS input strings
 import { afterEach, describe, expect, it } from 'vitest';
-import { sanitizeBoardCss } from './sanitizeCss';
+import { ANIMATION_PRESETS, BACKGROUND_PRESETS } from '../components/forms/boardBackgroundPresets';
+import { buildScopedBoardCss, sanitizeBoardCss } from './sanitizeCss';
 
 const SCOPE_CLASS = 'board-css-abc';
 const MARKED = 'rgb(255, 0, 0)';
@@ -56,9 +57,52 @@ describe('sanitizeBoardCss in a real CSS parser', () => {
     '@media (min-width: 1px) { .x { color: red } }',
     '@layer base { .x { color: red } }',
     'color: red; animation: spin 2s infinite; @keyframes spin { to { opacity: 0.5 } }',
+    '@media print, screen { .x { color: red } }',
+    '.x { color: red } @layer a, b;',
   ])('still styles the board canvas: %s', (css) => {
     const { inside, outside } = render(css);
     expect(getComputedStyle(inside).color).toBe(MARKED);
     expect(getComputedStyle(outside).color).not.toBe(MARKED);
   });
+
+  it('keeps board @keyframes from replacing an app animation of the same name', () => {
+    const appStyle = document.createElement('style');
+    mounted.push(appStyle);
+    appStyle.textContent =
+      '@keyframes spin { from, to { color: rgb(0, 128, 0) } } .app { animation: spin 1s infinite paused }';
+    document.head.appendChild(appStyle);
+    const app = document.createElement('p');
+    app.className = 'app';
+
+    const { inside } = render(
+      '@keyframes spin { from, to { color: red } } .x { animation: spin 1s infinite paused }'
+    );
+    document.body.append(app);
+
+    expect(getComputedStyle(app).color).toBe('rgb(0, 128, 0)');
+    expect(getComputedStyle(inside).color).toBe(MARKED);
+  });
+
+  it.each(ANIMATION_PRESETS.map((preset) => [preset.label, preset.value]))(
+    'runs the %s animation preset under its board-scoped keyframes',
+    (_label, css) => {
+      const style = document.createElement('style');
+      mounted.push(style);
+      style.textContent = buildScopedBoardCss({
+        backgroundColor: BACKGROUND_PRESETS[0]?.value,
+        customCss: css,
+        scopeClass: SCOPE_CLASS,
+      });
+      document.head.appendChild(style);
+      const canvas = document.createElement('div');
+      canvas.className = SCOPE_CLASS;
+      document.body.append(canvas);
+
+      const name = getComputedStyle(canvas).animationName;
+      expect(name.startsWith(`${SCOPE_CLASS}-`)).toBe(true);
+      expect(
+        canvas.getAnimations().map((animation) => (animation as CSSAnimation).animationName)
+      ).toEqual([name]);
+    }
+  );
 });

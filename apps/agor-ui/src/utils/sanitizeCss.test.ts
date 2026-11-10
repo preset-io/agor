@@ -43,7 +43,6 @@ describe('sanitizeBoardCss', () => {
     expect(out).not.toMatch(/@import/i);
     expect(out).not.toMatch(/expression\s*\(/i);
     expect(out).not.toMatch(/javascript\s*:/i);
-    expect(out).toContain('/* blocked */');
   });
 
   it('blocks tokens hidden behind CSS comments', () => {
@@ -52,7 +51,6 @@ describe('sanitizeBoardCss', () => {
     const out = sanitizeBoardCss('background: url/**/(http://evil/x);', SCOPE);
     // No live url() token survives (the leftover URL text is inert, not fetched).
     expect(out).not.toMatch(/url\s*\(/i);
-    expect(out).toContain('/* blocked */');
   });
 
   it('blocks tokens hidden behind CSS escapes', () => {
@@ -99,13 +97,23 @@ describe('sanitizeBoardCss', () => {
     expect(sanitizeBoardCss('.x::after { content: "★" }', SCOPE)).toContain('content: "★"');
   });
 
-  it('keeps @keyframes at top level (unscoped)', () => {
+  it('keeps @keyframes at top level, named under the board scope', () => {
     const out = sanitizeBoardCss(
       '@keyframes spin { from { opacity: 0 } to { opacity: 1 } }',
       SCOPE
     );
-    expect(out).toContain('@keyframes spin');
+    expect(out).toContain('@keyframes board-css-abc-spin');
     expect(out).not.toContain(`${SCOPE} @keyframes`);
+  });
+
+  it('keeps every query of a grouping at-rule list', () => {
+    expect(sanitizeBoardCss('@media screen, print { .x { color: red } }', SCOPE)).toContain(
+      '@media screen, print'
+    );
+  });
+
+  it('accepts a trailing @layer statement', () => {
+    expect(sanitizeBoardCss('.x { color: red } @layer a, b;', SCOPE)).toContain('@layer a, b;');
   });
 
   it('returns empty string for empty input', () => {
@@ -128,7 +136,7 @@ describe('buildScopedBoardCss', () => {
       scopeClass: 'board-x',
     });
     expect(out).toContain('.board-x {');
-    expect(out).toContain('background: linear-gradient(180deg, #000, #111);');
+    expect(out).toMatch(/background: linear-gradient\(180deg, (#000|rgb\(0, 0, 0\)),/);
   });
 
   it('appends a reduced-motion override covering the root AND descendants', () => {

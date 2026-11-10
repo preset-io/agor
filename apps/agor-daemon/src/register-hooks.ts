@@ -1252,6 +1252,14 @@ export function realtimeAuthorizationInvalidationSubject(
   return typeof userId === 'string' ? { userId } : {};
 }
 
+/** Board object style validation failures are the caller's input, not a server error. */
+function boardObjectValidationAsBadRequest(context: HookContext): HookContext {
+  if (context.error instanceof BoardObjectValidationError) {
+    context.error = new BadRequest(context.error.message);
+  }
+  return context;
+}
+
 export function registerHooks(ctx: RegisterHooksContext): void {
   const {
     db,
@@ -2165,6 +2173,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       patch: [requireMinimumRole(ROLES.MEMBER, 'update artifacts'), ensureArtifactOwnerOrAdmin()],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete artifacts'), ensureArtifactOwnerOrAdmin()],
     },
+    // Publishing and moving an artifact write its board placement.
+    error: { all: [boardObjectValidationAsBadRequest] },
   } as never);
 
   // Custom REST routes for artifact payload and console
@@ -4156,16 +4166,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
     },
-    error: {
-      all: [
-        (context: HookContext<Board>) => {
-          if (context.error instanceof BoardObjectValidationError) {
-            context.error = new BadRequest(context.error.message);
-          }
-          return context;
-        },
-      ],
-    },
+    error: { all: [boardObjectValidationAsBadRequest] },
     // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in default hook map
   } as any);
 

@@ -251,6 +251,17 @@ dbTest(
       });
       expect(afterRevoke.status, await afterRevoke.clone().text()).toBe(200);
       await expect(afterRevoke.json()).resolves.toEqual([]);
+
+      // A placement write with an unusable size is the caller's bad input.
+      const badSize = await fetch(`${baseUrl}/artifacts/${artifact.artifact_id}`, {
+        method: 'PATCH',
+        headers: { ...authHeaders(ownerId), 'content-type': 'application/json' },
+        body: JSON.stringify({ width: 'wide' }),
+      });
+      expect(badSize.status, await badSize.clone().text()).toBe(400);
+      await expect(badSize.json()).resolves.toMatchObject({
+        message: expect.stringContaining('width must be a finite number'),
+      });
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

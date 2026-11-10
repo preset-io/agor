@@ -76,13 +76,13 @@ function containsDangerousPattern(css: string): string | null {
  * inside their block are scoped by the same pass.
  */
 function scopeSelectorList(selectorList: string, scopeSelector: string): string {
+  // Grouping at-rule prelude (a whole query list) — keep as-is; its inner rules get scoped separately.
+  if (GROUPING_AT_RULE_PRELUDE.test(selectorList.trim())) return selectorList.trim();
   return selectorList
     .split(',')
     .map((raw) => {
       const selector = raw.trim();
       if (!selector) return '';
-      // Grouping at-rule prelude — keep as-is; its inner rules get scoped separately.
-      if (GROUPING_AT_RULE_PRELUDE.test(selector)) return selector;
       // Only plain selectors are scoped: `;`/`@` can end the prefix early, `&` and `~`/`+` can match outside it.
       if (/[;@&]/.test(selector) || /^[~+]/.test(selector)) return '';
       return `${scopeSelector} ${selector}`;
@@ -164,9 +164,8 @@ export function sanitizeBoardCss(css: string | undefined, scopeSelector: string)
     parts.push(kf);
   }
 
-  const output = parts.join('\n\n');
   // The text pass above is lexical; the browser's parser decides what actually applies.
-  return parsesAsScoped(output, scopeSelector) ? output : '';
+  return serializeScopedRules(parts.join('\n\n'), scopeSelector);
 }
 
 /** Grouping rules whose children are checked like top-level rules. */
@@ -202,22 +201,26 @@ function splitSelectorList(selectorText: string): string[] {
 }
 
 /**
- * Whether every rule the browser parses from `css` stays inside `scopeSelector`:
- * style rules are scoped descendants (nested ones relative to their parent),
- * grouping rules hold only such rules, @keyframes are allowed, and nothing loads resources.
+ * Parse `css` with the browser and return its serialized rules, or '' unless every rule
+ * stays inside `scopeSelector`: style rules are scoped descendants (nested ones relative
+ * to their parent), grouping rules hold only such rules, @keyframes and @layer statements
+ * are allowed, and nothing loads resources. The board's own @keyframes are renamed under
+ * the scope so they cannot replace app animations of the same name.
  */
-function parsesAsScoped(css: string, scopeSelector: string): boolean {
-  if (!css) return true;
-  if (typeof document === 'undefined') return false;
+function serializeScopedRules(css: string, scopeSelector: string): string {
+  if (!css || typeof document === 'undefined') return '';
   const escapedScope = scopeSelector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const scoped = new RegExp(`^${escapedScope}(\\s+[^\\s~+]|$)`);
   const nested = /^(&\s+)?[^\s~+&]/;
+  const keyframes: CSSKeyframesRule[] = [];
+  const declarations: CSSStyleDeclaration[] = [];
   const checkRules = (list: CSSRuleList, insideStyleRule: boolean): boolean =>
     Array.from(list).every((rule) => {
       if (containsDangerousPattern(rule.cssText)) return false;
       const type = rule.constructor.name;
       if (type === 'CSSStyleRule') {
-        const { selectorText, cssRules } = rule as CSSStyleRule;
+        const { selectorText, cssRules, style } = rule as CSSStyleRule;
+        declarations.push(style);
         const ok = splitSelectorList(selectorText).every((selector) =>
           insideStyleRule
             ? nested.test(selector) && !selector.slice(1).includes('&')
@@ -225,8 +228,15 @@ function parsesAsScoped(css: string, scopeSelector: string): boolean {
         );
         return ok && (!cssRules || checkRules(cssRules, true));
       }
-      if (type === 'CSSKeyframesRule') return !insideStyleRule;
-      if (type === 'CSSNestedDeclarations') return insideStyleRule;
+      if (type === 'CSSKeyframesRule') {
+        keyframes.push(rule as CSSKeyframesRule);
+        return !insideStyleRule;
+      }
+      if (type === 'CSSNestedDeclarations') {
+        declarations.push((rule as CSSStyleRule).style);
+        return insideStyleRule;
+      }
+      if (type === 'CSSLayerStatementRule') return !insideStyleRule;
       if (GROUPING_RULE_TYPES.has(type)) {
         return checkRules((rule as CSSGroupingRule).cssRules, insideStyleRule);
       }
@@ -240,9 +250,31 @@ function parsesAsScoped(css: string, scopeSelector: string): boolean {
   document.head.appendChild(style);
   try {
     const rules = style.sheet?.cssRules;
-    return !!rules && checkRules(rules, false);
+    if (!rules || !checkRules(rules, false)) return '';
+    renameBoardKeyframes(keyframes, declarations, scopeSelector.replace(/^\./, ''));
+    return Array.from(rules, (rule) => rule.cssText).join('\n');
   } finally {
     style.remove();
+  }
+}
+
+/** Prefix the board's own keyframe names and the animation-name references to them. */
+function renameBoardKeyframes(
+  keyframes: CSSKeyframesRule[],
+  declarations: CSSStyleDeclaration[],
+  prefix: string
+): void {
+  const renamed = new Map(keyframes.map((rule) => [rule.name, `${prefix}-${rule.name}`]));
+  if (renamed.size === 0) return;
+  for (const rule of keyframes) rule.name = renamed.get(rule.name) ?? rule.name;
+  for (const style of declarations) {
+    const names = style.getPropertyValue('animation-name');
+    if (!names) continue;
+    const next = names
+      .split(',')
+      .map((name) => renamed.get(name.trim().replace(/^["']|["']$/g, '')) ?? name.trim())
+      .join(', ');
+    style.setProperty('animation-name', next, style.getPropertyPriority('animation-name'));
   }
 }
 
