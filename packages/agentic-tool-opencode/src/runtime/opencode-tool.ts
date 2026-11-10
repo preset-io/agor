@@ -1222,21 +1222,30 @@ export class OpenCodeTool {
     };
   }
 
-  /** Attach this turn's MCP servers before any session exists, so the first prompt sees them. */
+  /**
+   * Attach this turn's MCP servers before any session exists, so the first prompt
+   * sees them. A server OpenCode refuses is skipped with a warning, not fatal.
+   */
   private async addMcpServers(
     client: OpenCodeClient,
     directory: string,
     servers: Record<string, unknown>
   ): Promise<void> {
-    await Promise.all(
-      Object.entries(servers).map(async ([name, config]) => {
+    const entries = Object.entries(servers);
+    const results = await Promise.allSettled(
+      entries.map(async ([name, config]) => {
         const response = await client.mcp.add({
           body: { name, config: config as OpenCodeMcpServerConfig },
           query: { directory },
         });
-        if (response.error) throw new Error(`OpenCode could not attach MCP server ${name}`);
+        if (response.error) throw new Error('rejected');
       })
     );
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.warn(`⚠️  [OpenCode] MCP server "${entries[index][0]}" could not be attached`);
+      }
+    });
   }
 
   /** Create a new OpenCode session on the invocation's managed runtime. */

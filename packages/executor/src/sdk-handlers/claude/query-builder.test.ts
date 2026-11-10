@@ -96,10 +96,14 @@ function createMinimalQueryDeps(): QuerySetupDeps {
 
 /** Release the first prompt message and return the MCP set applied before it (none: {}). */
 async function startupMcpServers(): Promise<Record<string, Record<string, unknown>>> {
-  await claudeQuery.mock.calls[0][0].prompt[Symbol.asyncIterator]().next();
+  const input = claudeQuery.mock.calls[0][0].prompt[Symbol.asyncIterator]();
+  await input.next();
+  // Resuming past the first message applies the full set; the iterable then holds stdin open.
+  void input.next();
+  await new Promise((resolve) => setTimeout(resolve, 0));
   const { setMcpServers } = claudeQuery.mock.results[0].value;
-  expect(setMcpServers.mock.calls.length).toBeLessThanOrEqual(1);
-  return setMcpServers.mock.calls[0]?.[0] ?? {};
+  expect(setMcpServers.mock.calls.length).toBeLessThanOrEqual(2);
+  return setMcpServers.mock.calls.at(-1)?.[0] ?? {};
 }
 
 describe('MCP logging helpers', () => {
@@ -939,20 +943,75 @@ describe('setupQuery - Local Settings Support', () => {
     expect(options).not.toHaveProperty('mcpServers');
 
     let released = false;
-    const first = prompt[Symbol.asyncIterator]()
-      .next()
-      .then(() => {
-        released = true;
-      });
+    const input = prompt[Symbol.asyncIterator]();
+    const first = input.next().then(() => {
+      released = true;
+    });
     await vi.waitFor(() => expect(setMcpServers).toHaveBeenCalledTimes(1));
     expect(released).toBe(false);
-    expect(Object.keys((setMcpServers.mock.calls[0] as unknown[])[0] as object)).toEqual([
-      'remote',
-      'agor',
-    ]);
+    // Only Agor holds the first message; the user server connects after it.
+    expect(Object.keys((setMcpServers.mock.calls[0] as unknown[])[0] as object)).toEqual(['agor']);
     connect({ added: ['agor'], removed: [], errors: {} });
     await first;
     expect(released).toBe(true);
+    void input.next();
+    await vi.waitFor(() => expect(setMcpServers).toHaveBeenCalledTimes(2));
+    expect(Object.keys((setMcpServers.mock.calls[1] as unknown[])[0] as object)).toEqual([
+      'remote',
+      'agor',
+    ]);
+  });
+
+  it('does not hold the first message for a slow or unreachable user server', async () => {
+    const deps = createMockDeps();
+    vi.mocked(deps.sessionsRepo.findById).mockResolvedValue({
+      session_id: 'test-session' as SessionID,
+      branch_id: 'test-branch' as BranchID,
+      mcp_token: 'test-token',
+    } as any);
+    deps.sessionMCPRepo = {} as any;
+    deps.mcpServerRepo = {} as any;
+    vi.mocked(getMcpServersForSession).mockResolvedValue([
+      { server: { name: 'slow', transport: 'http', url: 'https://slow.example/mcp' } } as any,
+    ]);
+    // Agor connects at once; any set including the slow server never settles.
+    const setMcpServers = vi.fn((servers: Record<string, unknown>) =>
+      'slow' in servers
+        ? new Promise(() => {})
+        : Promise.resolve({ added: [], removed: [], errors: {} })
+    );
+    claudeQuery.mockReturnValue({ setMcpServers } as any);
+    vi.useFakeTimers();
+    try {
+      await setupQuery('test-session' as SessionID, 'test prompt', deps);
+      const input = claudeQuery.mock.calls[0][0].prompt[Symbol.asyncIterator]();
+      const first = await input.next();
+      expect(first.value.message.content).toEqual([{ type: 'text', text: 'test prompt' }]);
+      void input.next();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(setMcpServers).toHaveBeenCalledTimes(2);
+      expect(setMcpServers.mock.calls[1][0]).toHaveProperty('slow');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('releases the first message at once when only user servers are attached', async () => {
+    const deps = createMockDeps();
+    deps.sessionMCPRepo = {} as any;
+    deps.mcpServerRepo = {} as any;
+    vi.mocked(getMcpServersForSession).mockResolvedValue([
+      { server: { name: 'remote', transport: 'http', url: 'https://example.com/mcp' } } as any,
+    ]);
+    const setMcpServers = vi.fn(() => new Promise(() => {}));
+    claudeQuery.mockReturnValue({ setMcpServers } as any);
+
+    await setupQuery('test-session' as SessionID, 'test prompt', deps);
+    const input = claudeQuery.mock.calls[0][0].prompt[Symbol.asyncIterator]();
+    await input.next();
+    expect(setMcpServers).not.toHaveBeenCalled();
+    void input.next();
+    await vi.waitFor(() => expect(setMcpServers).toHaveBeenCalledOnce());
   });
 
   it('applies Agor MCP even when the SDK reads the prompt before query() returns', async () => {

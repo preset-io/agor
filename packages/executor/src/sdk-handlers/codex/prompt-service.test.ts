@@ -372,6 +372,10 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     // itself may be inside an outer sandbox, which must not rewrite the policy
     // under test into danger-full-access.
     delete process.env.AGOR_OUTER_SANDBOX;
+    // Agor-exported MCP variables in the runner's env would otherwise join the shell policy.
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith('AGOR_MCP_')) delete process.env[key];
+    }
     vi.clearAllMocks();
   });
 

@@ -543,9 +543,10 @@ task binding keep working until they expire.
 The executor hands the token to the coding agent without putting it where the
 agent's own shell commands can read it:
 
-- **Claude Code:** applied over the SDK control channel before the first
-  prompt, together with the other MCP servers and their credentials, not on
-  the CLI command line.
+- **Claude Code:** applied over the SDK control channel, not on the CLI
+  command line, together with the other MCP servers and their credentials.
+  Agor's server and any always-loaded server connect before the first prompt;
+  the others connect right after it, so a slow server does not hold the turn.
 - **Codex:** read by Codex from an environment variable that Agor blanks in
   every command Codex runs (`shell_environment_policy.set`), along with the
   variables carrying other MCP servers' credentials. Your own

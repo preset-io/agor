@@ -241,6 +241,38 @@ describe('MCP servers reaching the OpenCode process', () => {
   });
 });
 
+it('skips an MCP server OpenCode refuses with a warning instead of failing the turn', async () => {
+  const tool = new OpenCodeTool({ getDaemonUrl: async () => 'http://localhost:3030' });
+  const added: string[] = [];
+  const client = {
+    mcp: {
+      add: async ({ body }: { body: { name: string } }) => {
+        if (body.name === 'refused') return { error: { name: 'BadRequest' } };
+        if (body.name === 'broken') throw new Error('socket hang up');
+        added.push(body.name);
+        return { data: {} };
+      },
+    },
+  };
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  try {
+    await expect(
+      (
+        tool as unknown as {
+          addMcpServers(c: unknown, d: string, s: Record<string, unknown>): Promise<void>;
+        }
+      ).addMcpServers(client, tmpdir(), { refused: {}, broken: {}, healthy: {} })
+    ).resolves.toBeUndefined();
+    expect(added).toEqual(['healthy']);
+    const warnings = warn.mock.calls.flat().join('\n');
+    expect(warnings).toContain('"refused"');
+    expect(warnings).toContain('"broken"');
+    expect(warnings).not.toContain('healthy');
+  } finally {
+    warn.mockRestore();
+  }
+});
+
 it('adds no client hint to an external OpenCode HTTP connection', async () => {
   const tool = new OpenCodeTool({
     getDaemonUrl: async () => 'http://localhost:3030',

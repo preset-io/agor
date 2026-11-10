@@ -694,6 +694,13 @@ export async function setupQuery(
     ...(agorMcpServer ? { [AGOR_MCP_SERVER_NAME]: agorMcpServer } : {}),
   };
   delete queryOptions.mcpServers;
+  // The CLI handles a pending set before the next user message, so only these hold the first turn.
+  const blockingMcpServers: MCPServersConfig = Object.fromEntries(
+    Object.entries(startupMcpServers).filter(
+      ([name, config]) =>
+        name === AGOR_MCP_SERVER_NAME || (config as { alwaysLoad?: boolean }).alwaysLoad === true
+    )
+  );
   let refreshApplyTail: Promise<unknown> = Promise.resolve();
   const MCP_SET_SERVERS_TIMEOUT_MS = 15_000;
   // The SDK starts reading the prompt inside query(), before it returns the Query.
@@ -701,15 +708,13 @@ export async function setupQuery(
   const queryReady = new Promise<InterruptibleQuery>((resolve) => {
     resolveQueryReady = resolve;
   });
-  const applyStartupMcpServers = async (): Promise<void> => {
-    if (Object.keys(startupMcpServers).length === 0) return;
+  const applyStartupMcpServers = async (servers: MCPServersConfig): Promise<void> => {
+    if (Object.keys(servers).length === 0) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const query = await queryReady;
       const result = await Promise.race([
-        query.setMcpServers(
-          startupMcpServers as unknown as Record<string, ClaudeSdk.McpServerConfig>
-        ),
+        query.setMcpServers(servers as unknown as Record<string, ClaudeSdk.McpServerConfig>),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => reject(new Error('timeout')), MCP_SET_SERVERS_TIMEOUT_MS);
         }),
@@ -729,11 +734,12 @@ export async function setupQuery(
   };
 
   async function* asUserMessageIterable(text: string) {
-    // Connect MCP before the first message so the first turn sees its tools. The SDK
-    // reads the prompt inside query(), so this is queued before any refresh can be.
-    const startupApply = applyStartupMcpServers();
-    refreshApplyTail = startupApply;
-    await startupApply;
+    // Connect Agor and alwaysLoad servers before the first message so the first turn
+    // sees their tools. The SDK reads the prompt inside query(), so this is queued
+    // before any refresh can be.
+    const blockingApply = applyStartupMcpServers(blockingMcpServers);
+    refreshApplyTail = blockingApply;
+    await blockingApply;
     yield {
       type: 'user' as const,
       message: { role: 'user' as const, content: [{ type: 'text' as const, text }] },
@@ -743,6 +749,10 @@ export async function setupQuery(
       // Session state; synthesized prompts deliberately leave it undefined.
       ...(promptOrigin ? { origin: promptOrigin } : {}),
     };
+    // The CLI has taken the first message, so the remaining servers connect without holding it.
+    if (Object.keys(startupMcpServers).length > Object.keys(blockingMcpServers).length) {
+      refreshApplyTail = refreshApplyTail.then(() => applyStartupMcpServers(startupMcpServers));
+    }
     // Hold the iterable open until releaseInput() is called, keeping stdin alive
     await inputHeldPromise;
   }
