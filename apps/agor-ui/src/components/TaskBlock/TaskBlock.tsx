@@ -1189,6 +1189,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 agentic_tool={agentic_tool}
                 userById={userById}
                 currentUserId={task.created_by}
+                viewerUserId={currentUserId}
                 isTaskRunning={runtimeLive}
                 sessionId={sessionId}
                 onPermissionDecision={onPermissionDecision}
@@ -1403,7 +1404,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         {blocks.map((block) =>
           block.type === 'message' && block.message.type === 'widget_request' ? (
             <div key={block.message.message_id} data-conversation-block={getBlockMarker(block)}>
-              <MessageBlock message={block.message} client={client} />
+              <MessageBlock message={block.message} client={client} viewerUserId={currentUserId} />
             </div>
           ) : null
         )}
