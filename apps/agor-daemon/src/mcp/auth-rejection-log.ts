@@ -1,8 +1,8 @@
 import { normalizeMCPClientHint } from '@agor/core/types';
 import { requestMethod } from './request-method.js';
-import type { McpTokenRejectionReason } from './tokens.js';
+import type { McpTokenRejectionReason, McpTokenStateRejection } from './tokens.js';
 
-type RejectionReason = McpTokenRejectionReason | 'invalid_personal_key' | 'session_missing';
+type RejectionReason = McpTokenRejectionReason | McpTokenStateRejection | 'invalid_personal_key';
 type CredentialSource = 'authorization' | 'api_key' | 'none';
 
 /**

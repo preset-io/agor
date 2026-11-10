@@ -20,7 +20,7 @@ describe('applyAgorCodexLaunchPolicy', () => {
       },
     };
 
-    expect(applyAgorCodexLaunchPolicy(config)).toEqual({
+    expect(applyAgorCodexLaunchPolicy(config, false, {})).toEqual({
       features: {
         goals: false,
         memories: true,
@@ -45,7 +45,7 @@ describe('applyAgorCodexLaunchPolicy', () => {
   });
 
   it('creates the required per-process overrides when no other config exists', () => {
-    expect(applyAgorCodexLaunchPolicy(undefined)).toEqual({
+    expect(applyAgorCodexLaunchPolicy(undefined, false, {})).toEqual({
       features: { multi_agent: false, plugins: false },
       tools: { update_plan: { enabled: true } },
     });
@@ -59,7 +59,7 @@ describe('applyAgorCodexLaunchPolicy', () => {
       },
     };
 
-    expect(applyAgorCodexLaunchPolicy(config)).toEqual({
+    expect(applyAgorCodexLaunchPolicy(config, false, {})).toEqual({
       features: { multi_agent: false, plugins: false },
       tools: {
         web_search: true,
@@ -110,5 +110,46 @@ describe('applyAgorCodexLaunchPolicy', () => {
     ).toThrow(
       'Cannot launch Codex with Agor policy: config.tools.update_plan must be an object so its enabled flag can be set'
     );
+  });
+});
+
+describe('MCP credential env vars', () => {
+  it('blanks every bearer and header env var in the shells Codex runs', () => {
+    const result = applyAgorCodexLaunchPolicy(
+      {
+        mcp_servers: {
+          agor: { url: 'http://localhost:3030/mcp', bearer_token_env_var: 'AGOR_MCP_S1_AGOR' },
+          remote: {
+            url: 'https://example.test/mcp',
+            bearer_token_env_var: 'AGOR_MCP_S1_REMOTE',
+            env_http_headers: { 'X-Api-Key': 'AGOR_MCP_S1_REMOTE_HEADER_1' },
+          },
+          local: { command: 'tool' },
+        },
+      },
+      false,
+      {}
+    );
+    expect(result.shell_environment_policy).toEqual({
+      set: { AGOR_MCP_S1_AGOR: '', AGOR_MCP_S1_REMOTE: '', AGOR_MCP_S1_REMOTE_HEADER_1: '' },
+    });
+  });
+
+  it('keeps an existing policy and blanks Agor variables left over in the process env', () => {
+    const result = applyAgorCodexLaunchPolicy(
+      { shell_environment_policy: { inherit: 'core', set: { CI: '1' } } },
+      false,
+      { AGOR_MCP_OLD_REMOVED: 'stale-bearer', PATH: '/bin' }
+    );
+    expect(result.shell_environment_policy).toEqual({
+      inherit: 'core',
+      set: { CI: '1', AGOR_MCP_OLD_REMOVED: '' },
+    });
+  });
+
+  it('sets no shell policy when no MCP credential travels by env var', () => {
+    expect(
+      applyAgorCodexLaunchPolicy({ mcp_servers: { local: { command: 'tool' } } }, false, {})
+    ).not.toHaveProperty('shell_environment_policy');
   });
 });

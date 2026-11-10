@@ -95,13 +95,14 @@ import { deepMerge } from './merge-utils';
 import { acceptOpenCodeCheckpoint, assertNoOpenOpenCodeCheckpoint } from './opencode-checkpoints';
 import { countRecordedTools } from './recorded-tool-count';
 
+const EXECUTOR_OWNED_TASK_STATUSES: readonly TaskStatus[] = [
+  TaskStatus.RUNNING,
+  TaskStatus.AWAITING_PERMISSION,
+  TaskStatus.AWAITING_INPUT,
+];
+
 function executorOwnsTask(row: Pick<TaskRow, 'status' | 'executor_connected_at'>): boolean {
-  return (
-    !!row.executor_connected_at &&
-    (row.status === TaskStatus.RUNNING ||
-      row.status === TaskStatus.AWAITING_PERMISSION ||
-      row.status === TaskStatus.AWAITING_INPUT)
-  );
+  return !!row.executor_connected_at && EXECUTOR_OWNED_TASK_STATUSES.includes(row.status);
 }
 
 function mcpReprojectionAuthorityDigest(authorityFingerprints: readonly string[]): string {
@@ -1530,6 +1531,24 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     }
 
     return { outcome: 'authorized' as const, observedAt: access.observed_at };
+  }
+
+  /** Whether a connected executor still owns this Session's Task and no Stop has been requested. */
+  async isOwnedByLiveExecutor(id: TaskID, sessionId: SessionID): Promise<boolean> {
+    const row = await select(this.db, { task_id: tasks.task_id })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.task_id, id),
+          eq(tasks.session_id, sessionId),
+          isNotNull(tasks.executor_connected_at),
+          inArray(tasks.status, [...EXECUTOR_OWNED_TASK_STATUSES]),
+          isNull(jsonExtract(this.db, tasks.data, 'termination_request'))
+        )
+      )
+      .limit(1)
+      .one();
+    return !!row;
   }
 
   /** No heartbeat/lease write can be used to authorize retrieval of a provider bearer. */

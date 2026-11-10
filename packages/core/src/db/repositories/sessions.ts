@@ -196,9 +196,12 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     const genealogyData = row.data.genealogy || { children: [] };
     // Older rows may still contain the former session-level git_state JSON.
     // Task snapshots are authoritative; do not expose the legacy projection.
-    const { git_state: _legacyGitState, ...sessionData } = row.data as typeof row.data & {
-      git_state?: unknown;
-    };
+    // MCP tokens are minted per caller and never stored; ignore bearers left on older rows.
+    const {
+      git_state: _legacyGitState,
+      mcp_token: _legacyMcpToken,
+      ...sessionData
+    } = row.data as typeof row.data & { git_state?: unknown; mcp_token?: unknown };
     const sessionId = row.session_id as SessionID;
     const boardId = branchBoardId ?? null;
 
@@ -307,7 +310,6 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       data: {
         agentic_tool_version: session.agentic_tool_version,
         ...(session.sdk_session_id !== undefined ? { sdk_session_id: session.sdk_session_id } : {}),
-        mcp_token: session.mcp_token, // MCP authentication token for Agor self-access
         mcp_selection_explicit: session.mcp_selection_explicit,
         title: session.title,
         description: session.description,
@@ -996,6 +998,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         const {
           sdk_session_id: sdkSessionIdUpdate,
           read_shape: _readShape,
+          mcp_token: _mcpToken,
           ...genericUpdates
         } = updates as Partial<Session> & { read_shape?: unknown };
         const merged = deepMerge(current, genericUpdates);

@@ -28,12 +28,10 @@ describe('session actor authorization', () => {
     expect(canReceiveMcpTokenForSession(params)).toBe(true);
   });
 
-  it('allows the internal service identity to receive MCP tokens', () => {
-    const params = {
-      callerUserId: undefined,
-      callerRole: 'service',
-    };
-    expect(canReceiveMcpTokenForSession(params)).toBe(true);
+  it('denies the daemon service identity, which never runs a task', () => {
+    expect(
+      canReceiveMcpTokenForSession({ callerUserId: 'executor-service', callerRole: 'service' })
+    ).toBe(false);
   });
 
   it('denies unauthenticated or role-less callers', () => {

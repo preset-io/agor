@@ -372,6 +372,10 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     // itself may be inside an outer sandbox, which must not rewrite the policy
     // under test into danger-full-access.
     delete process.env.AGOR_OUTER_SANDBOX;
+    // Agor-exported MCP variables in the runner's env would otherwise join the shell policy.
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith('AGOR_MCP_')) delete process.env[key];
+    }
     vi.clearAllMocks();
   });
 
@@ -983,7 +987,14 @@ describe('CodexPromptService - forked sessions', () => {
           const config = mockInstanceConfigs.at(-1) as {
             model_instructions_file: string;
             mcp_servers: { agor: { url: string; bearer_token_env_var: string } };
+            shell_environment_policy: { set: Record<string, string> };
           };
+          // Config becomes Codex argv; the bearer rides only an env var hidden from shells.
+          expect(JSON.stringify(config)).not.toContain('child-test-token');
+          expect(config.mcp_servers.agor.bearer_token_env_var).toMatch(/^AGOR_MCP_/);
+          expect(
+            config.shell_environment_policy.set[config.mcp_servers.agor.bearer_token_env_var]
+          ).toBe('');
           expect(path.basename(config.model_instructions_file)).toBe(
             'agor-codex-instructions-child-session.md'
           );

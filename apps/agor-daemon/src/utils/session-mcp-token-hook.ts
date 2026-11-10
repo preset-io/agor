@@ -1,6 +1,7 @@
 import type { AgorConfig } from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
-import type { AuthenticatedParams, HookContext, Session, UserID } from '@agor/core/types';
+import type { AuthenticatedParams, HookContext, Session, TaskID, UserID } from '@agor/core/types';
+import { authenticatedTaskExecutorRuntimeScope } from '../auth/executor-runtime-scope.js';
 import { generateSessionToken } from '../mcp/tokens.js';
 import { canReceiveMcpTokenForSession } from './mcp-token-authorization.js';
 
@@ -10,22 +11,25 @@ export interface SessionMcpTokenHookOptions {
   onAttached?: (session: Session) => void;
 }
 
-export interface SessionMcpTokenAfterHooksOptions
-  extends Omit<SessionMcpTokenHookOptions, 'onAttached'> {
-  onGetAttached?: (session: Session) => void;
-  onCreateAttached?: (session: Session) => void;
-}
-
 /**
- * Build the shared sessions after:get / after:create MCP-token hook.
+ * Build the sessions after:get MCP-token hook.
  *
  * Token issuance owns tenant binding semantics; this hook owns only caller
- * authorization and response enrichment. Keeping both session paths on this
- * function prevents request and background fetch behavior from drifting.
+ * authorization and response enrichment. Only a task executor reading its own
+ * session receives a token, bound to its task, so it stops authenticating once
+ * the task's executor is done. Browser, CLI and API callers never receive one.
  */
 export function createSessionMcpTokenHook(options: SessionMcpTokenHookOptions) {
   return async (context: HookContext): Promise<HookContext> => {
     if (options.config.daemon?.mcpEnabled === false) return context;
+
+    // Internal re-reads may carry an executor's params, and their results can be broadcast.
+    if (!context.params.provider) return context;
+    const session = context.result as Session;
+    // Only a task executor reading its own session receives a token, bound to that task.
+    const scope = authenticatedTaskExecutorRuntimeScope(context.params);
+    if (!scope || scope.sessionId !== session.session_id) return context;
+    const taskId = scope.taskId as TaskID;
 
     const callerUser = (context.params as AuthenticatedParams).user;
     if (
@@ -45,33 +49,15 @@ export function createSessionMcpTokenHook(options: SessionMcpTokenHookOptions) {
       return context;
     }
 
-    const session = context.result as Session;
-    const mcpToken = await generateSessionToken(options.app, session.session_id, userId as UserID);
+    const mcpToken = await generateSessionToken(
+      options.app,
+      session.session_id,
+      userId as UserID,
+      taskId
+    );
 
     context.result = { ...session, mcp_token: mcpToken };
     options.onAttached?.(session);
     return context;
-  };
-}
-
-/**
- * Build the paired hooks registered on the sessions service.
- *
- * Keeping the method mapping beside the shared hook implementation makes it
- * harder for create/get behavior to drift and gives integration tests one
- * canonical registration shape to exercise through Feathers.
- */
-export function createSessionMcpTokenAfterHooks(options: SessionMcpTokenAfterHooksOptions) {
-  return {
-    get: createSessionMcpTokenHook({
-      app: options.app,
-      config: options.config,
-      onAttached: options.onGetAttached,
-    }),
-    create: createSessionMcpTokenHook({
-      app: options.app,
-      config: options.config,
-      onAttached: options.onCreateAttached,
-    }),
   };
 }

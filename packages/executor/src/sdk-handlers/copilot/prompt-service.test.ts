@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   sendAndWait: vi.fn(),
   configured: vi.fn(),
   stop: vi.fn(),
+  constructed: vi.fn(),
 }));
 
 // Configuration fixtures must not depend on the invoking executor's environment.
@@ -22,6 +23,9 @@ vi.mock('@agor/core/mcp', async (importOriginal) => ({
 vi.mock('@agor/core/agentic-integrations', () => ({
   loadManagedAgenticToolSdk: vi.fn(async () => ({
     CopilotClient: class {
+      constructor(options: unknown) {
+        mocks.constructed(options);
+      }
       start = vi.fn();
       stop = mocks.stop;
       createSession = this.resumeSession;
@@ -134,6 +138,10 @@ describe('CopilotPromptService MCP identity scoping', () => {
       expect(mocks.configured.mock.lastCall?.[0].mcpServers.external.headers).toEqual({
         Authorization: 'Bearer external-token',
       });
+      // MCP config travels over the CLI's stdio JSON-RPC, never its spawn env or args.
+      expect(JSON.stringify(mocks.constructed.mock.lastCall)).not.toMatch(
+        /test-token|external-token/
+      );
       expect(mocks.sendAndWait).toHaveBeenLastCalledWith(
         {
           prompt: expect.stringContaining(

@@ -25,8 +25,9 @@ import {
   runWithTenantContext,
   sessions,
   shortId,
+  TaskRepository,
 } from '@agor/core/db';
-import type { SessionID, UserID } from '@agor/core/types';
+import { type SessionID, type Task, type TaskID, TaskStatus, type UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect, vi } from 'vitest';
 import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
@@ -37,6 +38,7 @@ import {
   MCP_TOKEN_ISSUER,
   shutdownMcpTokens,
   validateSessionToken,
+  validateVerifiedSessionToken,
   verifySessionTokenDetailed,
 } from './tokens.js';
 
@@ -446,6 +448,119 @@ describe('validateSessionToken', () => {
       });
     }
   );
+});
+
+describe('task-bound tokens', () => {
+  async function seedTask(db: Database, sessionId: SessionID, overrides: Partial<Task> = {}) {
+    return new TaskRepository(db).create({
+      session_id: sessionId,
+      created_by: 'test-user',
+      status: TaskStatus.RUNNING,
+      executor_connected_at: new Date().toISOString(),
+      ...overrides,
+    });
+  }
+
+  function mintForTask(sessionId: SessionID, taskId: TaskID): Promise<string> {
+    return runWithTenantContext('tenant-a', () =>
+      generateSessionToken(makeApp(), sessionId, 'u1' as UserID, taskId)
+    );
+  }
+
+  dbTest('authenticates only while a connected executor owns the task', async ({ db }) => {
+    initTestMcpTokens(db);
+    const sessionId = await seedSession(db);
+    const task = await seedTask(db, sessionId);
+    const token = await mintForTask(sessionId, task.task_id);
+
+    expect(await validateSessionToken(makeApp(), token)).toMatchObject({
+      sessionId,
+      taskId: task.task_id,
+    });
+
+    await new TaskRepository(db).update(task.task_id, { status: TaskStatus.STOPPED });
+    expect(await validateSessionToken(makeApp(), token)).toBeNull();
+  });
+
+  dbTest(
+    'rejects a token whose task completed, was deleted, or never connected',
+    async ({ db }) => {
+      initTestMcpTokens(db);
+      const sessionId = await seedSession(db);
+      const completed = await seedTask(db, sessionId);
+      const completedToken = await mintForTask(sessionId, completed.task_id);
+      await new TaskRepository(db).update(completed.task_id, { status: TaskStatus.COMPLETED });
+      expect(await validateSessionToken(makeApp(), completedToken)).toBeNull();
+
+      const pending = await seedTask(db, sessionId, {
+        status: TaskStatus.DISPATCHING,
+        executor_connected_at: undefined,
+      });
+      expect(
+        await validateSessionToken(makeApp(), await mintForTask(sessionId, pending.task_id))
+      ).toBeNull();
+
+      const missingTaskToken = await mintForTask(sessionId, generateId() as TaskID);
+      expect(await validateSessionToken(makeApp(), missingTaskToken)).toBeNull();
+    }
+  );
+
+  dbTest('rejects a running task once Stop has been requested', async ({ db }) => {
+    initTestMcpTokens(db);
+    const sessionId = await seedSession(db);
+    const task = await seedTask(db, sessionId, {
+      termination_request: { cause: 'user_stop', requested_at: new Date().toISOString() },
+    });
+    expect(
+      await validateSessionToken(makeApp(), await mintForTask(sessionId, task.task_id))
+    ).toBeNull();
+  });
+
+  dbTest("rejects a token bound to another session's live task", async ({ db }) => {
+    initTestMcpTokens(db);
+    const sessionId = await seedSession(db);
+    const otherSessionId = await seedSession(db);
+    const otherTask = await seedTask(db, otherSessionId);
+
+    expect(
+      await validateSessionToken(makeApp(), await mintForTask(sessionId, otherTask.task_id))
+    ).toBeNull();
+  });
+
+  dbTest('names why server state refused a verified token', async ({ db }) => {
+    initTestMcpTokens(db);
+    const sessionId = await seedSession(db);
+    const task = await seedTask(db, sessionId);
+    const verified = (token: string) => verifySessionTokenDetailed(makeApp(), token).context!;
+    const live = verified(await mintForTask(sessionId, task.task_id));
+
+    await new TaskRepository(db).update(task.task_id, { status: TaskStatus.COMPLETED });
+    expect(await validateVerifiedSessionToken(live)).toEqual({
+      context: null,
+      reason: 'task_not_live',
+    });
+    await deleteFrom(db, sessions).where(eq(sessions.session_id, sessionId)).run();
+    expect(await validateVerifiedSessionToken(live)).toEqual({
+      context: null,
+      reason: 'session_missing',
+    });
+  });
+
+  dbTest('never serves one task a token cached for another', async ({ db }) => {
+    initTestMcpTokens(db);
+    const sessionId = await seedSession(db);
+    const first = await seedTask(db, sessionId);
+    const firstToken = await mintForTask(sessionId, first.task_id);
+    await new TaskRepository(db).update(first.task_id, { status: TaskStatus.COMPLETED });
+
+    const second = await seedTask(db, sessionId);
+    const secondToken = await mintForTask(sessionId, second.task_id);
+    expect(secondToken).not.toBe(firstToken);
+    expect(await validateSessionToken(makeApp(), secondToken)).toMatchObject({
+      taskId: second.task_id,
+    });
+    expect(await mintSessionToken(makeApp(), sessionId, 'u1' as UserID)).not.toBe(secondToken);
+  });
 });
 
 describe('verification diagnostics', () => {

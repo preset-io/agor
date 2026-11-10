@@ -518,37 +518,61 @@ tenant-scoped units of work.
 ## MCP Tokens
 
 MCP session tokens are short-lived JWTs (aud `agor:mcp:internal`) embedding
-the session (`sub`), authenticated caller (`uid`), tenant (`tid`), a
-per-issuance ID (`jti`), and an expiry (`exp`). A still-valid token may be
-reused from a cache keyed by tenant, session, and user; otherwise `GET
-/sessions/:id` or `POST /sessions` mints a new one.
+the session (`sub`), the user the agent acts for (`uid`), the tenant (`tid`),
+the executor's task (`tsk`), a per-issuance ID (`jti`), and an expiry (`exp`).
+Agor issues them only to an agent's executor, when it fetches its own session
+with its task-scoped credential; a still-valid token may be reused from a
+cache keyed by tenant, session, user, and task.
 
-There is no revocation mechanics, no per-jti ledger, no session-generation
-counter. The authorised blast radius of a leak is bounded by `exp` (default
-24h). Validation additionally rejects tokens whose session has been deleted
-from the signed tenant. Tokens issued before the tenant binding was introduced
-are rejected and are replaced the next time the session is fetched or created.
-These session tokens are for daemon-to-executor use; external clients should
-use personal API keys rather than treating this JWT format as a general-purpose
-authentication protocol.
+A token stops working as soon as its task completes, fails, or a Stop is
+requested, so an agent keeps its Agor tools for the whole turn but a copied
+token does not outlive it. The next turn receives a fresh token.
+
+Every `/mcp` request also re-checks, from current server state, that the
+session still exists in the signed tenant, that the user still exists (and,
+with [one-time launch auth](/guide/one-time-launch-auth), is still a member),
+and that the user can still read the session's branch. There is no per-token
+denylist; otherwise a token lasts until `exp` (default 24h). Agor does not
+store MCP tokens or include them in realtime session events. A token saved by
+an older release is ignored on read and removed the next time its session's
+settings or state are updated. Tokens issued by an older release without a
+task binding keep working until they expire.
+
+### How agents receive the token
+
+The executor hands the token to the coding agent without putting it where the
+agent's own shell commands can read it:
+
+- **Claude Code:** applied over the SDK control channel, not on the CLI
+  command line, together with the other MCP servers and their credentials.
+  Agor's server and any always-loaded server connect before the first prompt;
+  the others connect right after it, so a slow server does not hold the turn.
+- **Codex:** read by Codex from an environment variable that Agor blanks in
+  every command Codex runs (`shell_environment_policy.set`), along with the
+  variables carrying other MCP servers' credentials. Your own
+  `shell_environment_policy` settings keep applying.
+- **OpenCode:** attached through the OpenCode server's authenticated API
+  rather than its environment, together with the other MCP servers and their
+  resolved auth headers.
+- **Gemini, Copilot, Cursor:** passed in process or over the SDK's stdio
+  channel.
+
+This keeps the token out of what the agent's commands inherit or see in a
+process listing. It does not isolate processes running as the same OS user:
+such a process can still read the agent's memory, or, for Codex, the Codex
+process's own environment (for example `/proc/<pid>/environ` on Linux). The
+task binding limits what such a copy is worth.
 
 ### Access gating
 
-Because an MCP token binds `uid` to the authorized caller and lets the bearer
-act as that user on the MCP channel, it is only issued to callers who are
-allowed to receive a token for the session:
-
-- **`GET /sessions/:id`** first applies normal session and branch
-  authorization, then issues a caller-scoped token to any authenticated
-  `member+` or to the executor's service identity (`role: 'service'`, used when
-  spawning the child process). The caller need not be the session creator:
-  MCP tools continue to act as that caller and enforce their normal
-  authorization checks.
-- For **`POST /sessions`**, the caller is the creator by construction, so
-  `member+` is the only gate here.
-- Callers with the account role **viewer** never receive an `mcp_token` on
-  either path. They cannot
-  prompt via REST either, so MCP would be useless for them regardless.
+- **`GET /sessions/:id`** returns `mcp_token` only to a task executor reading
+  its own session, whose delegated user is `member+`, after normal session
+  and branch authorization. That user need not be the session creator: MCP
+  tools act as the prompting user and enforce their normal authorization
+  checks.
+- `POST /sessions` never returns one. Browser, CLI, and API callers, service
+  accounts, and viewers never receive an `mcp_token`; external clients use
+  [personal API keys](#external-agent-access) instead.
 
 ### Config knobs
 

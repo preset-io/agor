@@ -12,17 +12,19 @@
  * - `iat`  — unix seconds, standard JWT "issued at"
  * - `exp`  — unix seconds, enforced by `jsonwebtoken.verify`
  * - `jti`  — per-issuance UUID (useful for log correlation)
+ * - `tsk`  — the executor's task; the sessions hook mints only these, older tokens may lack it
  *
- * No revocation mechanics. Tokens are minted lazily and cached briefly per
- * `(tenant,session,user)` so high-frequency `session.get` calls don't perform
- * redundant JWT signing and session-existence probes. Tokens carry a short
- * `exp` (default 24h); any suspected
- * compromise is addressed by rotating the JWT signing secret or letting the
- * token expire. MCP is internal-only (loopback) — if/when it goes external
- * we'd design auth from scratch (OAuth / API keys) rather than extending this.
+ * No denylist or generation counter. Tokens are minted lazily and cached
+ * briefly per `(tenant,session,user,task)` so high-frequency `session.get`
+ * calls don't perform redundant JWT signing and session-existence probes.
+ * Tokens carry a short `exp` (default 24h). MCP is internal-only (loopback) —
+ * if/when it goes external we'd design auth from scratch (OAuth / API keys)
+ * rather than extending this.
  *
- * A session-existence check is still performed during validation so tokens
- * for deleted sessions are rejected even if they haven't yet hit their `exp`.
+ * Validation revokes by server-side state: a token is rejected once its
+ * session is deleted, and a task-bound token once its task's executor no
+ * longer owns a live, unstopped task. The MCP route separately re-checks the
+ * user, membership, and branch access on every request.
  */
 
 import {
@@ -38,6 +40,7 @@ import {
   runWithTenantDatabaseScope,
   SessionRepository,
   shortId,
+  TaskRepository,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
@@ -45,6 +48,7 @@ import {
   MCP_TOKEN_AUDIENCE,
   MCP_TOKEN_ISSUER,
   type SessionID,
+  type TaskID,
   type TenantID,
   type UserID,
 } from '@agor/core/types';
@@ -75,6 +79,7 @@ interface McpTokenPayload {
   iat?: number;
   exp?: number;
   jti?: string;
+  tsk?: TaskID;
 }
 
 export interface McpTokenContext {
@@ -82,6 +87,7 @@ export interface McpTokenContext {
   userId: UserID;
   tenantId: TenantID;
   jti: string;
+  taskId?: TaskID;
 }
 
 export interface McpTokenInitOptions {
@@ -104,6 +110,7 @@ export interface McpTokenInitOptions {
 interface ModuleState {
   db: TenantScopeAwareDatabase;
   sessionRepo: SessionRepository;
+  taskRepo: TaskRepository;
   multiTenancy: ResolvedMultiTenancyConfig;
   expirationMs: number;
   now: () => number;
@@ -142,6 +149,7 @@ export function initMcpTokens(options: McpTokenInitOptions): void {
   _state = {
     db: options.db,
     sessionRepo: new SessionRepository(options.db),
+    taskRepo: new TaskRepository(options.db),
     multiTenancy: options.multiTenancy,
     expirationMs,
     now,
@@ -202,7 +210,8 @@ function resolveIssuanceTenantId(state: ModuleState): TenantID {
 }
 
 /**
- * Mint or reuse an MCP token for a session.
+ * Mint or reuse an MCP token for a session. A `taskId` binds the token to
+ * that task's executor lifetime.
  *
  * @throws if the module isn't initialized, the session doesn't exist, or the
  *   app lacks a JWT secret.
@@ -210,7 +219,8 @@ function resolveIssuanceTenantId(state: ModuleState): TenantID {
 export async function generateSessionToken(
   app: Application,
   sessionId: SessionID,
-  userId: UserID
+  userId: UserID,
+  taskId?: TaskID
 ): Promise<string> {
   const s = requireState();
   const jwtSecret = app.settings.authentication?.secret;
@@ -229,7 +239,7 @@ export async function generateSessionToken(
     s.lastCachePruneAtMs = nowMs;
   }
 
-  const cacheKey = `${tenantId}:${sessionId}:${userId}`;
+  const cacheKey = `${tenantId}:${sessionId}:${userId}:${taskId ?? ''}`;
   const cached = s.tokenCache.get(cacheKey);
   // Keep a buffer so callers never receive a token that is about to expire.
   const refreshBufferMs = Math.min(5 * 60 * 1000, Math.max(30 * 1000, s.expirationMs * 0.1));
@@ -262,6 +272,7 @@ export async function generateSessionToken(
     iat: nowSec,
     exp: expSec,
     jti,
+    ...(taskId ? { tsk: taskId } : {}),
   };
 
   const token = jwt.sign(payload, jwtSecret, { algorithm: 'HS256' });
@@ -305,6 +316,9 @@ export type McpTokenRejectionReason =
   | 'verify_error'
   | 'missing_identity'
   | 'missing_lifetime';
+
+/** Server-state rejections, decided after the token itself verified. */
+export type McpTokenStateRejection = 'session_missing' | 'task_not_live';
 
 type McpTokenVerification =
   | { context: McpTokenContext; reason?: never }
@@ -365,9 +379,18 @@ export function verifySessionTokenDetailed(app: Application, token: string): Mcp
   if (!payload.jti || payload.exp === undefined) {
     return { context: null, reason: 'missing_lifetime' };
   }
+  if (payload.tsk !== undefined && (typeof payload.tsk !== 'string' || !payload.tsk)) {
+    return { context: null, reason: 'missing_identity' };
+  }
 
   return {
-    context: { sessionId, userId, tenantId: tenantId.trim() as TenantID, jti: payload.jti },
+    context: {
+      sessionId,
+      userId,
+      tenantId: tenantId.trim() as TenantID,
+      jti: payload.jti,
+      ...(payload.tsk ? { taskId: payload.tsk } : {}),
+    },
   };
 }
 
@@ -378,23 +401,27 @@ export function verifySessionToken(app: Application, token: string): McpTokenCon
 
 /**
  * Validate the tenant-owned state referenced by an already verified token.
- * The signed tenant is entered before the session lookup, and the transaction
- * lasts only for that lookup.
+ * The signed tenant is entered before the session (and bound task) lookup,
+ * and the transaction lasts only for those lookups.
  */
 export async function validateVerifiedSessionToken(
   context: McpTokenContext
-): Promise<McpTokenContext | null> {
+): Promise<
+  { context: McpTokenContext; reason?: never } | { context: null; reason: McpTokenStateRejection }
+> {
   const s = requireState();
-  const sessionExists = await runWithTenantContext(context.tenantId, () =>
-    runWithTenantDatabaseScope(s.db, context.tenantId, () =>
-      s.sessionRepo.exists(context.sessionId)
-    )
+  const { sessionId, taskId } = context;
+  const reason = await runWithTenantContext(context.tenantId, () =>
+    runWithTenantDatabaseScope(s.db, context.tenantId, async () => {
+      if (!(await s.sessionRepo.exists(sessionId))) return 'session_missing' as const;
+      // Tokens from older releases carry no task and keep their exp-bounded lifetime.
+      if (taskId && !(await s.taskRepo.isOwnedByLiveExecutor(taskId, sessionId))) {
+        return 'task_not_live' as const;
+      }
+      return undefined;
+    })
   );
-  if (!sessionExists) {
-    return null;
-  }
-
-  return context;
+  return reason ? { context: null, reason } : { context };
 }
 
 /**
@@ -412,5 +439,5 @@ export async function validateSessionToken(
   if (expectedTenantId && expectedTenantId !== context.tenantId) {
     return null;
   }
-  return validateVerifiedSessionToken(context);
+  return (await validateVerifiedSessionToken(context)).context;
 }
