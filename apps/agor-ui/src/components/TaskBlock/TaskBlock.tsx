@@ -1045,7 +1045,12 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       content_preview: '',
       index: task.message_range?.start_index ?? 0,
       timestamp: task.message_range?.start_timestamp ?? task.created_at,
-      metadata: task.metadata?.is_agor_callback ? { is_agor_callback: true } : undefined,
+      metadata: {
+        ...(task.metadata?.is_agor_callback && { is_agor_callback: true }),
+        ...(task.metadata?.prompt_provenance && {
+          prompt_provenance: task.metadata.prompt_provenance,
+        }),
+      },
     };
     const promptMessageId =
       firstPromptId ?? (task.full_prompt ? fallbackPrompt.message_id : undefined);
