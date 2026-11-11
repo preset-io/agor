@@ -146,6 +146,7 @@ import type {
   Params,
   PromptOrigin,
   SessionID,
+  Task,
   UserID,
   UUID,
   WidgetMessageMetadata,
@@ -157,6 +158,7 @@ import {
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
   hasMinimumRole,
   isMCPOAuthGrantBindingVersion,
+  isTerminalTaskStatus,
   MCP_MEMBER_POLICY_CHANGED_EVENT,
   MCP_OAUTH_BROWSER_OPERATIONS,
   ROLES,
@@ -963,6 +965,18 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     };
     app.service('tasks').on('patched', syncSlackRecovery);
     app.service('tasks').on('updated', syncSlackRecovery);
+    // A finished turn sets the Session idle in the repository, so the Session patch hook never sends `done`.
+    app.service('tasks').on('patched', (task: Task, hook?: { params?: unknown }) => {
+      if (!isTerminalTaskStatus(task.status)) return;
+      gatewayService.updateProgressAfterCommit(
+        {
+          session_id: task.session_id,
+          task_id: task.task_id,
+          state: task.status === TaskStatus.FAILED ? 'failed' : 'done',
+        },
+        hook?.params
+      );
+    });
 
     const uiUrl = ctx.bundledUiAvailable ? `${daemonUrl}/ui` : `http://localhost:${ctx.UI_PORT}`;
     registerGitHubAppSetupRoutes(app, {
