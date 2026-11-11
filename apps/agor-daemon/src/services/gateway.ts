@@ -4710,6 +4710,7 @@ export class GatewayService {
           status: this.buildSlackAssistantStatus(data, metadataWithStart),
           loadingMessages: loadingMessage ? [loadingMessage] : undefined,
           iconEmoji: ':hourglass_flowing_sand:',
+          done: isTerminal,
         });
       } catch (error) {
         this.warnSlackAssistantStatusFailed(slackThreadId, error);
@@ -5722,6 +5723,11 @@ export class GatewayService {
       stage = 'reply';
       const reply = formatGatewayCommandReply(applied.receipt, stop);
       if (reply) await this.sendSystemMessage(channel, data.thread_id, reply);
+      if (stop || applied.receipt.outcome === 'idle') {
+        await this.getActiveListener(channel.id)
+          ?.setThreadStatus?.({ threadId: data.thread_id, status: '', done: true })
+          .catch((error) => this.warnSlackAssistantStatusFailed(data.thread_id, error));
+      }
     } catch (error) {
       // No raw exceptions or provider payloads in logs or external replies.
       console.warn(

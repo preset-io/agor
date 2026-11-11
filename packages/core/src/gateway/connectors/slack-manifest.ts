@@ -14,7 +14,6 @@
  * channel-like prompts and commands trigger only on `app_mention`.
  * Broad channel-message subscriptions are intentionally not requested.
  * Inbound emoji reactions are the one non-message trigger: they subscribe to `reaction_added`/`reaction_removed` only when opted in.
- * `agent_session_stopped` is always subscribed so Slack's Stop button runs `!stop`.
  */
 
 import {

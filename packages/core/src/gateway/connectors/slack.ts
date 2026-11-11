@@ -2559,6 +2559,7 @@ export class SlackConnector implements GatewayConnector {
     status: string;
     loadingMessages?: string[];
     iconEmoji?: string;
+    done?: boolean;
   }): Promise<void> {
     const { channel, thread_ts } = parseThreadId(req.threadId);
     const web = this.web as unknown as {
@@ -2587,9 +2588,9 @@ export class SlackConnector implements GatewayConnector {
     }
     // The legacy status carries the text; only an agent session shows Slack's Stop button.
     await web.apiCall?.('agents.sessions.setStatus', {
-      channel,
+      channel_id: channel,
       thread_ts,
-      status: req.status ? 'processing' : 'active',
+      status: req.done ? 'active' : 'processing',
     });
   }
 
@@ -2743,7 +2744,7 @@ export class SlackConnector implements GatewayConnector {
           routed = true;
           // Slack shows Stop only on this app's own session, so the click counts as a mention.
           await callback({
-            providerEventId: `slack:agent_session_stopped:${event.channel}:${event.event_ts}`,
+            providerEventId: `slack:agent_session_stopped:${slackTeamId ?? 'unknown'}:${event.channel}:${event.event_ts}`,
             threadId: `${event.channel}-${event.thread_ts}`,
             text: '!stop',
             userId: event.user,
@@ -2754,15 +2755,9 @@ export class SlackConnector implements GatewayConnector {
               ...(slackTeamId ? { slack_team_id: slackTeamId } : {}),
               slack_message_ts: event.event_ts,
               slack_has_mention: true,
-              slack_event_type: eventType,
               ...(profile.email ? { slack_user_email: profile.email } : {}),
               ...(this.config.align_slack_users ? { align_slack_users: true } : {}),
             },
-          });
-          await this.web.apiCall('agents.sessions.setStatus', {
-            channel: event.channel,
-            thread_ts: event.thread_ts,
-            status: 'active',
           });
           if (!ackFirst) await ack();
         } finally {

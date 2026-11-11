@@ -5929,18 +5929,21 @@ describe('GatewayService Slack progress tenant scope', () => {
         status: 'is queued.',
         loadingMessages: ['Queued in Agor…'],
         iconEmoji: ':hourglass_flowing_sand:',
+        done: false,
       });
       expect(setThreadStatus).toHaveBeenNthCalledWith(2, {
         threadId,
         status: 'is using Read.',
         loadingMessages: ['Using Read…'],
         iconEmoji: ':hourglass_flowing_sand:',
+        done: false,
       });
       expect(setThreadStatus).toHaveBeenNthCalledWith(3, {
         threadId,
         status: '',
         loadingMessages: undefined,
         iconEmoji: ':hourglass_flowing_sand:',
+        done: true,
       });
       expect(threadMapRepo.updateMetadata).toHaveBeenLastCalledWith(expect.any(String), {
         slack_active_thread_id: threadId,
