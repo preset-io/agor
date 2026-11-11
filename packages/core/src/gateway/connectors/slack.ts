@@ -2705,8 +2705,6 @@ export class SlackConnector implements GatewayConnector {
       }
     }
 
-    const surfaces = { enableChannels, enableGroups, enableMpim, allowedChannelIds };
-
     // Handle incoming Slack events
     socketMode.on('slack_event', async ({ type, body, ack }) => {
       // Event received - process based on type
@@ -2729,7 +2727,7 @@ export class SlackConnector implements GatewayConnector {
           eventType,
           callback,
           options,
-          surfaces,
+          surfaces: { enableChannels, enableGroups, enableMpim, allowedChannelIds },
         });
         return;
       }
@@ -2740,8 +2738,6 @@ export class SlackConnector implements GatewayConnector {
         let routed = false;
         try {
           if (typeof event.channel !== 'string' || typeof event.user !== 'string') return;
-          const channelType = await this.resolveChannelType(event.channel, undefined);
-          if (!isSlackInboundSurfaceAllowed(channelType, event.channel, surfaces)) return;
           const profile = await this.lookupUserProfile(event.user, options.durableEventIdempotency);
           const slackTeamId = body.team_id ?? body.authorizations?.[0]?.team_id;
           routed = true;
@@ -2754,7 +2750,6 @@ export class SlackConnector implements GatewayConnector {
             timestamp: event.event_ts,
             metadata: {
               channel: event.channel,
-              channel_type: channelType,
               slack_user_id: event.user,
               ...(slackTeamId ? { slack_team_id: slackTeamId } : {}),
               slack_message_ts: event.event_ts,
