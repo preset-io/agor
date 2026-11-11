@@ -108,6 +108,7 @@ import {
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
 import { taskFailureAnalytics } from '../utils/task-failure-analytics.js';
 import { deferWithTenantContext, withFreshTenantWrite } from '../utils/tenant-db-scope.js';
+import type { GatewayService } from './gateway';
 import type { SessionParams, SessionsService } from './sessions';
 
 /** Internal settlement input; cleanup evidence is not persisted or accepted in Task patches. */
@@ -936,6 +937,21 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         id: session.session_id,
         params,
       });
+
+      // A published Session runs no patch hooks, so the gateway's turn-end reply and status go out here.
+      deferWithTenantContext(
+        params,
+        async () => {
+          const gateway = this.app.service('gateway') as unknown as GatewayService;
+          await gateway.flushOutboundBuffer(task.session_id, { taskId: task.task_id });
+          await gateway.updateProgress({
+            session_id: task.session_id,
+            task_id: task.task_id,
+            state: 'done',
+          });
+        },
+        (error) => console.warn('Gateway turn-end delivery failed:', error)
+      );
 
       // Timeouts are terminal lifecycle results, but they are not successful,
       // failed, or stopped provider completions. Publish the projection and
