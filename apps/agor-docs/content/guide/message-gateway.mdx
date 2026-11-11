@@ -184,6 +184,8 @@ session is running.
 Slack channel, group, and thread commands require a mention, just like prompts.
 The recommended Slack app subscribes to `app_mention` and `message.im`, not all
 channel messages. No additional message subscriptions are needed for commands.
+When the Slack app has **Agents** enabled in its settings, Slack's native Stop
+button on a running reply sends `!stop` for you, through the `agent_session_stopped` event.
 
 Discord and Teams also support bare commands in existing threads connected to
 exactly one session when the platform delivers unmentioned messages. If multiple
@@ -297,7 +299,7 @@ The wizard and manifest bake these in automatically. This table is for understan
 
 | Capability                                | Bot scopes added                                                                    | Events added                         |
 | ----------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------ |
-| **Direct messages** (baseline, always on) | `chat:write`, `im:history`, `im:read`, `users:read`                                 | `message.im`                         |
+| **Direct messages** (baseline, always on) | `chat:write`, `im:history`, `im:read`, `users:read`                                 | `message.im`, `agent_session_stopped` |
 | **Public channels**                       | `app_mentions:read`, `channels:history`, `channels:read`                            | `app_mention`    |
 | **Private channels**                      | `groups:history`, `groups:read`                                                     | `app_mention`                     |
 | **Group DMs**                             | `mpim:history`, `mpim:read`                                                         | `app_mention`                       |

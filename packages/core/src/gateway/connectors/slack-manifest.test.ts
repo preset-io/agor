@@ -305,20 +305,23 @@ describe('resolveSlackAgentTools', () => {
 });
 
 describe('requiredBotEvents', () => {
-  it('DM-only emits only message.im', () => {
-    expect(requiredBotEvents(baseOptions)).toEqual(['message.im']);
+  it('DM-only emits message.im and agent_session_stopped', () => {
+    expect(requiredBotEvents(baseOptions)).toEqual(['agent_session_stopped', 'message.im']);
   });
 
   it('each channel-like surface adds only mentions, not broad message subscriptions', () => {
     expect(requiredBotEvents(withOptions({ publicChannels: true }))).toEqual([
+      'agent_session_stopped',
       'app_mention',
       'message.im',
     ]);
     expect(requiredBotEvents(withOptions({ privateChannels: true }))).toEqual([
+      'agent_session_stopped',
       'app_mention',
       'message.im',
     ]);
     expect(requiredBotEvents(withOptions({ groupDms: true }))).toEqual([
+      'agent_session_stopped',
       'app_mention',
       'message.im',
     ]);
@@ -326,23 +329,32 @@ describe('requiredBotEvents', () => {
 
   it('inbound reactions add reaction_added and reaction_removed', () => {
     expect(requiredBotEvents(withOptions({ inboundReactions: true }))).toEqual([
+      'agent_session_stopped',
       'message.im',
       'reaction_added',
       'reaction_removed',
     ]);
     expect(
       requiredBotEvents(withOptions({ inboundReactions: true, publicChannels: true }))
-    ).toEqual(['app_mention', 'message.im', 'reaction_added', 'reaction_removed']);
+    ).toEqual([
+      'agent_session_stopped',
+      'app_mention',
+      'message.im',
+      'reaction_added',
+      'reaction_removed',
+    ]);
   });
 
   it('agent reaction tools do not subscribe to reaction events', () => {
     expect(requiredBotEvents(withOptions({ agentTools: { reactions: true } }))).toEqual([
+      'agent_session_stopped',
       'message.im',
     ]);
   });
 
   it('outbound and alignUsers do not add events', () => {
     expect(requiredBotEvents(withOptions({ outbound: true, alignUsers: true }))).toEqual([
+      'agent_session_stopped',
       'message.im',
     ]);
   });
@@ -353,6 +365,7 @@ describe('buildSlackManifest', () => {
     const manifest = buildSlackManifest(withOptions({ inboundReactions: true }));
     expect(manifest.oauth_config.scopes.bot).toContain('reactions:read');
     expect(manifest.settings.event_subscriptions.bot_events).toEqual([
+      'agent_session_stopped',
       'message.im',
       'reaction_added',
       'reaction_removed',
@@ -398,6 +411,7 @@ describe('buildSlackManifest', () => {
         "settings": {
           "event_subscriptions": {
             "bot_events": [
+              "agent_session_stopped",
               "message.im",
             ],
           },
@@ -454,6 +468,7 @@ describe('buildSlackManifest', () => {
         "settings": {
           "event_subscriptions": {
             "bot_events": [
+              "agent_session_stopped",
               "app_mention",
               "message.im",
             ],
@@ -509,6 +524,7 @@ describe('buildSlackManifest', () => {
         "settings": {
           "event_subscriptions": {
             "bot_events": [
+              "agent_session_stopped",
               "app_mention",
               "message.im",
             ],
