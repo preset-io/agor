@@ -1,5 +1,4 @@
 import type {
-  AgenticToolName,
   AgorClient,
   Board,
   Branch,
@@ -47,15 +46,14 @@ import {
 import { clearOpenedSessionFlags } from '../../utils/sessionAttention';
 import { OPEN_CREATE_FLOW_EVENT, onShellPicker } from '../../utils/shellEvents';
 import { resolveBoardFromUrlPure, resolveSessionFromShortIdPure } from '../../utils/urlResolution';
-import { buildNewSessionConfig } from '../AgenticToolConfigurationPicker/newSessionConfig';
-import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
-import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
+import { AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/useBranchModalForm';
 import { CompactNotice } from '../CompactNotice';
 import { CreateModals } from '../CreateModals';
 import { type HomeLocationState, HomePage } from '../HomePage';
 import { useHomeNeeds } from '../HomePage/useHomeNeeds';
+import { NewSessionModal } from '../NewSessionModal';
 import { PrimaryLookupFailedNotice } from '../PrimaryAssistantCompose/PrimaryLookupFailedNotice';
 import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
 import { TeammatesDirectory } from '../TeammatesDirectory';
@@ -206,11 +204,15 @@ export const MobileApp: React.FC<MobileAppProps> = ({
 
   const [moreOpen, setMoreOpen] = useState(false);
   const [askPickerOpen, setAskPickerOpen] = useState(false);
-  const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
+  // The branch the new-session dialog targets; a primary branch may sit outside the loaded store scopes.
+  const [newSession, setNewSession] = useState<{ branchId: string; branch?: Branch } | null>(null);
   const [branchEditor, setBranchEditor] = useState<{
     branchId: string;
     tab: BranchModalTab;
   } | null>(null);
+  const newSessionBranch = newSession
+    ? (branchById.get(newSession.branchId) ?? newSession.branch)
+    : undefined;
   const selectedBranch = branchEditor ? (branchById.get(branchEditor.branchId) ?? null) : null;
   const selectedRepo = selectedBranch ? (repoById.get(selectedBranch.repo_id) ?? null) : null;
   // The desktop BranchModal's on-open read: the store holds only the loaded scopes' sessions.
@@ -239,9 +241,11 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   }, []);
   // One guard for every create flow: the newest creation owns navigation, so an older one settling late cannot yank the user away.
   // A guarded call dropped by an identity change never settles, so the pending flag is released here rather than in its `finally`.
-  const sessionCreationGuard = useIdentityGuardedAsync([user?.user_id, authGeneration], () =>
-    markCreating(false)
-  );
+  // A new-session dialog opened for the previous identity closes with it.
+  const sessionCreationGuard = useIdentityGuardedAsync([user?.user_id, authGeneration], () => {
+    markCreating(false);
+    setNewSession(null);
+  });
 
   // Track the board in view so the Board tab has a target from any screen.
   // Falls back to the last visited board, the user's main board, then any board.
@@ -329,29 +333,21 @@ export const MobileApp: React.FC<MobileAppProps> = ({
 
   // Start a FRESH session and land in its full-screen composer; an identity change mid-flight drops the result.
   const createAndOpenSession = useCallback(
-    async (
-      branch: { branch_id: string } & Pick<Branch, 'board_id' | 'mcp_server_ids'>,
-      tool: AgenticToolName
-    ) => {
-      if (creatingSessionRef.current) return;
+    async (config: NewSessionConfig, boardId: string) => {
+      if (creatingSessionRef.current) return null;
       markCreating(true);
       const operationGeneration = authGeneration;
       try {
-        const result = await sessionCreationGuard.run(() =>
-          onCreateSession(
-            buildNewSessionConfig({ user, tool, branch, initialPrompt: '' }),
-            branch.board_id ?? ''
-          )
-        );
-        if (isAuthenticationGenerationCurrent?.(operationGeneration) === false) return;
+        const result = await sessionCreationGuard.run(() => onCreateSession(config, boardId));
+        if (isAuthenticationGenerationCurrent?.(operationGeneration) === false) return null;
         if (result?.sessionId) navigate(`/m/session/${result.sessionId}`);
+        return result;
       } finally {
         markCreating(false);
       }
     },
     [
       navigate,
-      user,
       onCreateSession,
       sessionCreationGuard,
       markCreating,
@@ -360,19 +356,12 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     ]
   );
 
-  // Every Ask tap creates a new session on the primary branch (never continues one).
-  const startPrimarySession = useCallback(
-    (branch: Branch) => {
-      // Read the current workspace snapshot again after an asynchronous primary lookup or pick.
-      const settings = agorStore.getState();
-      if (!settings.agenticToolSettingsHydrated) return;
-      return createAndOpenSession(
-        branch,
-        resolveAvailableUserAgenticTool(user, settings.agenticToolSettingsByName, AVAILABLE_AGENTS)
-      );
-    },
-    [createAndOpenSession, user]
-  );
+  // Every Ask tap starts a new session on the primary branch (never continues one), through the new-session dialog.
+  const startPrimarySession = useCallback((branch: Branch) => {
+    // Read the current workspace snapshot again after an asynchronous primary lookup or pick.
+    if (!agorStore.getState().agenticToolSettingsHydrated) return;
+    setNewSession({ branchId: branch.branch_id, branch });
+  }, []);
 
   const askPrimaryAssistant = useCallback(async () => {
     if (!client || creatingSessionRef.current || !agorStore.getState().agenticToolSettingsHydrated)
@@ -386,7 +375,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
       return;
     }
     setAskPickerOpen(false);
-    await startPrimarySession(branch);
+    startPrimarySession(branch);
   }, [client, primaryBranch, refreshPrimaryBranch, startPrimarySession]);
 
   const handleTabSelect = useCallback(
@@ -575,7 +564,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 primaryTeammateName={primaryTeammateName}
                 onForkSession={onForkSession}
                 onSpawnSession={onSpawnSession}
-                onCreateSessionOnBranch={(branchId) => setNewSessionBranchId(branchId)}
+                onCreateSessionOnBranch={(branchId) => setNewSession({ branchId })}
                 onAskPrimary={canCreateSessions ? () => void askPrimaryAssistant() : undefined}
                 onBack={goBackHome}
               />
@@ -617,7 +606,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 boardById={boardById}
                 branchById={branchById}
                 onOpenBranch={(branchId, tab) => setBranchEditor({ branchId, tab })}
-                onNewSession={(branchId) => setNewSessionBranchId(branchId)}
+                onNewSession={(branchId) => setNewSession({ branchId })}
                 client={client}
                 currentUser={user}
                 onForkSession={onForkSession}
@@ -699,7 +688,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               onPicked={(branch) => {
                 setPrimaryBranch(branch);
                 setAskPickerOpen(false);
-                void startPrimarySession(branch);
+                startPrimarySession(branch);
               }}
             />
             {canCreateSessions && (
@@ -719,29 +708,24 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         )}
       </Drawer>
 
-      <Drawer
-        open={newSessionBranchId !== null}
-        onClose={() => setNewSessionBranchId(null)}
-        placement="bottom"
-        height="auto"
-        title="Choose a coding agent"
-        {...reducedMotionSurface(reducedMotion)}
-        styles={{ body: { paddingBottom: 'env(safe-area-inset-bottom)' } }}
-      >
-        <AgentSelectionGrid
-          agents={AVAILABLE_AGENTS}
-          selectedAgentId={null}
-          onSelect={(agent) => {
-            if (!newSessionBranchId) return;
-            const branch = branchById.get(newSessionBranchId) ?? { branch_id: newSessionBranchId };
-            setNewSessionBranchId(null);
-            void createAndOpenSession(branch, agent as AgenticToolName);
+      {/* The desktop new-session dialog: agent, then its configuration source (provider/auth preset) and model. */}
+      {newSession && (
+        <NewSessionModal
+          open
+          fullScreen
+          onClose={() => setNewSession(null)}
+          onCreate={async (config) => {
+            const result = await createAndOpenSession(config, newSessionBranch?.board_id ?? '');
+            setNewSession(null);
+            return result;
           }}
-          columns={2}
-          size="small"
-          showComparisonLink={false}
+          availableAgents={AVAILABLE_AGENTS}
+          branchId={newSession.branchId}
+          branch={newSessionBranch}
+          currentUser={user}
+          client={client}
         />
-      </Drawer>
+      )}
 
       <MobileMoreSheet
         open={moreOpen}

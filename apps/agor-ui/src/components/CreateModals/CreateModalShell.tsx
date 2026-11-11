@@ -22,6 +22,16 @@ const shellStyles = (token: GlobalToken, fullScreen: boolean): ModalProps['style
   },
 });
 
+/** Edge-to-edge (mobile) Modal surface, shared with other mobile dialogs. */
+export const fullScreenModalProps = (
+  token: GlobalToken
+): Pick<ModalProps, 'width' | 'style' | 'centered' | 'styles'> => ({
+  width: '100vw',
+  style: { top: 0, maxWidth: '100vw', margin: 0, paddingBottom: 0 },
+  centered: false,
+  styles: shellStyles(token, true),
+});
+
 export interface CreateModalShellProps {
   open: boolean;
   title: React.ReactNode;
@@ -71,10 +81,9 @@ export const CreateModalShell: React.FC<CreateModalShellProps> = ({
         if (!isSubmitting) onCancel();
       }}
       destroyOnHidden
-      width={fullScreen ? '100vw' : width}
-      style={fullScreen ? { top: 0, maxWidth: '100vw', margin: 0, paddingBottom: 0 } : undefined}
-      centered={!fullScreen}
-      styles={shellStyles(token, fullScreen)}
+      {...(fullScreen
+        ? fullScreenModalProps(token)
+        : { width, centered: true, styles: shellStyles(token, false) })}
       closable={!isSubmitting}
       mask={{ closable: false }}
       keyboard={!isSubmitting}
