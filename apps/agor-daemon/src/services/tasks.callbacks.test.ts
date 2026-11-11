@@ -893,7 +893,7 @@ describe('TasksService gateway turn end', () => {
     });
 
     await service.patch(taskId, { status: TaskStatus.COMPLETED }, tenantParams);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(gateway.flushOutboundBuffer).not.toHaveBeenCalled();
     expect(gateway.updateProgress).not.toHaveBeenCalled();
