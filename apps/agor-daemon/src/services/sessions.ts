@@ -988,9 +988,21 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     label: string
   ): Promise<void> {
     try {
-      const parentServers = await this.sessionMCPRepo.listServers(sourceSessionId, true);
-      for (const server of parentServers) {
+      const parentLinks = await this.sessionMCPRepo.listServersWithMetadata(sourceSessionId);
+      for (const { server, enabled } of parentLinks) {
         try {
+          if (!enabled) {
+            // A disabled link on a global server is a per-session opt-out;
+            // the child keeps it off rather than re-inheriting the server.
+            if (server.scope === 'global') {
+              await this.sessionMCPRepo.setServerEnabled(
+                targetSessionId,
+                server.mcp_server_id as MCPServerID,
+                false
+              );
+            }
+            continue;
+          }
           await this.sessionMCPRepo.addServer(targetSessionId, server.mcp_server_id as MCPServerID);
           // Emit WebSocket event for real-time UI updates
           emitServiceEvent(this.app, {

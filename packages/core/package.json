@@ -442,6 +442,12 @@
       "import": "./dist/mcp/index.js",
       "default": "./dist/mcp/index.js"
     },
+    "./mcp/effective-set": {
+      "source": "./src/mcp/effective-set.ts",
+      "types": "./dist/mcp/effective-set.d.ts",
+      "import": "./dist/mcp/effective-set.js",
+      "default": "./dist/mcp/effective-set.js"
+    },
     "./mcp/member-policy": {
       "source": "./src/mcp/member-policy.ts",
       "types": "./dist/mcp/member-policy.d.ts",

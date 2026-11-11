@@ -71,16 +71,14 @@ export class SessionMCPServersService {
     return this.sessionMCPRepo.removeServer(sessionId, serverId);
   }
 
-  /**
-   * Toggle MCP server enabled state for session
-   */
-  async toggleServer(
+  /** Switch a server on/off for one session (opt-out of a global server). */
+  async setServerEnabled(
     sessionId: SessionID,
     serverId: MCPServerID,
     enabled: boolean,
     _params?: SessionMCPParams
   ): Promise<void> {
-    return this.sessionMCPRepo.toggleServer(sessionId, serverId, enabled);
+    return this.sessionMCPRepo.setServerEnabled(sessionId, serverId, enabled);
   }
 
   /**

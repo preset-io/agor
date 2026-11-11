@@ -135,6 +135,36 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     expect(patch.mock.calls[1]?.[1]?.expected_config_version).toBe(2);
   });
 
+  it('warns that nobody can sign in to per-user OAuth with the client_credentials grant', async () => {
+    const server = {
+      mcp_server_id: '01900000-0000-7000-8000-000000000098',
+      name: 'machine-grant',
+      transport: 'http',
+      url: 'https://mcp.example.com/mcp',
+      scope: 'global',
+      enabled: true,
+      config_version: 1,
+      auth: { type: 'oauth', oauth_mode: 'per_user', oauth_grant_type: 'client_credentials' },
+    } as MCPServer;
+    const client = {
+      service: vi.fn(() => ({ patch: vi.fn(), get: vi.fn().mockResolvedValue(server) })),
+      io: { on: vi.fn(), off: vi.fn() },
+    } as unknown as AgorClient;
+    render(
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        identityKey="user-a"
+        authorityKey="user-a:admin:1"
+        authGeneration={1}
+        mutationAllowed
+        onClose={vi.fn()}
+      />
+    );
+    expect(await screen.findByText("Users can't sign in to this server")).toBeInTheDocument();
+  });
+
   it('keeps the form open with the reason in it when a save fails', async () => {
     const server = {
       mcp_server_id: '01900000-0000-7000-8000-000000000097',

@@ -37,6 +37,7 @@ import {
 } from '@agor/core/types';
 import type { OutboundDnsLookup } from '@agor/core/utils/safe-outbound-fetch';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { sessionMcpScopeServerIds } from '../services/session-mcp-effective.js';
 import { degradeMcpRuntimeRecoveryForDirectMode } from '../utils/mcp-runtime-hints.js';
 import { issueMCPEgressCapability } from './capability.js';
 import {
@@ -395,6 +396,31 @@ async function harness(options: HarnessOptions) {
 const initialize = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize' });
 
 describe('authoritative MCP gateway real transport', () => {
+  it('rejects a global-server capability after a per-session opt-out, before outbound access', async () => {
+    const h = await harness({
+      server: {
+        transport: 'http',
+        scope: 'global',
+        url: 'https://mcp.example.test/mcp',
+        auth: { type: 'none' },
+      },
+    });
+    await new SessionMCPServerRepository(h.rawDb).setServerEnabled(
+      h.session.session_id,
+      h.server.mcp_server_id,
+      false
+    );
+    const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Network forbidden'));
+    try {
+      await expect(h.request('POST', initialize)).rejects.toMatchObject({
+        code: 'server_detached',
+      });
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      fetch.mockRestore();
+    }
+  });
+
   it('rejects an old global-server capability after explicit empty selection, before outbound access', async () => {
     const h = await harness({
       server: {
@@ -1375,6 +1401,36 @@ describe('authoritative MCP gateway real transport', () => {
         'hash-key'
       )
     );
+  });
+
+  it('keeps an inherited per-user client_credentials global server with a valid grant in scope', async () => {
+    const provider = await listen((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{"jsonrpc":"2.0","id":1,"result":{}}');
+    });
+    // Global, no session link, a saved grant: the pill shows it as connected,
+    // so header issuance and egress must both treat it as in scope.
+    const h = await harness({
+      server: {
+        transport: 'http',
+        url: provider,
+        scope: 'global',
+        auth: {
+          type: 'oauth',
+          oauth_mode: 'per_user',
+          oauth_grant_type: 'client_credentials',
+          oauth_client_id: 'machine-client',
+        },
+      },
+    });
+    expect(await new SessionMCPServerRepository(h.rawDb).listLinks(h.session.session_id)).toEqual(
+      []
+    );
+    // The scope decision `/mcp-servers/oauth-auth-headers` makes.
+    expect(await sessionMcpScopeServerIds(h.rawDb as never, h.session, h.user.user_id)).toContain(
+      h.server.mcp_server_id
+    );
+    await expect(h.request('POST', initialize)).resolves.toBeDefined();
   });
 
   it('admits the first request from an OAuth token-and-expiry-enriched projection', async () => {
