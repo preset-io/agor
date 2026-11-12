@@ -566,14 +566,33 @@ export class GitHubConnector implements GatewayConnector {
     const editCommentId = req.metadata?.edit_comment_id as number | undefined;
 
     if (editCommentId) {
-      // Edit existing comment (the "Processing..." comment → final response)
-      await octokit.issues.updateComment({
-        owner,
-        repo,
-        comment_id: editCommentId,
-        body: req.text,
-      });
-      return String(editCommentId);
+      // Edit existing comment (the "Processing..." comment → final response).
+      // If the comment was deleted (404), fall back to creating a new comment
+      // on the issue so the response is not lost. If the parent issue/repo
+      // is also gone, createComment will re-throw 404.
+      try {
+        await octokit.issues.updateComment({
+          owner,
+          repo,
+          comment_id: editCommentId,
+          body: req.text,
+        });
+        return String(editCommentId);
+      } catch (error) {
+        const status =
+          (error as { status?: number; statusCode?: number })?.status ??
+          (error as { status?: number; statusCode?: number })?.statusCode;
+        if (status === 404) {
+          const { data } = await octokit.issues.createComment({
+            owner,
+            repo,
+            issue_number: issueNumber,
+            body: req.text,
+          });
+          return String(data.id);
+        }
+        throw error;
+      }
     }
 
     // Create new comment

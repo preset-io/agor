@@ -340,6 +340,100 @@ describe('sendMessage', () => {
     expect(init?.method).toBe('PUT');
     expect(JSON.parse(init?.body as string)).toEqual({ text: 'final reply' });
   });
+
+  it('falls back to creating a comment (POST) when PUT returns 404', async () => {
+    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      if (init?.method === 'PUT' && u.endsWith('/comments/999')) {
+        return new Response(JSON.stringify({ message: 'Comment not found' }), {
+          status: 404,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (init?.method === 'POST' && u.endsWith('/stories/12345/comments')) {
+        return new Response(JSON.stringify({ id: 1001 }), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('Not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const connector = new ShortcutConnector({ api_token: 'tok', agent_member_id: 'm1' });
+    const id = await connector.sendMessage({
+      threadId: '12345|67890',
+      text: 'fallback reply',
+      metadata: { edit_comment_id: 999 },
+    });
+
+    expect(id).toBe('1001');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const [putUrl, putInit] = fetchMock.mock.calls[0];
+    expect(String(putUrl)).toBe('https://api.app.shortcut.com/api/v3/stories/12345/comments/999');
+    expect(putInit?.method).toBe('PUT');
+
+    const [postUrl, postInit] = fetchMock.mock.calls[1];
+    expect(String(postUrl)).toBe('https://api.app.shortcut.com/api/v3/stories/12345/comments');
+    expect(postInit?.method).toBe('POST');
+    expect(JSON.parse(postInit?.body as string)).toEqual({
+      text: 'fallback reply',
+      parent_id: 67890,
+    });
+  });
+
+  it('propagates non-404 PUT error (403, 500) without falling back to POST', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ message: 'Forbidden' }), {
+          status: 403,
+          headers: { 'content-type': 'application/json' },
+        })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const connector = new ShortcutConnector({ api_token: 'tok', agent_member_id: 'm1' });
+    await expect(
+      connector.sendMessage({
+        threadId: '12345|67890',
+        text: 'final reply',
+        metadata: { edit_comment_id: 999 },
+      })
+    ).rejects.toMatchObject({ status: 403 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates POST failure when fallback creation fails', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      if (init?.method === 'PUT') {
+        return new Response(JSON.stringify({ message: 'Comment not found' }), {
+          status: 404,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (init?.method === 'POST') {
+        return new Response(JSON.stringify({ message: 'Story not found' }), {
+          status: 500,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('Not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const connector = new ShortcutConnector({ api_token: 'tok', agent_member_id: 'm1' });
+    await expect(
+      connector.sendMessage({
+        threadId: '12345|67890',
+        text: 'final reply',
+        metadata: { edit_comment_id: 999 },
+      })
+    ).rejects.toMatchObject({ status: 500 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('testConnection', () => {
