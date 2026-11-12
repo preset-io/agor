@@ -122,6 +122,10 @@ function makeService(
     },
   ]);
   const revokeTaskTokens = vi.fn(async () => 1);
+  const gateway = {
+    flushOutboundBuffer: vi.fn(async () => undefined),
+    updateProgress: vi.fn(async () => undefined),
+  };
 
   const service = Object.create(TasksService.prototype) as TasksService & {
     repository: typeof repository;
@@ -151,6 +155,7 @@ function makeService(
       }
       if (name === 'messages') return { find: messagesFind };
       if (name === 'branches') return { get: vi.fn() };
+      if (name === 'gateway') return gateway;
       throw new Error(`unexpected service ${name}`);
     }),
   };
@@ -163,6 +168,7 @@ function makeService(
     triggerQueueProcessing,
     messagesFind,
     revokeTaskTokens,
+    gateway,
     getStoredTask: (id = taskId) => tasksById.get(id),
     childSession,
   };
@@ -860,5 +866,36 @@ describe('TasksService completion callbacks', () => {
         expect.objectContaining({ callback_config: expect.objectContaining({ enabled: false }) })
       )
     );
+  });
+});
+
+describe('TasksService gateway turn end', () => {
+  const tenantParams = { tenant: { tenant_id: 'tenant-1' } } as never;
+
+  it('sends the gateway final reply and done status when the latest task ends', async () => {
+    const { service, gateway } = makeService();
+
+    await service.patch(taskId, { status: TaskStatus.COMPLETED }, tenantParams);
+
+    await vi.waitFor(() =>
+      expect(gateway.updateProgress).toHaveBeenCalledWith({
+        session_id: childSessionId,
+        task_id: taskId,
+        state: 'done',
+      })
+    );
+    expect(gateway.flushOutboundBuffer).toHaveBeenCalledWith(childSessionId, { taskId });
+  });
+
+  it('leaves the gateway alone when a newer task already owns the session', async () => {
+    const { service, gateway } = makeService({
+      childSession: { tasks: [taskId, callbackTaskId as Task['task_id']] },
+    });
+
+    await service.patch(taskId, { status: TaskStatus.COMPLETED }, tenantParams);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(gateway.flushOutboundBuffer).not.toHaveBeenCalled();
+    expect(gateway.updateProgress).not.toHaveBeenCalled();
   });
 });
