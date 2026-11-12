@@ -880,6 +880,81 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     );
   }
 
+  private async triggerGatewayOutboundFlushAfterCommit(
+    task: Task,
+    _params?: TaskParams
+  ): Promise<void> {
+    await this.runAfterTenantDatabaseCommit(
+      'gateway_final_reply',
+      async () => {
+        try {
+          let gatewayService:
+            | {
+                flushOutboundBuffer?(sessionId: string, options: { taskId: string }): Promise<void>;
+                updateProgress?(data: {
+                  session_id: string;
+                  task_id?: string;
+                  state: 'queued' | 'working' | 'done' | 'failed';
+                  error_message?: string;
+                }): Promise<void>;
+                wakeDeliveryLoop?(): void;
+              }
+            | undefined;
+
+          try {
+            gatewayService = this.app.service('gateway') as unknown as typeof gatewayService;
+          } catch {
+            return;
+          }
+          if (!gatewayService) return;
+
+          try {
+            if (gatewayService.flushOutboundBuffer) {
+              await gatewayService.flushOutboundBuffer(task.session_id, {
+                taskId: task.task_id,
+              });
+            }
+          } catch (error) {
+            console.warn(
+              `[tasks.gateway_flush] Failed to trigger gateway flush for task ${shortId(task.task_id)}:`,
+              error
+            );
+          }
+
+          try {
+            if (gatewayService.updateProgress) {
+              await gatewayService.updateProgress({
+                session_id: task.session_id,
+                task_id: task.task_id,
+                state: 'done',
+              });
+            }
+          } catch (error) {
+            console.warn(
+              `[tasks.gateway_progress] Failed to update gateway progress for task ${shortId(task.task_id)}:`,
+              error
+            );
+          }
+
+          try {
+            gatewayService.wakeDeliveryLoop?.();
+          } catch (error) {
+            console.warn(
+              `[tasks.gateway_wake] Failed to wake delivery loop for task ${shortId(task.task_id)}:`,
+              error
+            );
+          }
+        } catch (error) {
+          console.warn(
+            `[tasks.gateway_final_reply] Failed in post-commit gateway delivery for task ${shortId(task.task_id)}:`,
+            error
+          );
+        }
+      },
+      'identity'
+    );
+  }
+
   private async processTerminalTaskTransition(
     task: Task,
     status: Task['status'],
@@ -923,6 +998,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         if (runCompletionSideEffects && !isStop) {
           await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
         }
+        await this.triggerGatewayOutboundFlushAfterCommit(task, params);
         return false;
       }
 
@@ -942,6 +1018,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // drain queued work without dispatching completion callbacks or cleaning
       // up ephemeral forks as though the provider had completed its turn.
       if (!runCompletionSideEffects) {
+        await this.triggerGatewayOutboundFlushAfterCommit(task, params);
         if (!params?.suppressTerminalQueueProcessing) {
           await this.triggerQueueProcessingAfterCommit(task.session_id, params);
         }
@@ -959,6 +1036,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       if (!isStop) {
         await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
       }
+      await this.triggerGatewayOutboundFlushAfterCommit(task, params);
 
       if (session.fork_origin === 'btw') {
         // Keep archive atomic with completion: deferring it could re-archive

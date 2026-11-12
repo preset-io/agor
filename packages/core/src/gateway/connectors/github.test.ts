@@ -461,4 +461,50 @@ describe('GitHubConnector outbound comments', () => {
     });
     expect(result).toBe('901');
   });
+
+  it('falls back to creating a comment when acknowledgement comment is deleted (404)', async () => {
+    githubApi.updateComment.mockRejectedValueOnce(
+      Object.assign(new Error('Not Found'), { status: 404 })
+    );
+    githubApi.createComment.mockResolvedValue({ data: { id: 902 } });
+    const connector = new GitHubConnector(connectorConfig());
+
+    const result = await connector.sendMessage({
+      threadId: 'preset-io/agor#42',
+      text: 'fallback answer',
+      metadata: { edit_comment_id: 900 },
+    });
+
+    expect(githubApi.updateComment).toHaveBeenCalledWith({
+      owner: 'preset-io',
+      repo: 'agor',
+      comment_id: 900,
+      body: 'fallback answer',
+    });
+    expect(githubApi.createComment).toHaveBeenCalledWith({
+      owner: 'preset-io',
+      repo: 'agor',
+      issue_number: 42,
+      body: 'fallback answer',
+    });
+    expect(result).toBe('902');
+  });
+
+  it('throws when both acknowledgement comment and issue are deleted (404 on create)', async () => {
+    githubApi.updateComment.mockRejectedValueOnce(
+      Object.assign(new Error('Not Found'), { status: 404 })
+    );
+    githubApi.createComment.mockRejectedValueOnce(
+      Object.assign(new Error('Not Found: Issue deleted'), { status: 404 })
+    );
+    const connector = new GitHubConnector(connectorConfig());
+
+    await expect(
+      connector.sendMessage({
+        threadId: 'preset-io/agor#42',
+        text: 'answer',
+        metadata: { edit_comment_id: 900 },
+      })
+    ).rejects.toMatchObject({ status: 404 });
+  });
 });

@@ -56,13 +56,110 @@ export function providerStatus(error: unknown): number | undefined {
   return typeof status === 'number' ? status : undefined;
 }
 
-export function retryAfterMs(error: unknown): number | undefined {
+function parseHeaderValue(headers: unknown, name: string): unknown {
+  if (!headers || typeof headers !== 'object') return undefined;
+  const h = headers as Record<string, unknown> & { get?: (name: string) => unknown };
+  if (typeof h.get === 'function') {
+    const val = h.get(name);
+    if (val !== undefined && val !== null) return val;
+    const lowerVal = h.get(name.toLowerCase());
+    if (lowerVal !== undefined && lowerVal !== null) return lowerVal;
+  }
+  const targetLower = name.toLowerCase();
+  for (const key of Object.keys(h)) {
+    if (key.toLowerCase() === targetLower) {
+      return h[key];
+    }
+  }
+  return undefined;
+}
+
+function parseSecondsOrDate(value: unknown, now: number): number | undefined {
+  if (typeof value === 'number') {
+    if (Number.isFinite(value) && value >= 0) {
+      return Math.round(value * 1_000);
+    }
+    return undefined;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    // Strict non-negative integer or decimal seconds
+    if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+      const sec = Number(trimmed);
+      if (Number.isFinite(sec) && sec >= 0) {
+        return Math.round(sec * 1_000);
+      }
+      return undefined;
+    }
+    // Reject negative numbers or numeric strings with signs/garbage (e.g. "-10", "60abc")
+    if (/^[+-]|\d+[a-zA-Z]/.test(trimmed)) {
+      return undefined;
+    }
+    // Attempt HTTP-date parse (must contain alphabetic day/month per RFC 7231)
+    if (/[a-zA-Z]/.test(trimmed)) {
+      const dateMs = Date.parse(trimmed);
+      if (Number.isFinite(dateMs)) {
+        return Math.max(0, dateMs - now);
+      }
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
+function parseEpochSeconds(value: unknown, now: number): number | undefined {
+  if (typeof value === 'number') {
+    if (Number.isFinite(value) && value >= 0) {
+      return Math.max(0, Math.round(value * 1_000 - now));
+    }
+    return undefined;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+      const epochSec = Number(trimmed);
+      if (Number.isFinite(epochSec) && epochSec >= 0) {
+        return Math.max(0, Math.round(epochSec * 1_000 - now));
+      }
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
+export function retryAfterMs(error: unknown, now: number = Date.now()): number | undefined {
   if (!error || typeof error !== 'object' || Array.isArray(error)) return undefined;
   const record = error as Record<string, unknown>;
-  const direct = record.retry_after_ms ?? record.retryAfterMs;
-  if (typeof direct === 'number' && Number.isFinite(direct)) return Math.max(0, direct);
-  const seconds = record.retry_after ?? record.retryAfter;
-  if (typeof seconds === 'number' && Number.isFinite(seconds)) return Math.max(0, seconds * 1_000);
+
+  // 1. Direct millisecond properties
+  const directMs = record.retry_after_ms ?? record.retryAfterMs;
+  if (typeof directMs === 'number' && Number.isFinite(directMs) && directMs >= 0) {
+    return directMs;
+  }
+
+  // 2. Direct second properties
+  const directSec = record.retry_after ?? record.retryAfter;
+  if (typeof directSec === 'number' && Number.isFinite(directSec) && directSec >= 0) {
+    return Math.round(directSec * 1_000);
+  }
+
+  // 3. Response headers (e.g. Octokit RequestError.response.headers or fetch Headers)
+  const respRecord = record.response as Record<string, unknown> | undefined;
+  const headers = respRecord?.headers ?? record.headers;
+  if (headers) {
+    // 3a. Retry-After header (seconds or HTTP-date)
+    const retryAfterVal = parseHeaderValue(headers, 'retry-after');
+    const retryAfterMsVal = parseSecondsOrDate(retryAfterVal, now);
+    if (retryAfterMsVal !== undefined) return retryAfterMsVal;
+
+    // 4. X-RateLimit-Reset header (Unix epoch seconds)
+    const resetVal = parseHeaderValue(headers, 'x-ratelimit-reset');
+    const resetMsVal = parseEpochSeconds(resetVal, now);
+    if (resetMsVal !== undefined) return resetMsVal;
+  }
+
   return undefined;
 }
 
