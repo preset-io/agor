@@ -2,6 +2,7 @@ import { branchMaintenanceCapabilities } from '@agor/core/config/browser';
 import type {
   AgorClient,
   Board,
+  BranchArchiveEligibility,
   EffectiveBranchAccess,
   EffectiveCapabilityPolicyAccess,
   Repo,
@@ -43,7 +44,47 @@ function fixture(enabled = false) {
       })
     ),
   };
-  const services = { repos, branches, boards, 'branches/:id/effective-access': access };
+  const archiveEligibility = {
+    find: vi.fn(async (): Promise<BranchArchiveEligibility> => {
+      const accessResult = await access.find();
+      const canManageBranch = accessResult.is_owner || accessResult.can === 'all';
+      const canWriteFiles =
+        canManageBranch && (accessResult.is_owner || accessResult.fs_access === 'write');
+      const policy = repo.cleanup_policy ?? DEFAULT_REPO_CLEANUP_POLICY;
+      const cleanupProtected = branch.cleanup_protected ?? false;
+      return {
+        branch_id: branch.branch_id,
+        repo_id: branch.repo_id,
+        board_id: branch.board_id,
+        can_view_branch:
+          accessResult.is_owner ||
+          accessResult.can === 'view' ||
+          accessResult.can === 'edit' ||
+          accessResult.can === 'all',
+        can_archive: canManageBranch,
+        can_cleanup_on_archive: canWriteFiles,
+        can_delete: canManageBranch,
+        can_delete_files: canWriteFiles,
+        can_retire_teammate: canManageBranch,
+        can_clear_board_primary: false,
+        can_manage_board: false,
+        board_unavailable: false,
+        branch_access: accessResult,
+        default_filesystem_action:
+          canWriteFiles && policy.enabled && !cleanupProtected ? 'cleaned' : 'preserved',
+        cleanup_protected: cleanupProtected,
+        maintenance_capabilities: branch.maintenance_capabilities,
+        cleanup_policy: policy,
+      };
+    }),
+  };
+  const services = {
+    repos,
+    branches,
+    boards,
+    'branches/:id/effective-access': access,
+    'branches/:id/archive-eligibility': archiveEligibility,
+  };
   const client = {
     service: (path: keyof typeof services) => services[path],
   } as unknown as AgorClient;
@@ -517,6 +558,8 @@ function boardFixture(options?: {
   boardAccess?: Partial<EffectiveCapabilityPolicyAccess>;
   branchAccess?: Partial<EffectiveBranchAccess>;
   cleanupEnabled?: boolean;
+  userRole?: 'member' | 'admin' | 'superadmin';
+  eligibilityOverrides?: Partial<BranchArchiveEligibility>;
 }) {
   const branch = makeBranch({
     maintenance_capabilities: branchMaintenanceCapabilities({}, 'clone'),
@@ -589,12 +632,83 @@ function boardFixture(options?: {
       ...options?.branchAccess,
     })
   );
+  const archiveEligibilityFind = vi.fn(async (): Promise<BranchArchiveEligibility> => {
+    const branchAccess = await branchAccessFind();
+    let resolvedBoard: Board | undefined;
+    let resolvedBoardAccess: Awaited<ReturnType<typeof boardAccessFind>> | undefined;
+    let boardUnavailable = false;
+    if (branch.board_id) {
+      resolvedBoardAccess = await boardAccessFind();
+      try {
+        resolvedBoard = await boards.get(branch.board_id);
+      } catch {
+        boardUnavailable = true;
+      }
+    }
+    const isSuper = options?.userRole === 'superadmin';
+    const isWorkspaceAdminOnBoard = Boolean(
+      branch.board_id && !boardUnavailable && (options?.userRole === 'admin' || isSuper)
+    );
+    const boardCaps = resolvedBoardAccess?.capabilities ?? [];
+    const canManageBoard = Boolean(
+      branch.board_id &&
+        !boardUnavailable &&
+        (isWorkspaceAdminOnBoard || boardCaps.includes('board.policy.manage'))
+    );
+    const canEditBoard = Boolean(
+      branch.board_id &&
+        !boardUnavailable &&
+        (isWorkspaceAdminOnBoard || boardCaps.includes('board.edit'))
+    );
+    const hasBranchManage = isSuper || branchAccess.is_owner || branchAccess.can === 'all';
+    const hasBranchWrite = isSuper || branchAccess.is_owner || branchAccess.fs_access === 'write';
+    const canArchive = hasBranchManage || canManageBoard;
+    const canCleanupOnArchive =
+      isSuper || isWorkspaceAdminOnBoard || (hasBranchManage && hasBranchWrite);
+    const policy = repo.cleanup_policy ?? DEFAULT_REPO_CLEANUP_POLICY;
+    const cleanupProtected = branch.cleanup_protected ?? false;
+    return {
+      branch_id: branch.branch_id,
+      repo_id: branch.repo_id,
+      board_id: branch.board_id,
+      can_view_branch:
+        isSuper ||
+        branchAccess.is_owner ||
+        branchAccess.can === 'view' ||
+        branchAccess.can === 'edit' ||
+        branchAccess.can === 'all',
+      can_archive: canArchive,
+      can_cleanup_on_archive: canCleanupOnArchive,
+      can_delete: hasBranchManage || isWorkspaceAdminOnBoard,
+      can_delete_files: canCleanupOnArchive,
+      can_retire_teammate: hasBranchManage || isWorkspaceAdminOnBoard,
+      can_clear_board_primary: canEditBoard,
+      can_manage_board: canManageBoard,
+      board_unavailable: boardUnavailable,
+      branch_access: branchAccess,
+      default_filesystem_action:
+        canCleanupOnArchive && policy.enabled && !cleanupProtected ? 'cleaned' : 'preserved',
+      cleanup_protected: cleanupProtected,
+      maintenance_capabilities: branch.maintenance_capabilities,
+      cleanup_policy: policy,
+      board: resolvedBoard
+        ? {
+            board_id: resolvedBoard.board_id,
+            name: resolvedBoard.name,
+            url: resolvedBoard.url,
+            primary_teammate_id: resolvedBoard.primary_teammate_id,
+          }
+        : undefined,
+      ...options?.eligibilityOverrides,
+    };
+  });
   const services: Record<string, unknown> = {
     repos,
     branches,
     boards,
     'boards/:id/effective-access': { find: boardAccessFind },
     'branches/:id/effective-access': { find: branchAccessFind },
+    'branches/:id/archive-eligibility': { find: archiveEligibilityFind },
   };
   const client = {
     service: (path: string) => services[path],
@@ -605,6 +719,7 @@ function boardFixture(options?: {
     client,
     access: branchAccessFind,
     boardAccess: boardAccessFind,
+    archiveEligibility: archiveEligibilityFind,
     boards,
     branches,
   };
@@ -688,6 +803,7 @@ describe('Issue #3241: Board administrator branch archive authorization', () => 
 
   it('4. Workspace administrator can archive when backend role semantics permit it', async () => {
     const { client, branch } = boardFixture({
+      userRole: 'admin',
       branchAccess: { is_owner: false, can: 'view' },
       boardAccess: { capabilities: ['board.view'] }, // no explicit board policy manage
     });
@@ -732,7 +848,7 @@ describe('Issue #3241: Board administrator branch archive authorization', () => 
     });
   });
 
-  it("5a. Board administrator with fs_access: 'none' can archive with filesystemAction: 'cleaned'", async () => {
+  it("5a. Board administrator with fs_access: 'none' can only preserve files and cannot select Clean", async () => {
     const { client, branch } = boardFixture({
       branchAccess: { is_owner: false, can: 'view', fs_access: 'none' },
       boardAccess: { capabilities: ['board.view', 'board.policy.manage'] },
@@ -753,20 +869,18 @@ describe('Issue #3241: Board administrator branch archive authorization', () => 
       expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled()
     );
     const cleanRadio = screen.getByRole('radio', { name: /^Clean —/ });
-    expect(cleanRadio).toBeEnabled();
+    expect(cleanRadio).toBeDisabled();
     expect(
-      screen.queryByText('Writable workspace access is required to clean or delete files.')
-    ).not.toBeInTheDocument();
-    fireEvent.click(cleanRadio);
-    expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled();
+      screen.getAllByText('Writable workspace access is required to clean or delete files.').length
+    ).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: 'Archive Branch' }));
     expect(confirm).toHaveBeenCalledWith({
       metadataAction: 'archive',
-      filesystemAction: 'cleaned',
+      filesystemAction: 'preserved',
     });
   });
 
-  it("5b. Board administrator with fs_access: 'none' can archive with filesystemAction: 'deleted'", async () => {
+  it("5b. Board administrator with fs_access: 'none' cannot select Delete completely", async () => {
     const { client, branch } = boardFixture({
       branchAccess: { is_owner: false, can: 'view', fs_access: 'none' },
       boardAccess: { capabilities: ['board.view', 'board.policy.manage'] },
@@ -786,16 +900,14 @@ describe('Issue #3241: Board administrator branch archive authorization', () => 
       expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled()
     );
     const deleteFilesystemRadio = screen.getByRole('radio', { name: /^Delete completely/ });
-    expect(deleteFilesystemRadio).toBeEnabled();
+    expect(deleteFilesystemRadio).toBeDisabled();
     expect(
-      screen.queryByText('Writable workspace access is required to clean or delete files.')
-    ).not.toBeInTheDocument();
-    fireEvent.click(deleteFilesystemRadio);
-    expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled();
+      screen.getAllByText('Writable workspace access is required to clean or delete files.').length
+    ).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: 'Archive Branch' }));
     expect(confirm).toHaveBeenCalledWith({
       metadataAction: 'archive',
-      filesystemAction: 'deleted',
+      filesystemAction: 'preserved',
     });
   });
 
@@ -996,16 +1108,15 @@ describe('Issue #3241: Board administrator branch archive authorization', () => 
   });
 
   it('13. Verify loading states do not allow premature submission', async () => {
-    let resolveBranch: (value: unknown) => void = () => {};
-    const delayedBranchPromise = new Promise((resolve) => {
-      resolveBranch = resolve;
+    let resolveEligibility: (value: unknown) => void = () => {};
+    const delayedEligibilityPromise = new Promise((resolve) => {
+      resolveEligibility = resolve;
     });
-    const { client, branch } = boardFixture({
+    const { client, branch, archiveEligibility } = boardFixture({
       branchAccess: { is_owner: true, can: 'all', fs_access: 'write' },
     });
-    (client.service('branches') as { get: ReturnType<typeof vi.fn> }).get.mockImplementation(
-      () => delayedBranchPromise
-    );
+    const expectedEligibility = await archiveEligibility();
+    archiveEligibility.mockImplementation(() => delayedEligibilityPromise as never);
     const confirm = vi.fn();
     render(
       <ArchiveDeleteBranchModal
@@ -1021,7 +1132,7 @@ describe('Issue #3241: Board administrator branch archive authorization', () => 
     fireEvent.click(screen.getByRole('button', { name: 'Archive Branch' }));
     expect(confirm).not.toHaveBeenCalled();
     await act(async () => {
-      resolveBranch(branch);
+      resolveEligibility(expectedEligibility);
     });
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled()
@@ -1075,7 +1186,7 @@ describe('Issue #3241: Board administrator branch archive authorization', () => 
   });
 
   it('15. Emitting a board update event for Board B does not trigger refresh when branch is on Board A', async () => {
-    const { client, branch, boards } = boardFixture({
+    const { client, branch, boards, archiveEligibility } = boardFixture({
       board: {
         board_id: 'board-1',
         name: 'Test Board A',
@@ -1095,7 +1206,7 @@ describe('Issue #3241: Board administrator branch archive authorization', () => 
     );
     expect(await screen.findByRole('button', { name: 'Archive Branch' })).toBeEnabled();
 
-    const initialBoardGetCalls = boards.get.mock.calls.length;
+    const initialEligibilityCalls = archiveEligibility.mock.calls.length;
 
     // Emit boards:patched event for unrelated board-2
     await act(async () => {
@@ -1106,8 +1217,8 @@ describe('Issue #3241: Board administrator branch archive authorization', () => 
       } as Board);
     });
 
-    // boards.get was not called again
-    expect(boards.get.mock.calls.length).toBe(initialBoardGetCalls);
+    // Eligibility was not re-queried for unrelated board-2
+    expect(archiveEligibility.mock.calls.length).toBe(initialEligibilityCalls);
     expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled();
   });
 
@@ -1135,5 +1246,81 @@ describe('Issue #3241: Board administrator branch archive authorization', () => 
     unmount();
 
     expect(boards.removeListener).toHaveBeenCalledWith('patched', registeredListener);
+  });
+
+  it('17. Member board manager without branch authority or board.edit cannot retire active teammate', async () => {
+    const { client, branch } = boardFixture({
+      branchOverrides: {
+        custom_context: { teammate: { kind: 'teammate', displayName: 'Teammate' } },
+      },
+      branchAccess: { is_owner: false, can: 'view', fs_access: 'none' },
+      boardAccess: { capabilities: ['board.view', 'board.policy.manage'] },
+    });
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={makeUser({ role: 'member', user_id: 'board-admin-1' })}
+        branch={branch}
+        open
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Retire teammate — keep files' })).toBeDisabled()
+    );
+    expect(
+      screen.getAllByText('Branch Manager authority is required to retire.').length
+    ).toBeGreaterThan(0);
+  });
+
+  it('18. Board manager can archive a private branch via server eligibility without branches.get', async () => {
+    const {
+      client: privateClient,
+      branch: privateBranch,
+      branches: privateBranches,
+      access: privateAccess,
+    } = boardFixture({
+      branchOverrides: { others_can: 'none' },
+      eligibilityOverrides: {
+        can_view_branch: false,
+        can_archive: true,
+        can_cleanup_on_archive: false,
+        can_delete: false,
+        can_delete_files: false,
+        can_retire_teammate: false,
+        can_clear_board_primary: false,
+        can_manage_board: true,
+        board_unavailable: false,
+        default_filesystem_action: 'preserved',
+      },
+    });
+    privateBranches.get.mockRejectedValue(new Error('Forbidden'));
+    privateAccess.mockResolvedValue({
+      can: 'none',
+      is_owner: false,
+      fs_access: 'none',
+      source: 'others',
+    } as EffectiveBranchAccess);
+    const confirm = vi.fn();
+    render(
+      <ArchiveDeleteBranchModal
+        client={privateClient}
+        currentUser={makeUser({ role: 'member', user_id: 'board-admin-1' })}
+        branch={privateBranch}
+        open
+        onConfirm={confirm}
+        onCancel={vi.fn()}
+      />
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled()
+    );
+    expect(privateBranches.get).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Archive Branch' }));
+    expect(confirm).toHaveBeenCalledWith({
+      metadataAction: 'archive',
+      filesystemAction: 'preserved',
+    });
   });
 });

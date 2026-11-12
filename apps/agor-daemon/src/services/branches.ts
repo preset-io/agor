@@ -138,7 +138,11 @@ import {
   verifyRecordedProcessGroupAbsent,
 } from '../executor-tracking.js';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
-import { authorizeCallerBoard, isCallerBoardAdmin } from '../utils/board-route-authorization.js';
+import {
+  authorizeCallerBoard,
+  isCallerBoardAdmin,
+  isWorkspaceAdminOnBoard,
+} from '../utils/board-route-authorization.js';
 import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
 import {
   ensureCanControlBranchEnvironment,
@@ -704,8 +708,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   private async resolveEnvironmentExecutorContext(
     branch: Branch,
     params?: BranchParams,
-    requiredFsAccess: Exclude<BranchFsAccessLevel, 'none'> = 'write',
-    options?: { allowBoardAdminElevation?: boolean }
+    requiredFsAccess: Exclude<BranchFsAccessLevel, 'none'> = 'write'
   ): Promise<{
     delegatedHomeKey?: string;
     env: Record<string, string>;
@@ -731,15 +734,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // Environment control historically permits tenant admins even when they
       // do not have an explicit branch entry. Preserve that hierarchy, while
       // ordinary Managers remain constrained by the separate filesystem
-      // dimension selected in the policy form. Board administrators hold
-      // administrative authority over branches on their board strictly for
-      // authorized archive maintenance cleanup.
-      const isBoardAdmin =
-        options?.allowBoardAdminElevation && branch.board_id
-          ? await isCallerBoardAdmin(this.boardRepo, requestUser, branch.board_id)
-          : false;
+      // dimension selected in the policy form.
       const branchFsAccess =
-        hasMinimumRole(requestUser?.role, ROLES.ADMIN) || isBoardAdmin
+        requestUser?._isServiceAccount || hasMinimumRole(requestUser?.role, ROLES.ADMIN)
           ? 'write'
           : await ensureBranchWorkspaceAccess(
               this.branchRepo,
@@ -1959,10 +1956,15 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       current: Branch,
       tx?: import('@agor/core/db').Database
     ) => {
-      if (action === 'archive' && current.board_id) {
+      if (user._isServiceAccount) {
+        return;
+      }
+      if (action === 'archive' && !retireTeammate && current.board_id) {
         const boardRepo = tx ? new BoardRepository(tx) : this.boardRepo;
-        const isBoardAdmin = await isCallerBoardAdmin(boardRepo, user, current.board_id);
-        if (isBoardAdmin) {
+        const boardAuthorized = needsFiles
+          ? await isWorkspaceAdminOnBoard(boardRepo, user, current.board_id)
+          : await isCallerBoardAdmin(boardRepo, user, current.board_id);
+        if (boardAuthorized) {
           return;
         }
       }
@@ -2082,9 +2084,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         )
       );
       const context = needsFiles
-        ? await this.resolveEnvironmentExecutorContext(branch, params, 'write', {
-            allowBoardAdminElevation: action === 'archive',
-          })
+        ? await this.resolveEnvironmentExecutorContext(branch, params, 'write')
         : undefined;
       if (filesystemAction === 'cleaned') {
         // Read-only executor preflight. No daemon filesystem access or fallback mkdir.
@@ -2107,7 +2107,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               templateVariables: {
                 branch_id: id,
                 user_id: user.user_id,
-                branch_fs_access: 'write',
+                branch_fs_access: context!.branchFsAccess,
               },
             }
           )
@@ -2193,7 +2193,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             preparedEnv: context!.env,
             delegatedHomeKey: context!.delegatedHomeKey,
             logPrefix: '[Branch workspace maintenance]',
-            templateVariables: { branch_id: id, user_id: user.user_id, branch_fs_access: 'write' },
+            templateVariables: {
+              branch_id: id,
+              user_id: user.user_id,
+              branch_fs_access: context!.branchFsAccess,
+            },
           }
         );
       };
@@ -2465,7 +2469,39 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       { action: 'archive', filesystemAction },
       params
     );
-    return this.readCommittedBranch(accepted.branch_id, params);
+    const committed = await this.readCommittedBranch(accepted.branch_id, params);
+    const requestUser = (params as AuthenticatedParams | undefined)?.user;
+    if (params.provider && !requestUser?._isServiceAccount && requestUser?.user_id) {
+      const allowSuperadmin = this.app.get('config')?.execution?.allow_superadmin === true;
+      const canView = await this.withTenantDatabase(params, async () => {
+        const access = await this.branchRepo.resolveUserAccess(
+          committed,
+          requestUser.user_id as UserID
+        );
+        return hasBranchPermission(
+          committed,
+          requestUser.user_id as UserID,
+          access.is_owner,
+          'view',
+          requestUser.role as UserRole | undefined,
+          allowSuperadmin,
+          access.can
+        );
+      });
+      if (!canView) {
+        return {
+          branch_id: committed.branch_id,
+          repo_id: committed.repo_id,
+          board_id: committed.board_id,
+          archived: committed.archived,
+          filesystem_status: committed.filesystem_status,
+          deletion_status: committed.deletion_status,
+          deletion_error: committed.deletion_error,
+          workspace_operation: committed.workspace_operation,
+        } as unknown as BranchArchiveOrDeleteResult;
+      }
+    }
+    return committed;
   }
 
   /**

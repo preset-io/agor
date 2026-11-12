@@ -117,7 +117,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
   // While a deletion runs the modal is read-only: it shows status, nothing can be submitted.
   const deleting = branch.deletion_status === 'deleting';
   const primaryDisabled =
-    deleting || !!eligibility.archiveManagementReason || connectionDisabled || !!primaryAction;
+    deleting || !!eligibility.retireManagementReason || connectionDisabled || !!primaryAction;
   const boardActionDisabled =
     deleting || connectionDisabled || !!primaryAction || !eligibility.canEditBoard;
   const runPrimaryAction = async (action: 'clear' | 'retire') => {
@@ -289,7 +289,9 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                         </Button>
                       )}
                       {!eligibility.boardUnavailable && (
-                        <Typography.Link href={eligibility.board?.url}>Open board</Typography.Link>
+                        <Typography.Link href={eligibility.board?.url ?? undefined}>
+                          Open board
+                        </Typography.Link>
                       )}
                     </Space>
                     {!eligibility.canEditBoard && (
@@ -302,8 +304,8 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                     This is your personal primary teammate. Retirement clears that preference too.
                   </Text>
                 )}
-                {eligibility.archiveManagementReason && (
-                  <Text>{eligibility.archiveManagementReason}</Text>
+                {eligibility.retireManagementReason && (
+                  <Text>{eligibility.retireManagementReason}</Text>
                 )}
                 <Text>
                   For active teammates, Archive uses explicit retirement. Permanent deletion is

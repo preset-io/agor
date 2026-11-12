@@ -4,6 +4,7 @@ import {
   BranchMaintenanceRepository,
   BranchRepository,
   BranchWorkspaceOperationRepository,
+  CapabilityPolicyRepository,
   createTenantScopedDatabaseProxy,
   generateId,
   RepoRepository,
@@ -489,12 +490,6 @@ dbTest(
           generateCommandToken: vi.fn().mockResolvedValue('disposable-unused-token'),
         },
       });
-      const resolveContextSpy = vi.spyOn(
-        fixture.service as unknown as {
-          resolveEnvironmentExecutorContext: (typeof fixture.service)['resolveEnvironmentExecutorContext'];
-        },
-        'resolveEnvironmentExecutorContext'
-      );
 
       // 1. Regular member cannot archive another member's branch
       const memberDenied = await fixture.call(memberKey, 'agor_branches_archive', {
@@ -561,14 +556,29 @@ dbTest(
       expect(allowedDefaultPreserved.result?.isError).not.toBe(true);
       expect((await branches.findById(branch.branch_id))?.archived).toBe(true);
 
-      // Reset to unarchived
-      await branches.update(branch.branch_id, { archived: false });
-
-      // 8. Board administrator CAN archive with filesystem cleanup ('cleaned')
-      vi.mocked(requestExecutor).mockResolvedValue({
-        success: true,
-        data: { branchId: branch.branch_id, exists: true, kind: 'directory' },
+      // Reset to unarchived and verify private branch archiving + cleanup restriction
+      await branches.update(branch.branch_id, {
+        archived: false,
       });
+      const policies = new CapabilityPolicyRepository(db);
+      const currentBranchPolicy = await policies.getBranchPolicy(branch.branch_id);
+      await policies.replaceBranchPolicy(
+        branch.branch_id,
+        {
+          ...currentBranchPolicy,
+          binding_mode: 'override',
+          override_config: {
+            ...currentBranchPolicy.override_config!,
+            access: {
+              ...currentBranchPolicy.override_config!.access,
+              sharing_mode: 'private',
+              others_can: 'none',
+              entries: [],
+            },
+          },
+        },
+        branch.primary_owner_user_id
+      );
       await new RepoRepository(db).update(branch.repo_id, {
         cleanup_policy: {
           enabled: true,
@@ -576,23 +586,58 @@ dbTest(
           allow_branch_protection: true,
         },
       });
-      const allowedCleaned = await fixture.call(boardAdminKey, 'agor_branches_archive', {
+
+      // 8. Board administrator without branch write cannot clean or delete files, even when cleanup is enabled
+      for (const action of ['cleaned', 'deleted'] as const) {
+        const deniedFiles = await fixture.call(boardAdminKey, 'agor_branches_archive', {
+          branchId: branch.branch_id,
+          filesystemAction: action,
+        });
+        expect(deniedFiles.result?.isError).toBe(true);
+        expect((await branches.findById(branch.branch_id))?.archived).toBe(false);
+        expect(spawnExecutor).not.toHaveBeenCalled();
+      }
+
+      // 9. Board administrator CAN archive a private branch (others_can: 'none') with preserved files,
+      // and private branch fields are redacted from the response
+      const privateDefault = await fixture.call(boardAdminKey, 'agor_branches_archive', {
         branchId: branch.branch_id,
-        filesystemAction: 'cleaned',
       });
-      expect(allowedCleaned.result?.isError, JSON.stringify(allowedCleaned)).not.toBe(true);
+      expect(privateDefault.result?.isError, JSON.stringify(privateDefault)).not.toBe(true);
       expect((await branches.findById(branch.branch_id))?.archived).toBe(true);
-      expect(resolveContextSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ branch_id: branch.branch_id }),
-        expect.anything(),
-        'write',
-        { allowBoardAdminElevation: true }
-      );
-      const lastContext = await resolveContextSpy.mock.results.at(-1)?.value;
-      expect(lastContext).toMatchObject({
-        branchFsAccess: 'write',
-        executionUserId: boardAdmin.user_id,
+      expect(spawnExecutor).not.toHaveBeenCalled();
+      const privatePayload = JSON.parse(privateDefault.result?.content?.[0]?.text ?? '{}');
+      expect(privatePayload.branch?.path).toBeUndefined();
+
+      // 10. Workspace ADMIN defaults omitted filesystemAction to 'cleaned' and can clean board branches
+      await branches.update(branch.branch_id, { archived: false });
+      const workspaceAdmin = await users.create({
+        email: 'workspace-admin-mcp@example.test',
+        role: 'admin',
       });
+      const { rawKey: workspaceAdminKey } = await apiKeys.create(
+        workspaceAdmin.user_id,
+        'workspace admin key'
+      );
+      vi.mocked(requestExecutor).mockResolvedValue({
+        success: true,
+        data: { branchId: branch.branch_id, exists: true, kind: 'directory' },
+      });
+      const adminDefault = await fixture.call(workspaceAdminKey, 'agor_branches_archive', {
+        branchId: branch.branch_id,
+      });
+      expect(adminDefault.result?.isError, JSON.stringify(adminDefault)).not.toBe(true);
+      expect((await branches.findById(branch.branch_id))?.archived).toBe(true);
+      expect(spawnExecutor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: 'branch.archive',
+          params: expect.objectContaining({
+            branchId: branch.branch_id,
+            filesystemAction: 'cleaned',
+          }),
+        }),
+        expect.anything()
+      );
     } finally {
       await fixture.close();
     }

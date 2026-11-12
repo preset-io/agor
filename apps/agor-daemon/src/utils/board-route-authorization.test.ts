@@ -6,7 +6,11 @@ import {
 } from '@agor/core/db';
 import type { Board, HookContext } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { isCallerBoardAdmin, requireAuthorizedBoardRoute } from './board-route-authorization';
+import {
+  isCallerBoardAdmin,
+  isWorkspaceAdminOnBoard,
+  requireAuthorizedBoardRoute,
+} from './board-route-authorization';
 
 const BOARD_ID = '00000000-0000-7000-8000-000000000001';
 const USER_ID = '00000000-0000-7000-8000-000000000002';
@@ -154,12 +158,37 @@ describe('isCallerBoardAdmin', () => {
     };
     const adminUser = { user_id: USER_ID, role: 'admin' };
     const serviceAccount = { user_id: USER_ID, role: 'member', _isServiceAccount: true };
+    const serviceAccountWithoutUserId = { role: 'service', _isServiceAccount: true };
 
     await expect(isCallerBoardAdmin(repository, adminUser, BOARD_ID)).resolves.toBe(true);
     expect(repository.findById).toHaveBeenCalledWith(BOARD_ID);
     expect(repository.canManage).not.toHaveBeenCalled();
 
     await expect(isCallerBoardAdmin(repository, serviceAccount, BOARD_ID)).resolves.toBe(true);
+    await expect(
+      isCallerBoardAdmin(repository, serviceAccountWithoutUserId, BOARD_ID)
+    ).resolves.toBe(true);
+  });
+
+  it('distinguishes tenant-scoped workspace ADMIN from member Board Managers in isWorkspaceAdminOnBoard', async () => {
+    const repository = {
+      findById: vi.fn().mockResolvedValue(board),
+      canManage: vi.fn().mockResolvedValue(true),
+    };
+
+    await expect(
+      isWorkspaceAdminOnBoard(repository, { user_id: USER_ID, role: 'admin' }, BOARD_ID)
+    ).resolves.toBe(true);
+    await expect(
+      isWorkspaceAdminOnBoard(repository, { role: 'service', _isServiceAccount: true }, BOARD_ID)
+    ).resolves.toBe(true);
+    await expect(
+      isWorkspaceAdminOnBoard(repository, { user_id: USER_ID, role: 'member' }, BOARD_ID)
+    ).resolves.toBe(false);
+    await expect(
+      isWorkspaceAdminOnBoard(repository, { user_id: USER_ID, role: 'viewer' }, BOARD_ID)
+    ).resolves.toBe(false);
+    expect(repository.canManage).not.toHaveBeenCalled();
   });
 
   it('returns false for workspace ADMIN when board does not resolve in tenant scope', async () => {

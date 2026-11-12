@@ -439,6 +439,7 @@ export const REALTIME_PUBLISH_POLICY = {
   'boards/:id/aligned-branches': { audience: 'none', why: 'Query route.' },
   'boards/:id/effective-access': { audience: 'none', why: 'Query route.' },
   'branches/:id/effective-access': { audience: 'none', why: 'Query route.' },
+  'branches/:id/archive-eligibility': { audience: 'none', why: 'Query route.' },
   'branches/:id/fs-access-users': { audience: 'none', why: 'Query route.' },
   'me/artifact-trust-grants': { audience: 'none', why: 'Trust grants belonging to the caller.' },
 

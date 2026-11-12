@@ -1,16 +1,24 @@
 import {
-  type BoardRepository,
-  type BranchRepository,
+  BoardRepository,
+  BranchRepository,
+  CapabilityPolicyRepository,
   GroupRepository,
+  generateId,
   getCurrentTenantDatabaseScope,
+  RepoRepository,
 } from '@agor/core/db';
 import type {
   AuthenticatedParams,
+  BranchArchiveEligibility,
   EffectiveCapabilityPolicyAccess,
   HookContext,
   User,
 } from '@agor/core/types';
-import { ROLES } from '@agor/core/types';
+import {
+  capabilityPolicyPresetCapabilities,
+  DEFAULT_REPO_CLEANUP_POLICY,
+  ROLES,
+} from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import {
@@ -19,6 +27,7 @@ import {
   groupMembershipsHooks,
   groupsHooks,
   setupBoardEffectiveAccessService,
+  setupBranchArchiveEligibilityService,
   setupBranchEffectiveAccessService,
 } from './groups';
 import { UsersService } from './users';
@@ -393,6 +402,12 @@ describe('normalized board effective-access service', () => {
       source: 'primary_owner',
     });
     expect(repo.resolveUserAccess).not.toHaveBeenCalled();
+
+    await expect(service.find(params(ROLES.ADMIN))).resolves.toMatchObject({
+      capabilities: expect.arrayContaining(['board.view', 'board.edit', 'board.policy.manage']),
+      source: 'primary_owner',
+    });
+    expect(repo.resolveUserAccess).not.toHaveBeenCalled();
   });
 
   it('requires an authenticated principal', async () => {
@@ -411,4 +426,161 @@ describe('normalized board effective-access service', () => {
       })
     ).rejects.toThrow(/authentication required/i);
   });
+});
+
+describe('branch archive-eligibility service', () => {
+  dbTest(
+    'allows board manager metadata-only archive on private branches, allows workspace admin cleanup on board branches, and rejects unauthorized members',
+    async ({ db }) => {
+      const users = new UsersService(db);
+      const owner = await users.create({
+        email: 'elig-owner@example.test',
+        password: 'test-password-1234',
+        role: 'member',
+      });
+      const boardManager = await users.create({
+        email: 'elig-board-manager@example.test',
+        password: 'test-password-1234',
+        role: 'member',
+      });
+      const outsider = await users.create({
+        email: 'elig-outsider@example.test',
+        password: 'test-password-1234',
+        role: 'member',
+      });
+      const workspaceAdmin = await users.create({
+        email: 'elig-admin@example.test',
+        password: 'test-password-1234',
+        role: 'admin',
+      });
+
+      const board = await new BoardRepository(db).create({
+        name: 'Eligibility Board',
+        created_by: owner.user_id,
+      });
+      const repo = await new RepoRepository(db).create({
+        slug: `elig-repo-${generateId()}`,
+        name: 'Eligibility Repo',
+        repo_type: 'local',
+        local_path: `/tmp/elig-repo-${generateId()}`,
+        cleanup_policy: { ...DEFAULT_REPO_CLEANUP_POLICY, enabled: true },
+      });
+      const branch = await new BranchRepository(db).create({
+        repo_id: repo.repo_id,
+        name: `private-branch-${generateId()}`,
+        ref: 'refs/heads/main',
+        path: `/tmp/elig-branch-${generateId()}`,
+        branch_unique_id: 1,
+        filesystem_status: 'ready',
+        environment_instance: { status: 'stopped' },
+        created_by: owner.user_id,
+        primary_owner_user_id: owner.user_id,
+        board_id: board.board_id,
+        permission_binding: 'override',
+      });
+
+      const policies = new CapabilityPolicyRepository(db);
+      const currentBranchPolicy = await policies.getBranchPolicy(branch.branch_id);
+      await policies.replaceBranchPolicy(
+        branch.branch_id,
+        {
+          ...currentBranchPolicy,
+          override_config: {
+            ...currentBranchPolicy.override_config!,
+            access: {
+              ...currentBranchPolicy.override_config!.access,
+              sharing_mode: 'private',
+              others_can: 'none',
+              entries: [],
+            },
+          },
+        },
+        owner.user_id
+      );
+
+      const boardManagerCaps = capabilityPolicyPresetCapabilities('board_access', 'manager')!;
+      expect(boardManagerCaps).toBeDefined();
+      const boardPolicy = await policies.getBoardPolicies(board.board_id);
+      await policies.replaceBoardPolicies(
+        board.board_id,
+        {
+          ...boardPolicy,
+          board_access: {
+            ...boardPolicy.board_access,
+            sharing_mode: 'shared',
+            entries: [
+              {
+                entry_id: generateId(),
+                principal: { principal_type: 'user', user_id: boardManager.user_id },
+                preset: 'manager',
+                fs_access: 'none',
+                capabilities: boardManagerCaps,
+              },
+            ],
+          },
+        },
+        owner.user_id
+      );
+
+      let service:
+        | {
+            find(params: {
+              route: { id: string };
+              user: { user_id: string; role: string };
+            }): Promise<BranchArchiveEligibility>;
+          }
+        | undefined;
+      const app = {
+        get: () => ({}),
+        use: vi.fn((_path: string, value: typeof service) => {
+          service = value;
+        }),
+      };
+      setupBranchArchiveEligibilityService(app as never, db, { allowSuperadmin: false });
+      if (!service) throw new Error('archive-eligibility service was not registered');
+
+      await expect(
+        service.find({
+          route: { id: branch.branch_id },
+          user: { user_id: boardManager.user_id, role: boardManager.role },
+        })
+      ).resolves.toMatchObject({
+        branch_id: branch.branch_id,
+        can_view_branch: false,
+        can_archive: true,
+        can_cleanup_on_archive: false,
+        can_delete: false,
+        can_delete_files: false,
+        can_retire_teammate: false,
+        can_clear_board_primary: true,
+        can_manage_board: true,
+        default_filesystem_action: 'preserved',
+      });
+
+      await expect(
+        service.find({
+          route: { id: branch.branch_id },
+          user: { user_id: workspaceAdmin.user_id, role: workspaceAdmin.role },
+        })
+      ).resolves.toMatchObject({
+        branch_id: branch.branch_id,
+        can_view_branch: false,
+        can_archive: true,
+        can_cleanup_on_archive: true,
+        can_delete: false,
+        can_delete_files: false,
+        can_retire_teammate: false,
+        can_clear_board_primary: true,
+        can_manage_board: true,
+        default_filesystem_action: 'cleaned',
+      });
+
+      await expect(
+        service.find({
+          route: { id: branch.branch_id },
+          user: { user_id: outsider.user_id, role: outsider.role },
+        })
+      ).rejects.toThrow(/permission/i);
+    }
+  );
 });

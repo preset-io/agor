@@ -289,4 +289,103 @@ describe('authorizeBranchArchiveDelete', () => {
     // Board admin bypass is NEVER evaluated for permanent deletion
     expect(boardRepository.canManage).not.toHaveBeenCalled();
   });
+
+  it.each(['cleaned', 'deleted'] as const)(
+    "rejects member Board Manager without branch 'all' from archiving with filesystemAction: %s",
+    async (filesystemAction) => {
+      const branch = {
+        branch_id: '018f0000-0000-7000-8000-000000000002',
+        primary_owner_user_id: '00000000-0000-7000-8000-000000000001',
+        board_id: 'board-1',
+        others_can: 'none',
+      };
+      const branchRepository = {
+        findById: vi.fn(async () => branch),
+        isOwner: vi.fn(async () => false),
+        resolveUserPermission: vi.fn(async () => 'none'),
+      } as unknown as BranchRepository;
+      const boardRepository = {
+        canManage: vi.fn(async () => true),
+        findById: vi.fn(async () => ({ board_id: 'board-1' })),
+      };
+      const hook = context();
+      hook.data = { metadataAction: 'archive', filesystemAction };
+
+      await expect(
+        authorizeBranchArchiveDelete(hook, {
+          branchRepository,
+          boardRepository: boardRepository as never,
+        })
+      ).rejects.toBeInstanceOf(Forbidden);
+
+      expect(boardRepository.canManage).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['preserved', 'cleaned', 'deleted'] as const)(
+    'allows workspace ADMIN (even with allowSuperadmin: false) to archive board branch with %s',
+    async (filesystemAction) => {
+      const branch = {
+        branch_id: '018f0000-0000-7000-8000-000000000002',
+        primary_owner_user_id: '00000000-0000-7000-8000-000000000001',
+        board_id: 'board-1',
+        others_can: 'none',
+      };
+      const branchRepository = {
+        findById: vi.fn(async () => branch),
+        isOwner: vi.fn(async () => false),
+        resolveUserPermission: vi.fn(async () => 'none'),
+      } as unknown as BranchRepository;
+      const boardRepository = {
+        canManage: vi.fn(async () => false),
+        findById: vi.fn(async () => ({ board_id: 'board-1' })),
+      };
+      const hook = context();
+      hook.params.user = {
+        user_id: '00000000-0000-7000-8000-0000000000aa',
+        role: 'admin',
+      } as never;
+      hook.data = { metadataAction: 'archive', filesystemAction };
+
+      await expect(
+        authorizeBranchArchiveDelete(hook, {
+          branchRepository,
+          superadminOpts: { allowSuperadmin: false },
+          boardRepository: boardRepository as never,
+        })
+      ).resolves.toBe(hook);
+
+      expect(() =>
+        consumeBranchArchiveDeleteAuthorization(hook.params, branch.branch_id as never, 'archive')
+      ).not.toThrow();
+    }
+  );
+
+  it('allows service account without user_id to archive a board branch', async () => {
+    const branch = {
+      branch_id: '018f0000-0000-7000-8000-000000000002',
+      primary_owner_user_id: '00000000-0000-7000-8000-000000000001',
+      board_id: 'board-1',
+      others_can: 'none',
+    };
+    const branchRepository = {
+      findById: vi.fn(async () => branch),
+      isOwner: vi.fn(async () => false),
+      resolveUserPermission: vi.fn(async () => 'none'),
+    } as unknown as BranchRepository;
+    const boardRepository = {
+      canManage: vi.fn(async () => false),
+      findById: vi.fn(async () => ({ board_id: 'board-1' })),
+    };
+    const hook = context();
+    hook.params.user = { role: 'service', _isServiceAccount: true } as never;
+    hook.data = { metadataAction: 'archive', filesystemAction: 'cleaned' };
+
+    await expect(
+      authorizeBranchArchiveDelete(hook, {
+        branchRepository,
+        boardRepository: boardRepository as never,
+      })
+    ).resolves.toBe(hook);
+  });
 });
