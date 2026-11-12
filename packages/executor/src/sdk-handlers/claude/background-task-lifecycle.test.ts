@@ -191,4 +191,23 @@ describe('ClaudeBackgroundTaskLifecycle', () => {
     expect(lifecycle.clearActiveTasks()).toBe(1);
     expect(lifecycle.clearActiveTasks()).toBe(0);
   });
+
+  it('does not settle active background tasks on permission_denied', () => {
+    const lifecycle = new ClaudeBackgroundTaskLifecycle();
+    lifecycle.observe(started('task-bg-1'));
+    const transition = lifecycle.observe(
+      message({
+        type: 'system',
+        subtype: 'permission_denied',
+        agent_id: 'subagent-inst-42',
+        tool_name: 'Bash',
+        tool_use_id: 'toolu_abc',
+        message: 'Command refused by policy',
+      })
+    );
+    expect(transition.resultDisposition).toBe('not-result');
+    expect(transition.tasksSettled).toBeUndefined();
+    expect(lifecycle.activeTaskCount).toBe(1);
+    expect(lifecycle.observe(result()).resultDisposition).toBe('await-background-tasks');
+  });
 });

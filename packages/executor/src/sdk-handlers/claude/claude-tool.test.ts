@@ -410,3 +410,431 @@ describe('Claude diagnosis propagation', () => {
     }
   );
 });
+
+describe('ClaudeTool permission_denied handling', () => {
+  function findDenialMessages(harness: Harness) {
+    return harness.outgoing.filter(
+      (m) =>
+        m.role === MessageRole.SYSTEM &&
+        Array.isArray(m.content) &&
+        m.content.some((b) => b.type === 'sdk_event' && b.sdkSubtype === 'permission_denied')
+    );
+  }
+
+  it.each(['streaming', 'non-streaming'] as const)(
+    'persists safe permission_denied metadata without raw fields or is_error in %s',
+    async (mode) => {
+      const harness = createHarness();
+      promptState.events = [
+        {
+          type: 'permission_denied',
+          toolName: 'Bash',
+          toolUseId: 'toolu_bash_1',
+          agentId: 'subagent_1',
+          message: 'Command refused by policy',
+          decisionReason: 'Execution policy denial',
+          decisionReasonType: 'rule',
+          summary: 'Permission denied: Bash — Command refused by policy',
+        },
+        resultEvent(rawResult('success')),
+      ];
+
+      const result = await execute(harness.tool, mode, generateId() as TaskID);
+
+      expect(result.hadError).toBe(false);
+      const denialMessages = findDenialMessages(harness);
+      expect(denialMessages).toHaveLength(1);
+      expect(denialMessages[0].content).toEqual([
+        {
+          type: 'sdk_event',
+          text: 'Permission denied: Bash — Command refused by policy',
+          sdkType: 'system',
+          sdkSubtype: 'permission_denied',
+          metadata: {
+            tool_name: 'Bash',
+            tool_use_id: 'toolu_bash_1',
+            agent_id: 'subagent_1',
+            decision_reason_type: 'rule',
+          },
+        },
+      ]);
+      expect('is_error' in (denialMessages[0].content?.[0] ?? {})).toBe(false);
+    }
+  );
+
+  it.each(['streaming', 'non-streaming'] as const)(
+    'reconciles unobserved denials from final result while stripping sensitive tool_input in %s',
+    async (mode) => {
+      const harness = createHarness();
+      const sentinelSecret = 'SENTINEL_API_TOKEN_DO_NOT_PERSIST';
+      const rawWithDenials = {
+        ...rawResult('success'),
+        permission_denials: [
+          {
+            tool_name: 'Bash',
+            tool_use_id: 'toolu_streamed',
+            tool_input: { command: `curl -H "Authorization: Bearer ${sentinelSecret}"` },
+          },
+          {
+            tool_name: 'Edit',
+            tool_use_id: 'toolu_unobserved',
+            tool_input: { file_path: '/etc/hosts', content: sentinelSecret },
+            provider_extra: sentinelSecret,
+          },
+        ],
+      } as unknown as SDKResultMessage;
+
+      promptState.events = [
+        {
+          type: 'permission_denied',
+          toolName: 'Bash',
+          toolUseId: 'toolu_streamed',
+          message: 'Denied by user',
+          summary: 'Permission denied: Bash — Denied by user',
+        },
+        resultEvent(rawWithDenials),
+      ];
+
+      const result = await execute(harness.tool, mode, generateId() as TaskID);
+      expect(result.hadError).toBe(false);
+
+      const denialMessages = findDenialMessages(harness);
+      expect(denialMessages).toHaveLength(2);
+      expect(denialMessages[0].content).toEqual([
+        {
+          type: 'sdk_event',
+          text: 'Permission denied: Bash — Denied by user',
+          sdkType: 'system',
+          sdkSubtype: 'permission_denied',
+          metadata: {
+            tool_name: 'Bash',
+            tool_use_id: 'toolu_streamed',
+          },
+        },
+      ]);
+      expect(denialMessages[1].content).toEqual([
+        {
+          type: 'sdk_event',
+          text: 'Permission denied: Edit',
+          sdkType: 'system',
+          sdkSubtype: 'permission_denied',
+          metadata: {
+            tool_name: 'Edit',
+            tool_use_id: 'toolu_unobserved',
+          },
+        },
+      ]);
+      expect(JSON.stringify(harness.outgoing)).not.toContain(sentinelSecret);
+      expect(JSON.stringify(harness.outgoing)).not.toContain('tool_input');
+      expect(JSON.stringify(harness.outgoing)).not.toContain('provider_extra');
+    }
+  );
+
+  it.each(['streaming', 'non-streaming'] as const)(
+    'deduplicates repeated denials with matching tool_use_id in %s',
+    async (mode) => {
+      const harness = createHarness();
+      promptState.events = [
+        {
+          type: 'permission_denied',
+          toolName: 'Bash',
+          toolUseId: 'toolu_dup_1',
+          message: 'Denied by policy',
+          summary: 'Permission denied: Bash — Denied by policy',
+        },
+        {
+          type: 'permission_denied',
+          toolName: 'Bash',
+          toolUseId: 'toolu_dup_1',
+          message: 'Denied by policy',
+          summary: 'Permission denied: Bash — Denied by policy',
+        },
+        resultEvent(rawResult('success')),
+      ];
+
+      const result = await execute(harness.tool, mode, generateId() as TaskID);
+      expect(result.hadError).toBe(false);
+
+      const denialMessages = findDenialMessages(harness);
+      expect(denialMessages).toHaveLength(1);
+      expect(denialMessages[0].content).toEqual([
+        {
+          type: 'sdk_event',
+          text: 'Permission denied: Bash — Denied by policy',
+          sdkType: 'system',
+          sdkSubtype: 'permission_denied',
+          metadata: {
+            tool_name: 'Bash',
+            tool_use_id: 'toolu_dup_1',
+          },
+        },
+      ]);
+    }
+  );
+
+  it.each(['streaming', 'non-streaming'] as const)(
+    'preserves multiple ID-less denials from both streamed events and final result in %s',
+    async (mode) => {
+      const harness = createHarness();
+      const rawWithIdlessDenials = {
+        ...rawResult('success'),
+        permission_denials: [
+          {
+            tool_name: 'Bash',
+            tool_input: { command: 'rm -rf /tmp/a' },
+          },
+          {
+            tool_name: 'Bash',
+            tool_input: { command: 'rm -rf /tmp/b' },
+          },
+        ],
+      } as unknown as SDKResultMessage;
+
+      promptState.events = [
+        {
+          type: 'permission_denied',
+          toolName: 'Bash',
+          message: 'First denial without id',
+          summary: 'Permission denied: Bash — First denial without id',
+        },
+        {
+          type: 'permission_denied',
+          toolName: 'Bash',
+          message: 'Second denial without id',
+          summary: 'Permission denied: Bash — Second denial without id',
+        },
+        resultEvent(rawWithIdlessDenials),
+      ];
+
+      const result = await execute(harness.tool, mode, generateId() as TaskID);
+      expect(result.hadError).toBe(false);
+
+      const denialMessages = findDenialMessages(harness);
+      expect(denialMessages).toHaveLength(4);
+      expect(denialMessages.map((m) => (m.content?.[0] as { text?: string })?.text)).toEqual([
+        'Permission denied: Bash — First denial without id',
+        'Permission denied: Bash — Second denial without id',
+        'Permission denied: Bash',
+        'Permission denied: Bash',
+      ]);
+    }
+  );
+
+  it.each(['streaming', 'non-streaming'] as const)(
+    'safely ignores malformed final-response permission_denials without failing the turn in %s',
+    async (mode) => {
+      const harness = createHarness();
+      const rawWithMalformed = {
+        ...rawResult('success'),
+        permission_denials: 'not-an-array',
+      } as unknown as SDKResultMessage;
+
+      promptState.events = [
+        {
+          type: 'complete',
+          role: MessageRole.ASSISTANT,
+          content: [{ type: 'text', text: 'Completed despite malformed field.' }],
+        },
+        resultEvent(rawWithMalformed),
+      ];
+
+      const result = await execute(harness.tool, mode, generateId() as TaskID);
+      expect(result.hadError).toBe(false);
+      expect(findDenialMessages(harness)).toHaveLength(0);
+    }
+  );
+
+  it.each(['streaming', 'non-streaming'] as const)(
+    'attributes concurrent subagent denials with independent tool_use_ids and agent_ids in %s',
+    async (mode) => {
+      const harness = createHarness();
+      promptState.events = [
+        {
+          type: 'permission_denied',
+          toolName: 'Bash',
+          toolUseId: 'toolu_sub1_bash',
+          agentId: 'subagent_instance_A',
+          message: 'Command refused by policy',
+          summary: 'Permission denied: Bash — Command refused by policy',
+        },
+        {
+          type: 'permission_denied',
+          toolName: 'Write',
+          toolUseId: 'toolu_sub2_write',
+          agentId: 'subagent_instance_B',
+          message: 'Path outside sandbox',
+          summary: 'Permission denied: Write — Path outside sandbox',
+        },
+        resultEvent(rawResult('success')),
+      ];
+
+      const result = await execute(harness.tool, mode, generateId() as TaskID);
+      expect(result.hadError).toBe(false);
+
+      const denialMessages = findDenialMessages(harness);
+      expect(denialMessages).toHaveLength(2);
+      expect(denialMessages[0].content).toEqual([
+        expect.objectContaining({
+          text: 'Permission denied: Bash — Command refused by policy',
+          metadata: {
+            tool_name: 'Bash',
+            tool_use_id: 'toolu_sub1_bash',
+            agent_id: 'subagent_instance_A',
+          },
+        }),
+      ]);
+      expect(denialMessages[1].content).toEqual([
+        expect.objectContaining({
+          text: 'Permission denied: Write — Path outside sandbox',
+          metadata: {
+            tool_name: 'Write',
+            tool_use_id: 'toolu_sub2_write',
+            agent_id: 'subagent_instance_B',
+          },
+        }),
+      ]);
+    }
+  );
+
+  it.each(['streaming', 'non-streaming'] as const)(
+    'continues turn cleanly after denial without fabricating tool_result or forcing hadError in %s',
+    async (mode) => {
+      const harness = createHarness();
+      promptState.events = [
+        {
+          type: 'permission_denied',
+          toolName: 'Bash',
+          toolUseId: 'toolu_denied_bash',
+          message: 'Bash refused',
+          summary: 'Permission denied: Bash — Bash refused',
+        },
+        {
+          type: 'complete',
+          role: MessageRole.ASSISTANT,
+          content: [
+            { type: 'text', text: 'Bash was refused, so I used the alternative approach.' },
+          ],
+        },
+        resultEvent(rawResult('success')),
+      ];
+
+      const result = await execute(harness.tool, mode, generateId() as TaskID);
+      expect(result.hadError).toBe(false);
+
+      const assistantMessage = harness.outgoing.find((m) => m.role === MessageRole.ASSISTANT);
+      expect(assistantMessage?.content_preview).toBe(
+        'Bash was refused, so I used the alternative approach.'
+      );
+      const hasToolResult = harness.outgoing.some(
+        (m) => Array.isArray(m.content) && m.content.some((b) => b.type === 'tool_result')
+      );
+      expect(hasToolResult).toBe(false);
+    }
+  );
+
+  it.each(['streaming', 'non-streaming'] as const)(
+    'preserves earlier streamed denial when session is cancelled before result in %s',
+    async (mode) => {
+      const harness = createHarness();
+      promptState.events = [
+        {
+          type: 'permission_denied',
+          toolName: 'Bash',
+          toolUseId: 'toolu_before_stop',
+          message: 'Denied by policy',
+          summary: 'Permission denied: Bash — Denied by policy',
+        },
+        { type: 'stopped' },
+      ];
+
+      const result = await execute(harness.tool, mode, generateId() as TaskID);
+      expect(result.wasStopped).toBe(true);
+      expect(result.hadError).toBe(false);
+      expect(findDenialMessages(harness)).toHaveLength(1);
+    }
+  );
+
+  it('invokes streamingCallbacks for streamed and reconciled denials in streaming mode', async () => {
+    const harness = createHarness();
+    const onStreamStart = vi.fn(async () => {});
+    const onStreamEnd = vi.fn(async () => {});
+    const rawWithUnobserved = {
+      ...rawResult('success'),
+      permission_denials: [{ tool_name: 'Edit', tool_use_id: 'toolu_late', tool_input: {} }],
+    } as unknown as SDKResultMessage;
+
+    promptState.events = [
+      {
+        type: 'permission_denied',
+        toolName: 'Bash',
+        toolUseId: 'toolu_early',
+        summary: 'Permission denied: Bash',
+      },
+      resultEvent(rawWithUnobserved),
+    ];
+
+    const result = await harness.tool.executePromptWithStreaming(
+      generateId() as SessionID,
+      'prompt',
+      generateId() as TaskID,
+      undefined,
+      {
+        onStreamStart,
+        onStreamChunk: vi.fn(async () => {}),
+        onStreamEnd,
+      }
+    );
+
+    expect(result.hadError).toBe(false);
+    expect(onStreamStart).toHaveBeenCalledTimes(2);
+    expect(onStreamStart).toHaveBeenNthCalledWith(
+      1,
+      expect.any(String),
+      expect.objectContaining({ role: MessageRole.SYSTEM })
+    );
+    expect(onStreamStart).toHaveBeenNthCalledWith(
+      2,
+      expect.any(String),
+      expect.objectContaining({ role: MessageRole.SYSTEM })
+    );
+    expect(onStreamEnd).toHaveBeenCalledTimes(2);
+  });
+
+  it('persists api_wait before first permission_denied when streaming API response exceeds 30s', async () => {
+    const harness = createHarness();
+    const promptService = (
+      harness.tool as unknown as {
+        promptService: { promptSessionStreaming: () => AsyncGenerator<ProcessedEvent> };
+      }
+    ).promptService;
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      vi.spyOn(promptService, 'promptSessionStreaming').mockImplementation(async function* () {
+        vi.advanceTimersByTime(31_000);
+        yield {
+          type: 'permission_denied',
+          toolName: 'Bash',
+          toolUseId: 'toolu_after_wait',
+          summary: 'Permission denied: Bash',
+        };
+        yield resultEvent(rawResult('success'));
+      });
+
+      const result = await harness.tool.executePromptWithStreaming(
+        generateId() as SessionID,
+        'prompt',
+        generateId() as TaskID
+      );
+
+      expect(result.hadError).toBe(false);
+      const systemBlocks = harness.outgoing
+        .filter((m) => m.role === MessageRole.SYSTEM)
+        .flatMap((m) => (Array.isArray(m.content) ? m.content.map((b) => b.type) : []));
+      expect(systemBlocks).toEqual(['api_wait', 'sdk_event']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

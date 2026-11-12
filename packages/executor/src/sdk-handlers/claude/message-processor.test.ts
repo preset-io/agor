@@ -633,3 +633,155 @@ describe('SDKMessageProcessor provider error', () => {
     expect((failure as { providerError?: unknown }).providerError).toBeUndefined();
   });
 });
+
+describe('SDKMessageProcessor permission_denied handling', () => {
+  it('explicitly recognizes permission_denied without entering generic sdk_event fallback or leaking rawMessage', async () => {
+    const processor = createProcessor();
+    const events = await processor.process(
+      systemMsg({
+        subtype: 'permission_denied',
+        tool_name: 'Bash',
+        tool_use_id: 'toolu_123',
+        agent_id: 'agent_subagent_456',
+        message: 'Command refused by policy',
+        decision_reason: 'Restricted execution policy',
+        decision_reason_type: 'rule',
+        tool_input: { command: 'echo SENTINEL_SECRET' },
+        provider_extension: 'SENTINEL_EXTENSION',
+      })
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({
+      type: 'permission_denied',
+      toolName: 'Bash',
+      toolUseId: 'toolu_123',
+      agentId: 'agent_subagent_456',
+      message: 'Command refused by policy',
+      decisionReason: 'Restricted execution policy',
+      decisionReasonType: 'rule',
+      summary: 'Permission denied: Bash — Command refused by policy',
+      agentSessionId: undefined,
+    });
+    expect('rawMessage' in events[0]).toBe(false);
+    expect(JSON.stringify(events[0])).not.toContain('SENTINEL_SECRET');
+    expect(JSON.stringify(events[0])).not.toContain('SENTINEL_EXTENSION');
+  });
+
+  it('handles optional fields when absent without fabricating values, including missing tool_use_id', async () => {
+    const processor = createProcessor();
+    const events = await processor.process(
+      systemMsg({
+        subtype: 'permission_denied',
+        tool_name: 'Bash',
+      })
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'permission_denied',
+      toolName: 'Bash',
+      summary: 'Permission denied: Bash',
+    });
+    expect((events[0] as { toolUseId?: string }).toolUseId).toBeUndefined();
+    expect((events[0] as { agentId?: string }).agentId).toBeUndefined();
+    expect((events[0] as { message?: string }).message).toBeUndefined();
+    expect((events[0] as { decisionReason?: string }).decisionReason).toBeUndefined();
+  });
+
+  it('formats generic tool summary when tool name is missing and falls back to decision_reason', async () => {
+    const processor = createProcessor();
+    const events = await processor.process(
+      systemMsg({
+        subtype: 'permission_denied',
+        decision_reason: 'Disallowed operation',
+      })
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'permission_denied',
+      decisionReason: 'Disallowed operation',
+      summary: 'Permission denied for tool — Disallowed operation',
+    });
+  });
+
+  it('ignores whitespace-only and non-string fields on permission_denied messages', async () => {
+    const processor = createProcessor();
+    const events = await processor.process(
+      systemMsg({
+        subtype: 'permission_denied',
+        tool_name: '   ',
+        tool_use_id: 12345,
+        agent_id: { nested: 'agent' },
+        decision_reason_type: null,
+        message: '   ',
+        decision_reason: ['array-reason'],
+      })
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({
+      type: 'permission_denied',
+      toolName: undefined,
+      toolUseId: undefined,
+      agentId: undefined,
+      message: undefined,
+      decisionReason: undefined,
+      decisionReasonType: undefined,
+      summary: 'Permission denied for tool',
+      agentSessionId: undefined,
+    });
+  });
+
+  it('bounds oversized permission_denied identifier and reason strings', async () => {
+    const processor = createProcessor();
+    const events = await processor.process(
+      systemMsg({
+        subtype: 'permission_denied',
+        tool_name: 'T'.repeat(400),
+        tool_use_id: 'U'.repeat(400),
+        agent_id: 'A'.repeat(400),
+        decision_reason_type: 'R'.repeat(400),
+        message: 'M'.repeat(800),
+        decision_reason: 'D'.repeat(800),
+      })
+    );
+
+    expect(events).toHaveLength(1);
+    const denial = events[0] as Extract<(typeof events)[number], { type: 'permission_denied' }>;
+    expect(denial.toolName).toHaveLength(256);
+    expect(denial.toolUseId).toHaveLength(256);
+    expect(denial.agentId).toHaveLength(256);
+    expect(denial.decisionReasonType).toHaveLength(256);
+    expect(denial.message).toHaveLength(512);
+    expect(denial.decisionReason).toHaveLength(512);
+    expect(denial.summary.length).toBeLessThanOrEqual(800);
+  });
+
+  it('preserves captured agentSessionId context on permission_denied events', async () => {
+    const processor = createProcessor();
+    await processor.process(
+      systemMsg({
+        subtype: 'init',
+        session_id: 'claude-sess-789',
+      })
+    );
+
+    const events = await processor.process(
+      systemMsg({
+        subtype: 'permission_denied',
+        tool_name: 'Edit',
+        tool_use_id: 'toolu_ctx_1',
+      })
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'permission_denied',
+      toolName: 'Edit',
+      toolUseId: 'toolu_ctx_1',
+      agentSessionId: 'claude-sess-789',
+    });
+  });
+});
