@@ -1,7 +1,16 @@
-import { AmbiguousIdError, type BoardRepository } from '@agor/core/db';
+import {
+  AmbiguousIdError,
+  type BoardRepository,
+  EntityNotFoundError,
+  RepositoryError,
+} from '@agor/core/db';
 import type { Board, HookContext } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { requireAuthorizedBoardRoute } from './board-route-authorization';
+import {
+  isCallerBoardAdmin,
+  isWorkspaceAdminOnBoard,
+  requireAuthorizedBoardRoute,
+} from './board-route-authorization';
 
 const BOARD_ID = '00000000-0000-7000-8000-000000000001';
 const USER_ID = '00000000-0000-7000-8000-000000000002';
@@ -94,5 +103,137 @@ describe('requireAuthorizedBoardRoute', () => {
     expect(repository.findVisibleById).not.toHaveBeenCalled();
     expect(repository.canMutate).not.toHaveBeenCalled();
     expect(hookContext.params.route?.id).toBe(BOARD_ID);
+  });
+});
+
+describe('isCallerBoardAdmin', () => {
+  it('returns false on normal authorization denial without throwing', async () => {
+    const repository = {
+      canManage: vi.fn().mockResolvedValue(false),
+      findById: vi.fn(),
+    };
+    const user = { user_id: USER_ID, role: 'member' };
+
+    await expect(isCallerBoardAdmin(repository, user, BOARD_ID)).resolves.toBe(false);
+    expect(repository.canManage).toHaveBeenCalledWith(BOARD_ID, USER_ID);
+  });
+
+  it('returns true on successful authorization', async () => {
+    const repository = {
+      canManage: vi.fn().mockResolvedValue(true),
+      findById: vi.fn(),
+    };
+    const user = { user_id: USER_ID, role: 'member' };
+
+    await expect(isCallerBoardAdmin(repository, user, BOARD_ID)).resolves.toBe(true);
+    expect(repository.canManage).toHaveBeenCalledWith(BOARD_ID, USER_ID);
+  });
+
+  it('propagates unexpected repository failures without converting them to false', async () => {
+    const repository = {
+      canManage: vi.fn().mockRejectedValue(new RepositoryError('connection pool exhausted')),
+      findById: vi.fn(),
+    };
+    const user = { user_id: USER_ID, role: 'member' };
+
+    await expect(isCallerBoardAdmin(repository, user, BOARD_ID)).rejects.toThrow(
+      'connection pool exhausted'
+    );
+  });
+
+  it('returns false when the board is not found according to EntityNotFoundError convention', async () => {
+    const repository = {
+      canManage: vi.fn().mockRejectedValue(new EntityNotFoundError('Board', BOARD_ID)),
+      findById: vi.fn(),
+    };
+    const user = { user_id: USER_ID, role: 'member' };
+
+    await expect(isCallerBoardAdmin(repository, user, BOARD_ID)).resolves.toBe(false);
+  });
+
+  it('resolves workspace ADMIN and service accounts within tenant scope', async () => {
+    const repository = {
+      findById: vi.fn().mockResolvedValue(board),
+      canManage: vi.fn(),
+    };
+    const adminUser = { user_id: USER_ID, role: 'admin' };
+    const serviceAccount = { user_id: USER_ID, role: 'member', _isServiceAccount: true };
+    const serviceAccountWithoutUserId = { role: 'service', _isServiceAccount: true };
+
+    await expect(isCallerBoardAdmin(repository, adminUser, BOARD_ID)).resolves.toBe(true);
+    expect(repository.findById).toHaveBeenCalledWith(BOARD_ID);
+    expect(repository.canManage).not.toHaveBeenCalled();
+
+    await expect(isCallerBoardAdmin(repository, serviceAccount, BOARD_ID)).resolves.toBe(true);
+    await expect(
+      isCallerBoardAdmin(repository, serviceAccountWithoutUserId, BOARD_ID)
+    ).resolves.toBe(true);
+  });
+
+  it('distinguishes tenant-scoped workspace ADMIN from member Board Managers in isWorkspaceAdminOnBoard', async () => {
+    const repository = {
+      findById: vi.fn().mockResolvedValue(board),
+      canManage: vi.fn().mockResolvedValue(true),
+    };
+
+    await expect(
+      isWorkspaceAdminOnBoard(repository, { user_id: USER_ID, role: 'admin' }, BOARD_ID)
+    ).resolves.toBe(true);
+    await expect(
+      isWorkspaceAdminOnBoard(repository, { role: 'service', _isServiceAccount: true }, BOARD_ID)
+    ).resolves.toBe(true);
+    await expect(
+      isWorkspaceAdminOnBoard(repository, { user_id: USER_ID, role: 'member' }, BOARD_ID)
+    ).resolves.toBe(false);
+    await expect(
+      isWorkspaceAdminOnBoard(repository, { user_id: USER_ID, role: 'viewer' }, BOARD_ID)
+    ).resolves.toBe(false);
+    expect(repository.canManage).not.toHaveBeenCalled();
+  });
+
+  it('returns false for workspace ADMIN when board does not resolve in tenant scope', async () => {
+    const repository = {
+      findById: vi.fn().mockResolvedValue(null),
+      canManage: vi.fn(),
+    };
+    const adminUser = { user_id: USER_ID, role: 'admin' };
+
+    await expect(isCallerBoardAdmin(repository, adminUser, BOARD_ID)).resolves.toBe(false);
+  });
+
+  it('propagates unexpected repository failures during workspace ADMIN lookup', async () => {
+    const repository = {
+      findById: vi.fn().mockRejectedValue(new RepositoryError('database connectivity failure')),
+      canManage: vi.fn(),
+    };
+    const adminUser = { user_id: USER_ID, role: 'admin' };
+
+    await expect(isCallerBoardAdmin(repository, adminUser, BOARD_ID)).rejects.toThrow(
+      'database connectivity failure'
+    );
+  });
+
+  it('returns false for callers below the workspace member role floor', async () => {
+    const repository = {
+      canManage: vi.fn(),
+      findById: vi.fn(),
+    };
+    const viewerUser = { user_id: USER_ID, role: 'viewer' };
+
+    await expect(isCallerBoardAdmin(repository, viewerUser, BOARD_ID)).resolves.toBe(false);
+    expect(repository.canManage).not.toHaveBeenCalled();
+    expect(repository.findById).not.toHaveBeenCalled();
+  });
+
+  it('returns false when user or boardId is missing', async () => {
+    const repository = {
+      canManage: vi.fn(),
+      findById: vi.fn(),
+    };
+
+    expect(await isCallerBoardAdmin(repository, undefined, BOARD_ID)).toBe(false);
+    expect(
+      await isCallerBoardAdmin(repository, { user_id: USER_ID, role: 'member' }, undefined)
+    ).toBe(false);
   });
 });

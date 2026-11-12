@@ -1,4 +1,5 @@
-import type { AgorClient, Board } from '@agor-live/client';
+import type { AgorClient, Board, BranchArchiveEligibility } from '@agor-live/client';
+import { DEFAULT_REPO_CLEANUP_POLICY } from '@agor-live/client';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { App, ConfigProvider } from 'antd';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -44,6 +45,8 @@ function mount(
         return board;
       },
       clearPrimaryTeammate: clear,
+      on: vi.fn(),
+      removeListener: vi.fn(),
     },
     'boards/:id/effective-access': {
       find: async () => {
@@ -57,6 +60,44 @@ function mount(
         is_owner: false,
         fs_access: 'none',
       }),
+    },
+    'branches/:id/archive-eligibility': {
+      find: async (): Promise<BranchArchiveEligibility> => {
+        const boardUnavailable = boardRead !== 'ok';
+        const hasBoard = boardRead === 'ok' || boardRead === 'access-failed';
+        return {
+          branch_id: branch.branch_id,
+          repo_id: branch.repo_id,
+          board_id: branch.board_id,
+          can_view_branch: true,
+          can_archive: canManageBranch,
+          can_cleanup_on_archive: false,
+          can_delete: canManageBranch,
+          can_delete_files: false,
+          can_retire_teammate: canManageBranch,
+          can_clear_board_primary: !boardUnavailable && canEditBoard,
+          can_manage_board: false,
+          board_unavailable: boardUnavailable,
+          branch_access: {
+            can: canManageBranch ? 'all' : 'view',
+            is_owner: false,
+            fs_access: 'none',
+            source: 'others',
+          },
+          default_filesystem_action: 'preserved',
+          cleanup_protected: false,
+          maintenance_capabilities: branch.maintenance_capabilities,
+          cleanup_policy: DEFAULT_REPO_CLEANUP_POLICY,
+          board: hasBoard
+            ? {
+                board_id: board.board_id,
+                name: board.name,
+                url: board.url,
+                primary_teammate_id: board.primary_teammate_id,
+              }
+            : undefined,
+        };
+      },
     },
     [`branches/${branch.branch_id}/retire-teammate`]: { create: retire },
   };

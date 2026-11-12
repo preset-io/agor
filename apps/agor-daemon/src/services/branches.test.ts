@@ -1532,9 +1532,92 @@ describe('BranchesService.unarchive', () => {
       position: { x: 7, y: 8 },
     });
   });
+
+  it('strictly rejects unarchive by a user without branch permissions even if they are board manager', async () => {
+    const { service, branchRepo } = createServiceHarness();
+    const branchId = 'wt-unarchive-deny' as BranchID;
+    const branch = {
+      branch_id: branchId,
+      name: 'WT Deny',
+      archived: true,
+      board_id: 'board-1',
+    } as never;
+    vi.spyOn(service, 'get').mockResolvedValue(branch);
+    vi.mocked(branchRepo.resolveUserAccess).mockResolvedValue({
+      can: 'none',
+      fs_access: 'none',
+      is_owner: false,
+      source: 'none',
+    });
+    const params = {
+      provider: 'rest',
+      user: { user_id: 'board-manager' as UUID, role: 'member' },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+
+    await expect(service.unarchive(branchId, undefined, params)).rejects.toThrow(
+      'branch all permission required'
+    );
+  });
 });
 
 describe('BranchesService.archiveOrDelete', () => {
+  it("redacts private branch details when Board Manager archives another member's non-viewable branch", async () => {
+    const { service, branchRepo } = createServiceHarness();
+    const branchId = 'wt-board-admin-archive' as BranchID;
+    const branch = {
+      branch_id: branchId,
+      repo_id: 'repo-1',
+      name: 'WT Admin Archive',
+      path: '/safe/worktrees/repo/admin-archive',
+      archived: true,
+      board_id: 'board-1',
+      others_can: 'none',
+      filesystem_status: 'ready',
+      workspace_operation: { status: 'succeeded' },
+      environment_instance: { status: 'stopped' },
+    } as never;
+    vi.spyOn(branchRepo, 'resolveUserAccess').mockResolvedValue({
+      can: 'none',
+      fs_access: 'none',
+      is_owner: false,
+      source: 'others',
+    });
+    vi.spyOn(
+      service as unknown as { getCanonicalBranch: () => Promise<unknown> },
+      'getCanonicalBranch'
+    ).mockResolvedValue(branch);
+    const request = vi
+      .spyOn(service as never, 'requestWorkspaceOperation')
+      .mockResolvedValue({ branch_id: branchId, status: 'accepted' } as never);
+    const params = {
+      provider: 'rest',
+      user: { user_id: 'board-admin-1' as UUID, role: 'member' },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+    markBranchArchiveDeleteAuthorized(params, branchId, 'archive');
+
+    const result = await service.archiveOrDelete(
+      branchId,
+      { metadataAction: 'archive', filesystemAction: 'preserved' },
+      params
+    );
+    expect(result).toEqual({
+      branch_id: branchId,
+      repo_id: 'repo-1',
+      board_id: 'board-1',
+      archived: true,
+      filesystem_status: 'ready',
+      deletion_status: undefined,
+      deletion_error: undefined,
+      workspace_operation: { status: 'succeeded' },
+    });
+    expect(request).toHaveBeenCalledWith(
+      branchId,
+      { action: 'archive', filesystemAction: 'preserved' },
+      params
+    );
+  });
   it.each(['preserved', 'cleaned', 'deleted'] as const)(
     'routes archive %s through the shared maintenance workflow',
     async (filesystemAction) => {
@@ -2381,6 +2464,164 @@ describe('BranchesService managed environment control authorization', () => {
     ).rejects.toThrow(/'all' branch permission or admin access/);
     expect(getSpy).not.toHaveBeenCalled();
   });
+});
+
+describe('resolveEnvironmentExecutorContext filesystem boundary', () => {
+  function paramsFor(
+    user_id: string | undefined,
+    role: 'viewer' | 'member' | 'admin' | 'superadmin' | 'service' = 'member',
+    isServiceAccount = false
+  ) {
+    return {
+      provider: 'rest',
+      user: {
+        ...(user_id ? { user_id } : {}),
+        role,
+        ...(isServiceAccount ? { _isServiceAccount: true } : {}),
+      },
+    } as never;
+  }
+
+  type ResolveContextFn = (
+    branch: Branch,
+    params?: unknown,
+    requiredFsAccess?: 'read' | 'write'
+  ) => Promise<{
+    executionUserId: UserID;
+    branchFsAccess: 'read' | 'write';
+  }>;
+
+  async function setupBoundaryHarness(db: Database) {
+    const users = new UsersRepository(db);
+    const repos = new RepoRepository(db);
+    const boards = new BoardRepository(db);
+    const branches = new BranchRepository(db);
+    const policies = new CapabilityPolicyRepository(db);
+
+    const branchOwner = await users.create({
+      email: 'elevation-branch-owner@example.com',
+      role: 'member',
+    });
+    const boardOwner = await users.create({
+      email: 'elevation-board-owner@example.com',
+      role: 'member',
+    });
+    const boardManager = await users.create({
+      email: 'elevation-board-manager@example.com',
+      role: 'member',
+    });
+    const boardEditor = await users.create({
+      email: 'elevation-board-editor@example.com',
+      role: 'member',
+    });
+    const workspaceAdmin = await users.create({
+      email: 'elevation-workspace-admin@example.com',
+      role: 'admin',
+    });
+
+    const repo = await repos.create({
+      name: 'elevation-repo',
+      slug: 'elevation-repo',
+      repo_type: 'local',
+      local_path: '/tmp/elevation-repo',
+      default_branch: 'main',
+    });
+
+    const boardA = await boards.create({
+      name: 'Board A',
+      created_by: boardOwner.user_id,
+      access_mode: 'shared',
+    });
+
+    const boardAPolicy = await policies.getBoardPolicies(boardA.board_id);
+    boardAPolicy.board_access.sharing_mode = 'shared';
+    boardAPolicy.board_access.entries = [
+      {
+        entry_id: generateId(),
+        principal: { principal_type: 'user', user_id: boardManager.user_id },
+        preset: 'manager',
+        capabilities: ['board.view', 'board.edit', 'board.attach_branch', 'board.policy.manage'],
+        fs_access: 'none',
+      },
+      {
+        entry_id: generateId(),
+        principal: { principal_type: 'user', user_id: boardEditor.user_id },
+        preset: 'editor',
+        capabilities: ['board.view', 'board.edit', 'board.attach_branch'],
+        fs_access: 'none',
+      },
+    ];
+    await policies.replaceBoardPolicies(boardA.board_id, boardAPolicy, boardOwner.user_id);
+
+    const branchA = await branches.create({
+      branch_id: generateId() as BranchID,
+      repo_id: repo.repo_id,
+      name: 'elevation-branch-a',
+      ref: 'elevation-branch-a',
+      path: '/tmp/elevation-repo/elevation-branch-a',
+      board_id: boardA.board_id,
+      created_by: branchOwner.user_id as UUID,
+      branch_unique_id: 9601,
+      new_branch: true,
+      permission_binding: 'override',
+      others_can: 'none',
+      others_fs_access: 'none',
+    });
+
+    const service = new BranchesService(db, {
+      get: () => ({ execution: { unix_user_mode: 'simple', allow_superadmin: false } }),
+    } as unknown as Application);
+
+    const resolveContext = (
+      service as unknown as {
+        resolveEnvironmentExecutorContext: ResolveContextFn;
+      }
+    ).resolveEnvironmentExecutorContext.bind(service);
+
+    return {
+      branchOwner,
+      boardOwner,
+      boardManager,
+      boardEditor,
+      workspaceAdmin,
+      branchA,
+      resolveContext,
+    };
+  }
+
+  dbTest(
+    'does not elevate member Board Managers or Board Editors to filesystem write access',
+    async ({ db }) => {
+      const h = await setupBoundaryHarness(db);
+
+      for (const caller of [h.boardManager, h.boardOwner, h.boardEditor]) {
+        await expect(
+          h.resolveContext(h.branchA, paramsFor(caller.user_id, 'member'), 'write')
+        ).rejects.toThrow(/permission required|filesystem write access required/);
+      }
+    }
+  );
+
+  dbTest(
+    'preserves writable executor context for workspace ADMIN and service accounts',
+    async ({ db }) => {
+      const h = await setupBoundaryHarness(db);
+
+      const adminContext = await h.resolveContext(
+        h.branchA,
+        paramsFor(h.workspaceAdmin.user_id, 'admin'),
+        'write'
+      );
+      expect(adminContext.branchFsAccess).toBe('write');
+
+      const serviceContext = await h.resolveContext(
+        h.branchA,
+        paramsFor(undefined, 'service', true),
+        'write'
+      );
+      expect(serviceContext.branchFsAccess).toBe('write');
+    }
+  );
 });
 
 describe('BranchesService teammate home Knowledge namespace guard', () => {

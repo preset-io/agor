@@ -1,5 +1,6 @@
 import { PAGINATION } from '@agor/core/config';
 import {
+  BoardRepository,
   BranchRepository,
   CapabilityPolicyRepository,
   RepoRepository,
@@ -35,8 +36,8 @@ import type {
 } from '../../declarations.js';
 import type { BranchParams } from '../../services/branches.js';
 import { issueExecutorCommandToken } from '../../services/session-token-service.js';
+import { resolveBranchArchiveEligibility } from '../../utils/branch-archive-delete-authorization.js';
 import { isSuperAdmin } from '../../utils/branch-authorization.js';
-import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import { assertManagedBranchPath } from '../../utils/managed-branch-path.js';
 import { withPromptProvenanceTool } from '../../utils/prompt-provenance.js';
@@ -1744,27 +1745,21 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
+      const requestedBranchId = coerceString(args.branchId)!;
       const filesystemAction =
         (args.filesystemAction as BranchFilesystemAction | undefined) ??
         (await runWithMcpTenantDatabaseScope(ctx, async (db) => {
-          const repository = new BranchRepository(db);
-          const branch = await repository.findById(branchId);
-          if (!branch) return 'preserved' as const;
-          const repo = await new RepoRepository(db).findById(branch.repo_id);
-          if (getBranchCleanupBlockReason(repo?.cleanup_policy, branch.cleanup_protected ?? false))
-            return 'preserved' as const;
           try {
-            await ensureBranchWorkspaceAccess(
-              repository,
-              branch,
-              ctx.baseServiceParams.user?.user_id,
-              ctx.baseServiceParams.user?.role as import('@agor/core/types').UserRole,
-              'all',
-              'write',
-              ctx.app.get('config').execution?.allow_superadmin === true
-            );
-            return 'cleaned' as const;
+            const eligibility = await resolveBranchArchiveEligibility({
+              branchRepository: new BranchRepository(db),
+              boardRepository: new BoardRepository(db),
+              capabilityPolicyRepository: new CapabilityPolicyRepository(db),
+              repoRepository: new RepoRepository(db),
+              branchId: requestedBranchId,
+              user: ctx.baseServiceParams.user,
+              config: ctx.app.get('config'),
+            });
+            return eligibility.default_filesystem_action;
           } catch {
             return 'preserved' as const;
           }
@@ -1773,7 +1768,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         .service('/branches/:id/archive-or-delete')
         .create(
           { metadataAction: 'archive', filesystemAction },
-          { ...ctx.baseServiceParams, route: { id: branchId } }
+          { ...ctx.baseServiceParams, route: { id: requestedBranchId } }
         );
       return textResult({
         success: true,

@@ -117,7 +117,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
   // While a deletion runs the modal is read-only: it shows status, nothing can be submitted.
   const deleting = branch.deletion_status === 'deleting';
   const primaryDisabled =
-    deleting || !!eligibility.managementReason || connectionDisabled || !!primaryAction;
+    deleting || !!eligibility.retireManagementReason || connectionDisabled || !!primaryAction;
   const boardActionDisabled =
     deleting || connectionDisabled || !!primaryAction || !eligibility.canEditBoard;
   const runPrimaryAction = async (action: 'clear' | 'retire') => {
@@ -199,9 +199,11 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
       ? filesystemDeletionReason
       : selectedFilesystemAction === 'cleaned'
         ? eligibility.cleanupReason
-        : eligibility.managementReason);
+        : eligibility.archiveManagementReason);
   const handleOk = () => {
     if (actionReason) return;
+    if (metadataAction === 'archive' && !eligibility.canArchive) return;
+    if (metadataAction === 'delete' && !eligibility.canDelete) return;
     onConfirm(
       metadataAction === 'delete'
         ? { metadataAction: 'delete', filesystemAction: 'deleted' }
@@ -287,7 +289,9 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                         </Button>
                       )}
                       {!eligibility.boardUnavailable && (
-                        <Typography.Link href={eligibility.board?.url}>Open board</Typography.Link>
+                        <Typography.Link href={eligibility.board?.url ?? undefined}>
+                          Open board
+                        </Typography.Link>
                       )}
                     </Space>
                     {!eligibility.canEditBoard && (
@@ -300,7 +304,9 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                     This is your personal primary teammate. Retirement clears that preference too.
                   </Text>
                 )}
-                {eligibility.managementReason && <Text>{eligibility.managementReason}</Text>}
+                {eligibility.retireManagementReason && (
+                  <Text>{eligibility.retireManagementReason}</Text>
+                )}
                 <Text>
                   For active teammates, Archive uses explicit retirement. Permanent deletion is
                   available after retirement.
@@ -359,7 +365,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
           <Radio.Group
             name={`${radioGroupId}-filesystem`}
             value={metadataAction === 'delete' ? 'deleted' : selectedFilesystemAction}
-            disabled={metadataAction === 'delete' || !!eligibility.managementReason}
+            disabled={metadataAction === 'delete' || !!eligibility.archiveManagementReason}
             onChange={(e) => {
               setSelectionTouched(true);
               setFilesystemAction(e.target.value);
@@ -438,11 +444,11 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
           <Radio.Group
             name={`${radioGroupId}-metadata`}
             value={metadataAction}
-            disabled={!!eligibility.managementReason}
+            disabled={!eligibility.canArchive && !eligibility.canDelete}
             onChange={(e) => setMetadataAction(e.target.value)}
           >
             <Space orientation="vertical">
-              <Radio value="archive" disabled={!!branch.deletion_status}>
+              <Radio value="archive" disabled={!eligibility.canArchive || !!branch.deletion_status}>
                 <div>
                   <div>Archive (recommended)</div>
                   <Text type="secondary" style={{ fontSize: 12 }}>
@@ -450,7 +456,10 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                   </Text>
                 </div>
               </Radio>
-              <Radio value="delete" disabled={!!eligibility.deletionReason || !!primaryReason}>
+              <Radio
+                value="delete"
+                disabled={!eligibility.canDelete || !!eligibility.deletionReason || !!primaryReason}
+              >
                 <div>
                   <div>Delete permanently</div>
                   <Text type="secondary" style={{ fontSize: 12 }}>
