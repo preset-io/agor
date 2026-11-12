@@ -11,10 +11,13 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   claudeResultFailureCode,
+  projectClaudePermissionDenialMetadata,
+  projectClaudeResultPermissionDenials,
   projectClaudeResultResponse,
   projectContextUsageSnapshot,
   SAFE_MISSING_PROVIDER_RESULT_MESSAGE,
   SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
+  type SafeClaudePermissionDenialMetadata,
 } from '@agor/core';
 import { generateId, shortId } from '@agor/core/db';
 import type { PermissionMode as ClaudeSDKPermissionMode } from '@agor/core/sdk';
@@ -48,6 +51,7 @@ import type {
   ITool,
   MessagesService,
   SessionsPatchClient,
+  StreamingCallbacks,
   TasksService,
   TasksStreamingService,
   ToolCapabilities,
@@ -59,7 +63,7 @@ import {
   createUserMessageFromContent,
   extractTokenUsage,
 } from './message-builder.js';
-import type { ProcessedEvent } from './message-processor.js';
+import { formatPermissionDeniedSummary, type ProcessedEvent } from './message-processor.js';
 import { ClaudePromptService } from './prompt-service.js';
 
 const DEBUG_CLAUDE_STREAMING =
@@ -236,6 +240,85 @@ export class ClaudeTool implements ITool {
     this.tasksService?.emit(event, data);
   }
 
+  private async persistPermissionDenial(params: {
+    sessionId: SessionID;
+    taskId?: TaskID;
+    resolvedModel?: string;
+    messagesService: MessagesService;
+    allocateIndex: () => number;
+    observedDeniedToolUseIds: Set<string>;
+    summary: string;
+    metadata?: SafeClaudePermissionDenialMetadata;
+    streamingCallbacks?: StreamingCallbacks;
+  }): Promise<void> {
+    const toolUseId = params.metadata?.tool_use_id;
+    // Only deduplicate when a tool_use_id is present; without one, preserve distinct notices.
+    if (toolUseId) {
+      if (params.observedDeniedToolUseIds.has(toolUseId)) {
+        return;
+      }
+      params.observedDeniedToolUseIds.add(toolUseId);
+    }
+
+    await withFeathersSessionGuard(params.sessionId, this.sessionsRepo, async () => {
+      const denialMessageId = generateId() as MessageID;
+
+      if (params.streamingCallbacks) {
+        await params.streamingCallbacks.onStreamStart(denialMessageId, {
+          role: MessageRole.SYSTEM,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      await createSystemMessage(
+        params.sessionId,
+        denialMessageId,
+        [
+          {
+            type: 'sdk_event',
+            text: params.summary,
+            sdkType: 'system',
+            sdkSubtype: 'permission_denied',
+            ...(params.metadata ? { metadata: params.metadata } : {}),
+          },
+        ],
+        params.taskId,
+        params.allocateIndex(),
+        params.resolvedModel,
+        params.messagesService
+      );
+
+      if (params.streamingCallbacks) {
+        await params.streamingCallbacks.onStreamEnd(denialMessageId);
+      }
+    });
+  }
+
+  private async reconcilePermissionDenials(params: {
+    sessionId: SessionID;
+    taskId?: TaskID;
+    resolvedModel?: string;
+    messagesService: MessagesService;
+    allocateIndex: () => number;
+    observedDeniedToolUseIds: Set<string>;
+    rawSdkResponse: unknown;
+    streamingCallbacks?: StreamingCallbacks;
+  }): Promise<void> {
+    for (const denial of projectClaudeResultPermissionDenials(params.rawSdkResponse)) {
+      await this.persistPermissionDenial({
+        sessionId: params.sessionId,
+        taskId: params.taskId,
+        resolvedModel: params.resolvedModel,
+        messagesService: params.messagesService,
+        allocateIndex: params.allocateIndex,
+        observedDeniedToolUseIds: params.observedDeniedToolUseIds,
+        summary: formatPermissionDeniedSummary(denial.tool_name),
+        metadata: denial,
+        streamingCallbacks: params.streamingCallbacks,
+      });
+    }
+  }
+
   /**
    * Execute a prompt against a session WITH real-time streaming
    *
@@ -284,6 +367,7 @@ export class ClaudeTool implements ITool {
     if (!this.messagesService) {
       throw new Error('ClaudeTool not initialized with messagesService for live execution');
     }
+    const messagesService = this.messagesService;
 
     // Hydrate only this Task while deriving the append position from one row.
     const [existingMessages, sessionNextIndex] = await Promise.all([
@@ -351,6 +435,7 @@ export class ClaudeTool implements ITool {
     let errorDetails: string[] | undefined;
     let errorSubtype: string | undefined;
     let classifiedProviderFailureKind: ClassifiedProviderFailureKind | undefined;
+    const observedDeniedToolUseIds = new Set<string>();
 
     // Map our permission mode to Claude SDK's permission mode
     const mappedPermissionMode = permissionMode
@@ -441,6 +526,7 @@ export class ClaudeTool implements ITool {
         event.type === 'tool_start' ||
         event.type === 'message_start' ||
         event.type === 'rate_limit' ||
+        event.type === 'permission_denied' ||
         event.type === 'sdk_event' ||
         event.type === 'complete';
 
@@ -584,6 +670,26 @@ export class ClaudeTool implements ITool {
         }
       }
 
+      // Handle tool permission denial events — surface as system messages
+      if (event.type === 'permission_denied') {
+        await this.persistPermissionDenial({
+          sessionId,
+          taskId,
+          resolvedModel,
+          messagesService,
+          allocateIndex: () => nextIndex++,
+          observedDeniedToolUseIds,
+          summary: event.summary,
+          metadata: projectClaudePermissionDenialMetadata({
+            tool_name: event.toolName,
+            tool_use_id: event.toolUseId,
+            agent_id: event.agentId,
+            decision_reason_type: event.decisionReasonType,
+          }),
+          streamingCallbacks,
+        });
+      }
+
       // Handle rate_limit events — surface as system messages
       if (event.type === 'rate_limit') {
         const rateLimitEvent = event as Extract<ProcessedEvent, { type: 'rate_limit' }>;
@@ -706,6 +812,18 @@ export class ClaudeTool implements ITool {
             classifiedProviderFailureKind ??= getClassifiedProviderFailureKind(persisted);
           }
         }
+
+        // Reconcile any unobserved denials from authoritative final result
+        await this.reconcilePermissionDenials({
+          sessionId,
+          taskId,
+          resolvedModel,
+          messagesService,
+          allocateIndex: () => nextIndex++,
+          observedDeniedToolUseIds,
+          rawSdkResponse,
+          streamingCallbacks,
+        });
       }
 
       // Capture SDK context usage snapshot (authoritative context window data)
@@ -1002,6 +1120,7 @@ export class ClaudeTool implements ITool {
     if (!this.messagesService) {
       throw new Error('ClaudeTool not initialized with messagesService for live execution');
     }
+    const messagesService = this.messagesService;
 
     // Hydrate only this Task while deriving the append position from one row.
     const [existingMessages, sessionNextIndex] = await Promise.all([
@@ -1036,6 +1155,7 @@ export class ClaudeTool implements ITool {
     let errorDetails: string[] | undefined;
     let errorSubtype: string | undefined;
     let classifiedProviderFailureKind: ClassifiedProviderFailureKind | undefined;
+    const observedDeniedToolUseIds = new Set<string>();
 
     // Map our permission mode to Claude SDK's permission mode
     const mappedPermissionMode = permissionMode
@@ -1076,6 +1196,25 @@ export class ClaudeTool implements ITool {
       if (!capturedAgentSessionId && 'agentSessionId' in event && event.agentSessionId) {
         capturedAgentSessionId = event.agentSessionId;
         await this.captureAgentSessionId(sessionId, capturedAgentSessionId);
+      }
+
+      // Handle tool permission denial in non-streaming path
+      if (event.type === 'permission_denied') {
+        await this.persistPermissionDenial({
+          sessionId,
+          taskId,
+          resolvedModel,
+          messagesService,
+          allocateIndex: () => nextIndex++,
+          observedDeniedToolUseIds,
+          summary: event.summary,
+          metadata: projectClaudePermissionDenialMetadata({
+            tool_name: event.toolName,
+            tool_use_id: event.toolUseId,
+            agent_id: event.agentId,
+            decision_reason_type: event.decisionReasonType,
+          }),
+        });
       }
 
       // Handle rate_limit events in non-streaming path
@@ -1168,6 +1307,17 @@ export class ClaudeTool implements ITool {
             classifiedProviderFailureKind ??= getClassifiedProviderFailureKind(persisted);
           }
         }
+
+        // Reconcile any unobserved denials from authoritative final result
+        await this.reconcilePermissionDenials({
+          sessionId,
+          taskId,
+          resolvedModel,
+          messagesService,
+          allocateIndex: () => nextIndex++,
+          observedDeniedToolUseIds,
+          rawSdkResponse,
+        });
       }
 
       // Capture SDK context usage snapshot (authoritative context window data)
