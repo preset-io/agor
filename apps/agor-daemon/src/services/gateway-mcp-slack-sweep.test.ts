@@ -23,6 +23,7 @@ import {
   createTenantScopedDatabaseProxy,
   GatewayChannelRepository,
   generateId,
+  getCurrentTenantId,
   MCPServerRepository,
   MessagesRepository,
   MissingTenantDatabaseScopeError,
@@ -417,5 +418,136 @@ describe('Slack MCP connect bounded repair sweep', () => {
     await harness.sweep();
 
     expect(sent.messages).toHaveLength(1);
+  }, 30_000);
+});
+
+/**
+ * The repair timer must not inherit the tenant identity of whoever armed it.
+ *
+ * §7 of the 2026-11-14 incident report: the periodic sweep arms a repair for
+ * every active tenant while still carrying the FIRST tenant's AsyncLocalStorage
+ * identity (a timer callback inherits the context it was scheduled in). Without
+ * the fix the per-tenant `runWithTenantContext(otherTenant)` would throw
+ * synchronously — before the `.finally` that clears the in-flight flag —
+ * logged in production as 26× `[FATAL] Cannot enter tenant context X from active
+ * tenant context Y`, leaving the tenant stuck "repair in flight" until the pod
+ * restarts. The fix sheds the inherited identity before entering each tenant's
+ * own, so that throw can no longer happen.
+ *
+ * SQLite carries one tenant's rows, so the FOREIGN identity here is purely the
+ * leaked AsyncLocalStorage value the fix must shed; arming the repair from it is
+ * the one negative attempt that would wedge if the shed were removed.
+ */
+describe('Slack MCP bounded repair tenant-context isolation', () => {
+  const FOREIGN_TENANT = 'inst_foreign-tenant';
+
+  function armRepairFromContext(
+    service: GatewayService,
+    ambientTenantId: string,
+    repairTenantId: string
+  ): void {
+    const internals = service as unknown as {
+      scheduleMcpSlackRecoveryRepair(tenantId: string): void;
+    };
+    runWithTenantContext(ambientTenantId, () =>
+      internals.scheduleMcpSlackRecoveryRepair(repairTenantId)
+    );
+  }
+
+  async function waitForRepairToSettle(service: GatewayService, tenantId: string): Promise<void> {
+    const internals = service as unknown as { mcpSlackRepairTenants: Set<string> };
+    // The in-flight flag is added synchronously when the repair is armed, so it
+    // must be set here; asserting it first stops this wait from returning
+    // immediately (and the isolation assertions from passing vacuously) if a
+    // repair never actually ran.
+    expect(internals.mcpSlackRepairTenants.has(tenantId)).toBe(true);
+    const deadline = Date.now() + 20_000;
+    while (internals.mcpSlackRepairTenants.has(tenantId)) {
+      if (Date.now() > deadline) throw new Error('Bounded repair did not settle');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+
+  it('runs the repair under its own tenant, not the context that armed the timer', async () => {
+    const harness = await createSweepHarness();
+    await harness.seedWidget({
+      channelId: harness.aligned.id,
+      slackChannelId: 'C500',
+      requestedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+
+    // Capture the tenant identity the repair's own database work runs under.
+    const seenTenants: (string | undefined)[] = [];
+    const findRecoveryPage = TaskRepository.prototype.findMcpSlackRecoveryNoticePage;
+    const pageSpy = vi
+      .spyOn(TaskRepository.prototype, 'findMcpSlackRecoveryNoticePage')
+      .mockImplementation(function (
+        this: TaskRepository,
+        ...args: Parameters<TaskRepository['findMcpSlackRecoveryNoticePage']>
+      ) {
+        seenTenants.push(getCurrentTenantId());
+        return findRecoveryPage.apply(this, args);
+      });
+    try {
+      armRepairFromContext(harness.service, FOREIGN_TENANT, TENANT);
+      await waitForRepairToSettle(harness.service, TENANT);
+    } finally {
+      pageSpy.mockRestore();
+    }
+
+    // The repair ran (seenTenants is non-empty) and never inherited the foreign
+    // identity that armed it. Without the shed, the repair would instead throw
+    // `Cannot enter tenant context ...` synchronously out of the timer, so this
+    // test fails on an uncaught exception plus a settle timeout.
+    expect(seenTenants.length).toBeGreaterThan(0);
+    for (const tenant of seenTenants) expect(tenant).toBe(TENANT);
+    expect(seenTenants).not.toContain(FOREIGN_TENANT);
+    // And it did its actual work: the healthy card was delivered.
+    expect(sent.messages).toHaveLength(1);
+  }, 30_000);
+
+  it('clears the in-flight flag when a repair armed from another tenant throws', async () => {
+    const harness = await createSweepHarness();
+    await harness.seedWidget({
+      channelId: harness.aligned.id,
+      slackChannelId: 'C500',
+      requestedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+
+    // Make the repair pass itself throw, after it has started doing work. It
+    // runs inside the async repair body, so it rejects the repair promise and
+    // is handled by the `.catch().finally()` chain — the path that must still
+    // clear the in-flight flag.
+    (harness.service as unknown as Record<string, unknown>).reportMcpSlackRepairFailures = () => {
+      throw new Error('repair pass blew up');
+    };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const internals = harness.service as unknown as { mcpSlackRepairTenants: Set<string> };
+
+    try {
+      armRepairFromContext(harness.service, FOREIGN_TENANT, TENANT);
+      await waitForRepairToSettle(harness.service, TENANT);
+
+      // The flag reset even though the repair threw: never wedged until restart.
+      expect(internals.mcpSlackRepairTenants.has(TENANT)).toBe(false);
+      // The failure was surfaced once, not swallowed.
+      const failureLine = warn.mock.calls
+        .map((call) => call[0])
+        .find(
+          (value): value is string =>
+            typeof value === 'string' && value.includes('event=mcp_slack_bounded_repair_failed')
+        );
+      expect(failureLine).toBeDefined();
+
+      // A wedged flag would make `scheduleMcpSlackRecoveryRepair` early-return
+      // forever; prove the tenant can still be repaired on a later tick.
+      (harness.service as unknown as Record<string, unknown>).reportMcpSlackRepairFailures =
+        () => {};
+      armRepairFromContext(harness.service, FOREIGN_TENANT, TENANT);
+      await waitForRepairToSettle(harness.service, TENANT);
+      expect(internals.mcpSlackRepairTenants.has(TENANT)).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
   }, 30_000);
 });
