@@ -73,12 +73,17 @@ export async function deliverCompletionReport(
   return 'exhausted';
 }
 
-/** Each HTTP request authenticates independently and may reach any replica. */
-async function report(
+/**
+ * POST a report and resolve once the daemon has durably received it (any 2xx).
+ * Each HTTP request authenticates independently and may reach any replica. The
+ * acknowledgement body is not read here: a 2xx means the report was recorded, so
+ * an unreadable body must never be mistaken for a delivery failure.
+ */
+async function sendReport(
   payload: EnvironmentLifecyclePayload,
   data: EnvironmentCommandReport,
   deadline: number
-) {
+): Promise<Response> {
   const remaining = deadline - Date.now();
   if (remaining <= 0) throw new EnvironmentReportError('Environment report deadline expired');
   const response = await fetch(
@@ -99,6 +104,16 @@ async function report(
       `Environment report rejected (HTTP ${response.status})`,
       response.status
     );
+  return response;
+}
+
+/** Claim and progress reports need the daemon's refreshed deadlines from the ack body. */
+async function report(
+  payload: EnvironmentLifecyclePayload,
+  data: EnvironmentCommandReport,
+  deadline: number
+) {
+  const response = await sendReport(payload, data, deadline);
   return response.json() as Promise<{ command_deadline: string; result_deadline: string }>;
 }
 
@@ -228,10 +243,12 @@ export async function handleEnvironmentAttempt(
   // Retry only report delivery, never the command. First durable settlement wins.
   // A terminal 4xx (stale/expired/superseded attempt) stops at once; transient
   // failures back off instead of hammering the daemon once per second.
-  const delivery = await deliverCompletionReport(
-    () => report(payload, completion, resultDeadline),
-    resultDeadline
-  );
+  const delivery = await deliverCompletionReport(async () => {
+    // Any 2xx durably records the result; the ack body is irrelevant here, so an
+    // unreadable body must not re-trigger retries. Drain it to release the socket.
+    const response = await sendReport(payload, completion, resultDeadline);
+    await response.text().catch(() => undefined);
+  }, resultDeadline);
   if (delivery === 'delivered') return { success: outcome === 'succeeded' };
   return {
     success: false,

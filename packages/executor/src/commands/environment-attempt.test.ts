@@ -165,6 +165,22 @@ describe('executor-owned attempt protocol', () => {
     );
     expect(resultSends).toHaveLength(1);
   });
+
+  it('treats a 2xx result delivery with an unreadable body as delivered, not a storm', async () => {
+    const h = await fixture('true');
+    const implementation = h.fetchMock.getMockImplementation()!;
+    h.fetchMock.mockImplementation(async (...args) => {
+      // Daemon recorded the result and returned 200, but the ack body is mangled.
+      if (JSON.parse(args[1].body as string).kind === 'result')
+        return new Response('<<not json>>', { status: 200 });
+      return implementation(...args);
+    });
+    expect(await handleEnvironmentAttempt(h.payload)).toMatchObject({ success: true });
+    const resultSends = h.fetchMock.mock.calls.filter(
+      (call) => JSON.parse(call[1].body as string).kind === 'result'
+    );
+    expect(resultSends).toHaveLength(1);
+  });
 });
 
 describe('environment report delivery retry policy', () => {
