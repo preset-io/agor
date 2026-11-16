@@ -2923,6 +2923,48 @@ describe('BranchesService environment health requests', () => {
     });
   });
 
+  it('blocks a private static health URL on an HA deployment even with simple + static tenancy', async () => {
+    // HA is shared infrastructure, so the authenticated /branches/:id/health
+    // probe is public-only even under simple execution + static tenancy.
+    const branch = {
+      branch_id: 'wt-health-ha-private' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-health-ha-private',
+      path: '/tmp/wt-health-ha-private',
+      branch_unique_id: 16,
+      health_check_url: 'http://169.254.169.254/latest/meta-data/',
+      environment_instance: { status: 'error' },
+    };
+    const app = {
+      get: (name: string) =>
+        name === 'config'
+          ? { execution: { unix_user_mode: 'simple' }, deployment: { mode: 'ha' } }
+          : {},
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const healthFetch = vi.spyOn(
+      service as unknown as { fetchEnvironmentHealth: typeof fetch },
+      'fetchEnvironmentHealth'
+    );
+    globalThis.fetch = vi.fn();
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    // Neither the pinned nor the plain fetch runs: the metadata URL is rejected
+    // before egress because HA now enforces public-only.
+    expect(healthFetch).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(result.environment_instance?.last_health_check).toMatchObject({
+      status: 'unhealthy',
+      message: 'Health check URL blocked by security policy',
+    });
+  });
+
   it('uses the pinned public-only fetch for a public static health URL on an isolated deployment', async () => {
     const branch = {
       branch_id: 'wt-health-isolated-public' as BranchID,

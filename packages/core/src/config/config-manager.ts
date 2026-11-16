@@ -2413,26 +2413,35 @@ export function unixUserModeRequiresExecutionHomeKey(
  * restricted to public destinations.
  *
  * A branch's `health_check_url` is attacker-controllable configuration that the
- * daemon probes from its own network position. On any isolated or multi-tenant
- * deployment — `sandbox`/`delegated` execution, or `required_from_auth` tenancy
- * — probing a loopback/private/metadata address lets one tenant drive the shared
- * daemon into internal services (an SSRF / port-scan oracle), so health egress
- * is public-only and DNS-pinned there.
+ * daemon probes from its own network position. On any isolated, multi-tenant, or
+ * HA deployment — `sandbox`/`delegated` execution, `required_from_auth` tenancy,
+ * or `deployment.mode: ha` — probing a loopback/private/metadata address lets a
+ * caller drive the shared daemon into internal services (an SSRF / port-scan
+ * oracle), so health egress is public-only and DNS-pinned there. HA is multi-pod
+ * shared infrastructure by definition, so its authenticated `/branches/:id/health`
+ * probe is treated the same as the automatic distributed monitor (already
+ * pinned), even under `simple`/static tenancy.
  *
- * On a trusted-local single-tenant install (`simple` execution mode, static
- * tenancy) the daemon and a branch's dev server share a host, probing a
- * loopback/private address is the documented, legitimate use (see the
- * environment-configuration guide's `health: http://localhost:.../health`
- * example), and no tenant boundary exists for an SSRF to cross — so private
- * destinations stay allowed.
+ * Private destinations stay allowed ONLY on a genuinely trusted-local install:
+ * `simple` execution mode, static tenancy, and non-HA. There the daemon and a
+ * branch's dev server share a host, probing a loopback/private address is the
+ * documented, legitimate use (see the environment-configuration guide's
+ * `health: http://localhost:.../health` example), and no tenant boundary exists
+ * for an SSRF to cross.
  *
  * Dynamic (provider-reported) health and the HA distributed health monitor are
- * always public-only regardless of this flag.
+ * always public-only regardless of this flag. Deployment-mode precedence matches
+ * {@link resolveDeploymentConfig} (env then config); any HA signal fails closed.
  */
-export function enforcesPublicHealthEgress(config: AgorConfig = loadConfigSync()): boolean {
+export function enforcesPublicHealthEgress(
+  config: AgorConfig = loadConfigSync(),
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
   const { unixUserMode } = resolveExecutionSecurityMode(config);
   const multiTenant = resolveMultiTenancyConfig(config).mode === 'required_from_auth';
-  return unixUserMode !== 'simple' || multiTenant;
+  const haDeployment =
+    (env.AGOR_DEPLOYMENT_MODE ?? config.deployment?.mode ?? 'standalone') === 'ha';
+  return unixUserMode !== 'simple' || multiTenant || haDeployment;
 }
 
 /**
