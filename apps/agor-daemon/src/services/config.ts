@@ -121,18 +121,19 @@ export class ConfigService {
       throw new BadRequest('A request body with taskId and keyName is required');
     }
     const { taskId, keyName, tool } = data;
-    if (typeof taskId !== 'string' || taskId.length === 0) {
+    if (typeof taskId !== 'string' || taskId.trim().length === 0) {
       throw new BadRequest('taskId is required');
     }
     if (typeof keyName !== 'string' || !isResolvableApiKeyName(keyName)) {
       throw new BadRequest('Unsupported API key name');
     }
-    // `tool` is optional (absent falls back to a cross-tool sweep), but when
-    // present it comes from the same untrusted body and must be a known tool.
-    // An unvalidated value flows into TOOL_API_KEY_NAMES and the core resolver,
-    // where a malformed one could throw uncoded — the exact 500-mislabel this
-    // guard exists to prevent.
-    if (tool !== undefined && !isAgenticToolName(tool)) {
+    // `tool` is optional: a nullish value (absent or JSON `null`) keeps the
+    // documented cross-tool sweep fallback for non-SDK callers. When a caller
+    // does supply one it comes from the same untrusted body and must be a known
+    // tool — an unvalidated value flows into TOOL_API_KEY_NAMES and the core
+    // resolver, where a malformed one could throw uncoded, the exact 500-mislabel
+    // this guard exists to prevent.
+    if (tool != null && !isAgenticToolName(tool)) {
       throw new BadRequest('Unsupported tool');
     }
 

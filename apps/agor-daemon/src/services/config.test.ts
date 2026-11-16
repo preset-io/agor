@@ -137,6 +137,7 @@ describe('ConfigService.resolveApiKey', () => {
     ['a non-object body', 'not-an-object'],
     ['a body missing taskId', { keyName: 'OPENAI_API_KEY' }],
     ['a body with a non-string taskId', { taskId: 123, keyName: 'OPENAI_API_KEY' }],
+    ['a body with a whitespace-only taskId', { taskId: '   ', keyName: 'OPENAI_API_KEY' }],
     ['a body missing keyName', { taskId: 'task-1' }],
     ['a body with a non-string keyName', { taskId: 'task-1', keyName: 42 }],
     ['a body with a non-string tool', { taskId: 'task-1', keyName: 'OPENAI_API_KEY', tool: 123 }],
@@ -168,6 +169,30 @@ describe('ConfigService.resolveApiKey', () => {
     expect(error).not.toBeInstanceOf(TypeError);
     expect((error as { code?: unknown }).code).toBe(400);
     expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
+  });
+
+  it('treats a nullish tool as the documented cross-tool sweep rather than a 400', async () => {
+    const service = new ConfigService({} as never);
+    service.app = {
+      service: () => ({ get: vi.fn(async () => ({ created_by: 'creator-1' as UserID })) }),
+    } as never;
+
+    // A JSON `null` (or absent) tool means "no tool specified" and must fall
+    // through to the sweep fallback, not be rejected as an unknown tool.
+    await expect(
+      service.resolveApiKey(
+        { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: null } as never,
+        {
+          provider: 'socketio',
+          user: { user_id: 'executor-service', _isServiceAccount: true },
+        } as never
+      )
+    ).resolves.toMatchObject({ apiKey: 'resolved-test-key', source: 'user' });
+    expect(configMocks.resolveApiKey).toHaveBeenCalledWith('OPENAI_API_KEY', {
+      userId: 'creator-1',
+      db: {},
+      tool: null,
+    });
   });
 
   it('allows an explicit daemon service account and resolves for the task creator', async () => {
