@@ -81,6 +81,36 @@ export function isBranchArchiveOrDeleteOptions(
 
 export type BranchArchiveOrDeleteResult = Branch | { deleted: true; branch_id: BranchID };
 
+/** Authoritative per-caller archive, cleanup, delete, and retirement eligibility. */
+export interface BranchArchiveEligibility {
+  branch_id: BranchID;
+  repo_id: UUID;
+  board_id?: BoardID | null;
+  can_view_branch: boolean;
+  can_archive: boolean;
+  can_cleanup_on_archive: boolean;
+  can_delete: boolean;
+  can_delete_files: boolean;
+  can_retire_teammate: boolean;
+  can_clear_board_primary: boolean;
+  can_manage_board: boolean;
+  board_unavailable: boolean;
+  branch_access: Pick<
+    import('./group').EffectiveBranchAccess,
+    'can' | 'fs_access' | 'is_owner' | 'source'
+  >;
+  default_filesystem_action: Extract<BranchFilesystemAction, 'preserved' | 'cleaned'>;
+  cleanup_protected: boolean;
+  maintenance_capabilities?: import('./branch-cleanup').BranchMaintenanceCapabilities;
+  cleanup_policy: import('./branch-cleanup').RepoCleanupPolicy;
+  board?: {
+    board_id: BoardID;
+    name: string;
+    url?: string | null;
+    primary_teammate_id?: BranchID | null;
+  };
+}
+
 /**
  * Rendered environment snapshot fields. In branch updates, an own null/undefined
  * value clears these fields; omitting a key preserves it. Rendering supplies all

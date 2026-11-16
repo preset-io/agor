@@ -350,7 +350,6 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
             tooltip=""
             size="middle"
             onClick={() => setArchiveDeleteModalOpen(true)}
-            disabled={!canEdit}
           >
             Archive or Delete Branch
           </ArchiveActionButton>

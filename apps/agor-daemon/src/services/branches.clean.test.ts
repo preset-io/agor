@@ -681,3 +681,139 @@ test('explicit Manager retirement clears revoked collaborators preferences, pres
     prefs.setPrimaryTeammate(user.user_id, branch.branch_id, { source: 'explicit' })
   ).rejects.toThrow(/active/);
 });
+
+test('Board Manager cannot retire an active teammate owned by another member on their board', async ({
+  db,
+}) => {
+  const { branch, user: branchOwner } = await seedManagedBranch(db);
+  const { service } = setup(db);
+  const branches = new BranchRepository(db);
+  const boards = new BoardRepository(db);
+  const prefs = new UserPrimaryTeammateRepository(db);
+  const boardManager = await new UsersRepository(db).create({
+    email: 'board-manager-retire@example.test',
+    role: 'member',
+  });
+  const board = await boards.create({
+    name: 'Manager Retirement Board',
+    created_by: boardManager.user_id,
+  });
+  await branches.update(branch.branch_id, {
+    board_id: board.board_id,
+    custom_context: { teammate: { kind: 'teammate', displayName: 'Peer Teammate' } },
+  });
+  await prefs.setPrimaryTeammate(branchOwner.user_id, branch.branch_id, { source: 'explicit' });
+  expect(await prefs.getBranchId(branchOwner.user_id)).toBe(branch.branch_id);
+
+  const tenant = { tenant_id: 'default' };
+  await expect(
+    service.retireTeammate(branch.branch_id, { user: boardManager, tenant })
+  ).rejects.toThrow(/Branch Manager authority is required/);
+
+  expect(await prefs.getBranchId(branchOwner.user_id)).toBe(branch.branch_id);
+  expect(await branches.findById(branch.branch_id)).toMatchObject({
+    archived: false,
+    path: branch.path,
+    filesystem_status: 'ready',
+  });
+  expect(spawnExecutor).not.toHaveBeenCalled();
+  expect(requestExecutor).not.toHaveBeenCalled();
+});
+
+test('archive limits Board Manager to preserved unless holding branch write, while allowing workspace ADMIN on board branches', async ({
+  db,
+}) => {
+  const { branch, user: owner } = await seedManagedBranch(db);
+  const { service } = setup(db, false);
+  const branches = new BranchRepository(db);
+  const boards = new BoardRepository(db);
+  const repos = new RepoRepository(db);
+  const users = new UsersRepository(db);
+  const boardManager = await users.create({
+    email: 'board-manager-archive@example.test',
+    role: 'member',
+  });
+  const workspaceAdmin = await users.create({
+    email: 'workspace-admin-archive@example.test',
+    role: 'admin',
+  });
+  const board = await boards.create({
+    name: 'Archive Auth Board',
+    created_by: boardManager.user_id,
+  });
+  await repos.update(branch.repo_id, {
+    cleanup_policy: { enabled: true, command: 'git clean -fdX', allow_branch_protection: true },
+  });
+  await branches.update(branch.branch_id, { board_id: board.board_id });
+  const policies = new CapabilityPolicyRepository(db);
+  const currentBranchPolicy = await policies.getBranchPolicy(branch.branch_id);
+  await policies.replaceBranchPolicy(
+    branch.branch_id,
+    {
+      ...currentBranchPolicy,
+      binding_mode: 'override',
+      override_config: {
+        ...currentBranchPolicy.override_config!,
+        access: {
+          ...currentBranchPolicy.override_config!.access,
+          sharing_mode: 'private',
+          others_can: 'none',
+          entries: [],
+        },
+      },
+    },
+    owner.user_id
+  );
+
+  for (const fsAction of ['cleaned', 'deleted'] as const) {
+    const params: Params = { provider: 'rest', user: boardManager, tenant };
+    markBranchArchiveDeleteAuthorized(params, branch.branch_id, 'archive');
+    await expect(
+      service.archiveOrDelete(
+        branch.branch_id,
+        { metadataAction: 'archive', filesystemAction: fsAction },
+        params
+      )
+    ).rejects.toThrow();
+    expect(spawnExecutor).not.toHaveBeenCalled();
+  }
+
+  // Metadata-only archive works for Board Manager and redacts private branch fields.
+  const preservedParams: Params = { provider: 'rest', user: boardManager, tenant };
+  markBranchArchiveDeleteAuthorized(preservedParams, branch.branch_id, 'archive');
+  const archived = await service.archiveOrDelete(
+    branch.branch_id,
+    { metadataAction: 'archive', filesystemAction: 'preserved' },
+    preservedParams
+  );
+  expect(archived).toMatchObject({ branch_id: branch.branch_id, archived: true });
+  expect((archived as Record<string, unknown>).path).toBeUndefined();
+  expect(spawnExecutor).not.toHaveBeenCalled();
+
+  // Workspace ADMIN (even with allow_superadmin: false) can archive+clean on a board branch,
+  // but not on a detached branch.
+  const adminParams: Params = { provider: 'rest', user: workspaceAdmin, tenant };
+  markBranchArchiveDeleteAuthorized(adminParams, branch.branch_id, 'archive');
+  await service.archiveOrDelete(
+    branch.branch_id,
+    { metadataAction: 'archive', filesystemAction: 'cleaned' },
+    adminParams
+  );
+  expect(spawnExecutor).toHaveBeenCalledOnce();
+
+  vi.mocked(spawnExecutor).mockClear();
+  const { branch: detachedBranch } = await seedManagedBranch(db);
+  await repos.update(detachedBranch.repo_id, {
+    cleanup_policy: { enabled: true, command: 'git clean -fdX', allow_branch_protection: true },
+  });
+  const detachedParams: Params = { provider: 'rest', user: workspaceAdmin, tenant };
+  markBranchArchiveDeleteAuthorized(detachedParams, detachedBranch.branch_id, 'archive');
+  await expect(
+    service.archiveOrDelete(
+      detachedBranch.branch_id,
+      { metadataAction: 'archive', filesystemAction: 'cleaned' },
+      detachedParams
+    )
+  ).rejects.toThrow();
+  expect(spawnExecutor).not.toHaveBeenCalled();
+});

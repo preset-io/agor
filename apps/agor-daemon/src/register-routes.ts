@@ -4715,6 +4715,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           authorizeBranchArchiveDelete(context, {
             branchRepository,
             superadminOpts,
+            boardRepository: new BoardRepository(db),
           })
         ),
       ],

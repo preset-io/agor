@@ -1,6 +1,7 @@
 import { once } from 'node:events';
 import type { AgorConfig } from '@agor/core/config';
 import {
+  BoardRepository,
   BranchRepository,
   createTenantScopedDatabaseProxy,
   type Database,
@@ -80,6 +81,7 @@ export async function archiveMcpFixture(db: Database, hosted = false) {
           runWithTenantDatabaseScope(guarded, context.params.tenant?.tenant_id, () =>
             authorizeBranchArchiveDelete(context, {
               branchRepository: new BranchRepository(guarded),
+              boardRepository: new BoardRepository(guarded),
             })
           ),
       ],
