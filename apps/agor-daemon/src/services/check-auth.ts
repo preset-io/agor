@@ -18,7 +18,12 @@
 
 import { getAgenticToolIntegration, TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
-import { type AgorConfig, isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
+import {
+  type AgorConfig,
+  enforcesPublicHealthEgress,
+  isTenantAgenticToolEnabled,
+  resolveApiKey,
+} from '@agor/core/config';
 import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
@@ -34,6 +39,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { isAgenticToolName } from '@agor/core/types';
+import { safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
 import { inspectClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
 import { inspectCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
@@ -167,9 +173,10 @@ async function validateClaudeSubscriptionToken(token: string): Promise<AuthCheck
  * `unauthenticated` only on a real 401/403 rejection; everything else (timeout,
  * 5xx, network error) is `unknown` — a failure to VERIFY is not proof of invalidity.
  */
-async function validateProviderCredential(
+export async function validateProviderCredential(
   tool: string,
-  connection: Record<string, string | undefined>
+  connection: Record<string, string | undefined>,
+  config: DeepReadonly<AgorConfig>
 ): Promise<AuthCheckStatus> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -222,7 +229,21 @@ async function validateProviderCredential(
         return 'unknown';
     }
 
-    const res = await fetch(url, { method: 'GET', headers, signal: controller.signal });
+    // The base URL in `url` can be an attacker-set per-user setting
+    // (ANTHROPIC_BASE_URL / OPENAI_BASE_URL). On an isolated/multi-tenant/HA
+    // deployment route it through the public-only, DNS-pinned fetch (no redirect
+    // following) so it cannot become a daemon-side SSRF / port-scan oracle; a
+    // trusted-local install keeps the plain fetch so it can probe a
+    // local/self-hosted model endpoint.
+    const res = enforcesPublicHealthEgress(config as AgorConfig)
+      ? await safeOutboundFetch(url, {
+          method: 'GET',
+          headers,
+          signal: controller.signal,
+          redirect: 'error',
+          timeoutMs: FETCH_TIMEOUT_MS,
+        })
+      : await fetch(url, { method: 'GET', headers, signal: controller.signal });
     if (res.ok) return 'authenticated';
     if (res.status === 401 || res.status === 403) return 'unauthenticated';
     return 'unknown';
@@ -428,7 +449,11 @@ export function createCheckAuthService(
         }
 
         return resultFromKeyStatus(
-          await validateProviderCredential(tool, rawProviderConnection(tool, rawKey.trim())),
+          await validateProviderCredential(
+            tool,
+            rawProviderConnection(tool, rawKey.trim()),
+            config
+          ),
           tool === 'copilot'
             ? 'GitHub token rejected — check the token has not expired or been revoked.'
             : 'Key rejected by provider — double-check and try again.'
@@ -523,7 +548,7 @@ export function createCheckAuthService(
         (tool === 'claude-code' && Boolean(resolvedConnection.ANTHROPIC_AUTH_TOKEN));
       if (hasResolvedCredential) {
         return resultFromKeyStatus(
-          await validateProviderCredential(tool, resolvedConnection),
+          await validateProviderCredential(tool, resolvedConnection, config),
           'Stored key was rejected by provider — update it in Settings → Agent Setup.'
         );
       }
