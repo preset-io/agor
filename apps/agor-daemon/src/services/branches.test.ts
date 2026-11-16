@@ -3005,6 +3005,48 @@ describe('BranchesService environment health requests', () => {
     expect(result.environment_instance?.last_health_check?.status).toBe('unhealthy');
   });
 
+  it('genericizes a pinned-fetch refusal on the webhook path so it cannot leak the resolved IP', async () => {
+    const app = {
+      get: () => ({}),
+      service() {
+        throw new Error('unused');
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    // Mirror createPinnedFetch's guarded-lookup refusal (code EAGOROUTBOUND),
+    // which names the resolved internal IP.
+    const refusal = Object.assign(
+      new Error('Refusing to connect: 169-254-169-254.sslip.io resolves to 169.254.169.254'),
+      { code: 'EAGOROUTBOUND' }
+    );
+    vi.spyOn(
+      service as unknown as { fetchWebhook: typeof fetch },
+      'fetchWebhook'
+    ).mockRejectedValue(refusal);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const error = await (
+      service as unknown as {
+        executeEnvironmentWebhook: (o: {
+          url: string;
+          branch: unknown;
+          commandType: string;
+        }) => Promise<unknown>;
+      }
+    )
+      .executeEnvironmentWebhook({
+        url: 'https://169-254-169-254.sslip.io/logs',
+        branch: { branch_id: 'wt-webhook-refuse' as BranchID, name: 'wt-webhook-refuse' },
+        commandType: 'logs',
+      })
+      .catch((e: unknown) => e);
+
+    logSpy.mockRestore();
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('is not permitted');
+    expect((error as Error).message).not.toContain('169.254.169.254');
+  });
+
   it('does not probe an errored environment for an automatic observation', async () => {
     const branch = {
       branch_id: 'wt-health-error-automatic' as BranchID,

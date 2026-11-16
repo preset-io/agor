@@ -126,7 +126,7 @@ import {
   TEAMMATE_FRAMEWORK_REPO_URL,
 } from '@agor/core/types';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
-import { createPinnedFetch } from '@agor/core/utils/pinned-fetch';
+import { createPinnedFetch, isOutboundRefusal } from '@agor/core/utils/pinned-fetch';
 import { isAllowedHealthCheckUrl, isPublicHttpUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { matchesExecutorCommandRuntimeScope } from '../auth/executor-runtime-scope.js';
@@ -325,6 +325,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // Health only needs the status. Stop consuming a streaming response after
     // its first body chunk; an empty response still completes on `end`.
     isBodyComplete: () => true,
+  });
+  // Reusable pinned, public-only fetch for managed-environment webhooks
+  // (logs/start/stop/nuke) — same SSRF posture as fetchEnvironmentHealth. It
+  // reads up to LOGS_MAX_BYTES (the largest caller cap); readLimitedWebhookBody
+  // then trims to the caller's maxBytes and flags truncation, so a large body is
+  // truncated, not refused. The hard ceiling (plus generous slack) only guards a
+  // single pathological chunk, and executeEnvironmentWebhook's AbortController
+  // trips at LOGS_TIMEOUT_MS and owns the user-facing timeout message.
+  private readonly fetchWebhook = createPinnedFetch({
+    timeoutMs: ENVIRONMENT.LOGS_TIMEOUT_MS + 5_000,
+    maxBytes: ENVIRONMENT.LOGS_MAX_BYTES + 2 * 1024 * 1024,
+    isBodyComplete: (text) => Buffer.byteLength(text, 'utf8') > ENVIRONMENT.LOGS_MAX_BYTES,
   });
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
   private boardObjectsService?: {
@@ -635,26 +647,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     );
 
     // The webhook URL is attacker-controllable branch configuration fetched from
-    // the daemon's privileged network position, so it goes through the pinned
-    // fetch: it refuses non-public URLs, resolves the name and refuses any
-    // private/loopback/link-local/metadata answer at connect time (defeating
-    // wildcard-DNS and DNS rebinding), and never follows redirects, so a 3xx is
-    // reported as a failure rather than chased.
-    //
-    // `isBodyComplete` preserves the existing truncate-at-cap behavior: once the
-    // body passes `maxBytes` it stops reading, and `readLimitedWebhookBody`
-    // trims to exactly `maxBytes` and flags `truncated` — a large body is
-    // truncated, not refused. The hard ceiling (`maxBytes` plus generous slack)
-    // is only a guard against a single pathological chunk; a realistic HTTP
-    // `data` chunk is well under it, so `isBodyComplete` always trims first.
-    const pinnedWebhookFetch = createPinnedFetch({
-      // Backstop only: the AbortController below trips first and carries the
-      // user-facing "timed out" message, so this stays a hair longer.
-      timeoutMs: ENVIRONMENT.LOGS_TIMEOUT_MS + 5_000,
-      maxBytes: maxBytes + 2 * 1024 * 1024,
-      isBodyComplete: (text) => Buffer.byteLength(text, 'utf8') > maxBytes,
-    });
-
+    // the daemon's privileged network position, so it goes through the reusable
+    // pinned fetch (this.fetchWebhook): it refuses non-public URLs, resolves the
+    // name and refuses any private/loopback/link-local/metadata answer at connect
+    // time (defeating wildcard-DNS and DNS rebinding), and never follows
+    // redirects, so a 3xx is reported as a failure rather than chased.
     const controller = new AbortController();
     let timedOut = false;
     const timeout = setTimeout(() => {
@@ -663,7 +660,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }, ENVIRONMENT.LOGS_TIMEOUT_MS);
 
     try {
-      const response = await pinnedWebhookFetch(url, {
+      const response = await this.fetchWebhook(url, {
         method: 'GET',
         signal: controller.signal,
         headers: {
@@ -688,6 +685,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         throw new Error(
           `Environment ${commandType} webhook timed out after ${ENVIRONMENT.LOGS_TIMEOUT_MS / 1000}s`
         );
+      }
+      // The pinned fetch's refusal names the resolved internal IP (e.g.
+      // "...resolves to 169.254.169.254"); getLogs surfaces this error to the
+      // caller, so genericize it here at the single privileged-fetch boundary to
+      // avoid handing back a DNS/SSRF oracle. Other errors (HTTP status, a public
+      // host's network error) carry no internal detail and are kept for debugging.
+      if (isOutboundRefusal(error)) {
+        throw new Error(`Environment ${commandType} webhook destination is not permitted`);
       }
       throw error;
     } finally {

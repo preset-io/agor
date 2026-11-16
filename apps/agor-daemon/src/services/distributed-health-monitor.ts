@@ -118,17 +118,22 @@ export class DistributedHealthMonitor {
     // pinned, public-only fetch as the dynamic path: it resolves the name and
     // refuses any private/loopback/link-local/metadata answer at connect time,
     // defeating the wildcard-DNS and DNS-rebinding SSRF oracle.
+    // Backstop only: fetchObservation's AbortController trips at httpTimeoutMs and
+    // owns the "Timeout" vs "unreachable" message, so the pinned fetch's own timer
+    // stays longer to not race it. The margin stays under MIN_CLAIM_WRITE_MARGIN_MS
+    // so a claim always keeps write headroom after the HTTP budget.
+    const healthFetchTimeoutMs = options.httpTimeoutMs + 2_000;
     this.fetchHealth =
       options.fetchHealth ??
       createPinnedFetch({
-        timeoutMs: options.httpTimeoutMs,
+        timeoutMs: healthFetchTimeoutMs,
         maxBytes: 64 * 1024,
         isBodyComplete: () => true,
       });
     this.fetchDynamicHealth =
       options.fetchDynamicHealth ??
       createPinnedFetch({
-        timeoutMs: options.httpTimeoutMs,
+        timeoutMs: healthFetchTimeoutMs,
         maxBytes: 64 * 1024,
         isBodyComplete: () => true,
       });
