@@ -101,6 +101,13 @@ const EXECUTOR_OWNED_TASK_STATUSES: readonly TaskStatus[] = [
   TaskStatus.AWAITING_INPUT,
 ];
 
+export interface DueGatewayFinalReplyRef {
+  tenant_id: string;
+  task_id: TaskID;
+  session_id: SessionID;
+  thread_session_map_id?: string;
+}
+
 function executorOwnsTask(row: Pick<TaskRow, 'status' | 'executor_connected_at'>): boolean {
   return !!row.executor_connected_at && EXECUTOR_OWNED_TASK_STATUSES.includes(row.status);
 }
@@ -1078,6 +1085,180 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         error
       );
     }
+  }
+
+  /**
+   * Find terminal tasks with pending or expired gateway delivery obligations.
+   *
+   * Discovers terminal tasks for the active tenant context where:
+   * 1. A provider acknowledgement comment ID was captured.
+   * 2. The delivery is not yet marked 'delivered' or 'dead_letter'.
+   * 3. next_retry_at is null or due (<= now).
+   * 4. A 'processing' claim has expired (claimed_at <= now - staleTimeout).
+   */
+  async findDueGatewayFinalReplyRefs(
+    options: { now?: Date; limit?: number; staleClaimTimeoutMs?: number } = {}
+  ): Promise<DueGatewayFinalReplyRef[]> {
+    const limit = options.limit ?? 25;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new RepositoryError('Gateway final reply discovery limit must be between 1 and 100');
+    }
+    const now = options.now ?? new Date();
+    const nowIso = now.toISOString();
+    const staleTimeoutMs = options.staleClaimTimeoutMs ?? 5 * 60 * 1000;
+    const staleClaimIso = new Date(now.getTime() - staleTimeoutMs).toISOString();
+
+    const processingCommentId = jsonExtract(
+      this.db,
+      tasks.data,
+      'metadata.gateway_reply_metadata.processing_comment_id'
+    );
+    const deliveryStatus = jsonExtract(
+      this.db,
+      tasks.data,
+      'metadata.gateway_reply_metadata.delivery_status'
+    );
+    const nextRetryAt = jsonExtract(
+      this.db,
+      tasks.data,
+      'metadata.gateway_reply_metadata.next_retry_at'
+    );
+    const claimedAt = jsonExtract(
+      this.db,
+      tasks.data,
+      'metadata.gateway_reply_metadata.claimed_at'
+    );
+
+    try {
+      const rows = await select(this.db)
+        .from(tasks)
+        .where(
+          and(
+            sql`${tasks.status} IN ('completed', 'failed', 'stopped', 'timed_out')`,
+            isNotNull(processingCommentId),
+            sql`COALESCE(${deliveryStatus}, 'pending') IN ('pending', 'processing')`,
+            or(isNull(nextRetryAt), lte(nextRetryAt, nowIso)),
+            or(
+              isNull(deliveryStatus),
+              eq(deliveryStatus, 'pending'),
+              and(eq(deliveryStatus, 'processing'), lte(claimedAt, staleClaimIso))
+            )
+          )
+        )
+        .orderBy(asc(tasks.created_at), asc(tasks.task_id))
+        .limit(limit)
+        .all();
+
+      return rows.map((row: TaskRow) => {
+        const data = row.data as { metadata?: Task['metadata'] } | undefined;
+        const threadSessionMapId = data?.metadata?.gateway_task_source?.thread_session_map_id;
+        return {
+          tenant_id: (row as { tenant_id?: string }).tenant_id ?? getCurrentTenantId() ?? 'default',
+          task_id: row.task_id as TaskID,
+          session_id: row.session_id as SessionID,
+          thread_session_map_id: threadSessionMapId,
+        };
+      });
+    } catch (error) {
+      if (error instanceof RepositoryError) throw error;
+      throw new RepositoryError(
+        `Failed to discover due gateway final replies: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Mutate gateway reply delivery metadata under task row lock with atomic claim fencing.
+   */
+  async updateGatewayReplyMetadata(
+    taskId: string,
+    updates: {
+      delivery_status?: 'pending' | 'processing' | 'delivered' | 'dead_letter';
+      attempts?: number;
+      next_retry_at?: string | null;
+      claimed_at?: string | null;
+      claim_token?: string | null;
+      claim_expires_at?: string | null;
+      delivered_at?: string | null;
+      last_error?: string | null;
+      last_attempt_at?: string | null;
+      processing_comment_id?: number | string | null;
+    },
+    options: {
+      expectedClaimToken?: string | null;
+      staleClaimTimeoutMs?: number;
+    } = {}
+  ): Promise<{ updated: boolean; task: Task }> {
+    return this.runTaskMutation(() =>
+      runDatabaseTransaction(
+        this.db,
+        async (txDb) => {
+          const fullId = await this.resolveId(taskId);
+          await lockRowForUpdate(txDb, this.db, tasks, eq(tasks.task_id, fullId));
+          const row = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
+          if (!row) throw new EntityNotFoundError('Task', taskId);
+          const task = this.rowToTask(row);
+
+          const currentReplyMetadata =
+            (task.metadata?.gateway_reply_metadata as Record<string, unknown>) ?? {};
+
+          // Invariant: Once delivered, a task delivery state cannot be reverted
+          if (
+            currentReplyMetadata.delivery_status === 'delivered' &&
+            updates.delivery_status !== undefined &&
+            updates.delivery_status !== 'delivered'
+          ) {
+            return { updated: false, task };
+          }
+
+          // Invariant: When acquiring a 'processing' claim, ensure no active unexpired claim exists
+          if (updates.delivery_status === 'processing') {
+            const currentStatus = currentReplyMetadata.delivery_status;
+            if (currentStatus === 'delivered' || currentStatus === 'dead_letter') {
+              return { updated: false, task };
+            }
+            if (currentStatus === 'processing') {
+              const claimedAtMs = Date.parse((currentReplyMetadata.claimed_at as string) ?? '');
+              const staleTimeoutMs = options.staleClaimTimeoutMs ?? 5 * 60 * 1000;
+              if (Number.isFinite(claimedAtMs) && Date.now() - claimedAtMs < staleTimeoutMs) {
+                return { updated: false, task };
+              }
+            }
+          }
+
+          // Invariant: If expectedClaimToken is specified, the caller must still own the claim
+          if (
+            options.expectedClaimToken !== undefined &&
+            (currentReplyMetadata.claim_token ?? null) !== (options.expectedClaimToken ?? null)
+          ) {
+            return { updated: false, task };
+          }
+
+          const mergedReplyMetadata = {
+            ...currentReplyMetadata,
+            ...updates,
+          };
+
+          const updated = await update(txDb, tasks)
+            .set({
+              data: {
+                ...row.data,
+                metadata: {
+                  ...task.metadata,
+                  gateway_reply_metadata: mergedReplyMetadata,
+                },
+              },
+            })
+            .where(eq(tasks.task_id, fullId))
+            .returning()
+            .one();
+
+          return { updated: true, task: this.rowToTask(updated) };
+        },
+        { sqliteImmediate: true, sqliteBusyRetries: 9 }
+      )
+    );
   }
 
   /**

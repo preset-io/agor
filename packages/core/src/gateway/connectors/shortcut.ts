@@ -637,11 +637,27 @@ export class ShortcutConnector implements GatewayConnector {
 
     const editCommentId = req.metadata?.edit_comment_id;
     if (editCommentId != null) {
-      await this.request(`/stories/${storyId}/comments/${editCommentId}`, {
-        method: 'PUT',
-        body: JSON.stringify({ text: req.text }),
-      });
-      return String(editCommentId);
+      try {
+        await this.request(`/stories/${storyId}/comments/${editCommentId}`, {
+          method: 'PUT',
+          body: JSON.stringify({ text: req.text }),
+        });
+        return String(editCommentId);
+      } catch (error) {
+        const status =
+          error instanceof ShortcutHttpError
+            ? error.status
+            : ((error as { status?: number; statusCode?: number })?.status ??
+              (error as { status?: number; statusCode?: number })?.statusCode);
+        if (status === 404) {
+          const created = await this.request<{ id: number }>(`/stories/${storyId}/comments`, {
+            method: 'POST',
+            body: JSON.stringify({ text: req.text, parent_id: rootCommentId }),
+          });
+          return String(created.id);
+        }
+        throw error;
+      }
     }
 
     const created = await this.request<{ id: number }>(`/stories/${storyId}/comments`, {
