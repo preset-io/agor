@@ -432,6 +432,48 @@ describe('ReposService.addLocalRepository executor boundary', () => {
     ).rejects.toMatchObject({ name: 'BadRequest' });
     expect(executorMocks.requestExecutor).not.toHaveBeenCalled();
   });
+
+  it('rejects an invalid explicit slug with a coded 400 (was an uncoded 500)', async () => {
+    executorMocks.requestExecutor.mockResolvedValueOnce({
+      success: true,
+      data: { path: '/trusted/repo', defaultBranch: 'main', credentialFindingCount: 0 },
+    });
+    const service = new ReposService(
+      {} as never,
+      { get: () => ({}), service: vi.fn() } as unknown as Application
+    );
+    const create = vi.spyOn(service, 'create');
+    await expect(
+      service.addLocalRepository(
+        { path: '/submitted/repo', slug: 'Bad Slug!' } as never,
+        {
+          user: { user_id: '550e8400-e29b-41d4-a716-446655440000' },
+        } as never
+      )
+    ).rejects.toMatchObject({ name: 'BadRequest' });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('maps a duplicate slug to a coded 409 conflict (was an uncoded 500)', async () => {
+    executorMocks.requestExecutor.mockResolvedValueOnce({
+      success: true,
+      data: { path: '/trusted/repo', defaultBranch: 'main', credentialFindingCount: 0 },
+    });
+    const service = new ReposService(
+      {} as never,
+      { get: () => ({}), service: vi.fn() } as unknown as Application
+    );
+    (
+      service as unknown as { repoRepo: { findBySlug: ReturnType<typeof vi.fn> } }
+    ).repoRepo.findBySlug.mockResolvedValue({ repo_id: 'existing' });
+    const create = vi.spyOn(service, 'create');
+    await expect(
+      service.addLocalRepository({ path: '/submitted/repo', slug: 'local/repo' }, {
+        user: { user_id: '550e8400-e29b-41d4-a716-446655440000' },
+      } as never)
+    ).rejects.toMatchObject({ name: 'Conflict' });
+    expect(create).not.toHaveBeenCalled();
+  });
 });
 
 describe('ReposService.createBranch Git lifecycle execution', () => {

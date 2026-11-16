@@ -29,11 +29,14 @@ type FeathersMetricsOptions = FeathersInstrumentationOptions & {
  * reach this path; a `500` here is a genuine server error worth paging on, not
  * a client input bug masquerading as infrastructure failure.
  *
- * Only an HTTP-family `.code` (100–599) is a real response status. A non-HTTP
- * numeric `.code` — e.g. a child-process exit code (`1`, `127`), a POSIX errno,
- * or a provider-specific numeric code — would otherwise be tagged verbatim,
- * landing the request outside the 4xx/5xx families where it hides a genuine
- * server fault from error-rate alerting. Such codes are bucketed as `500`.
+ * Only a 4xx/5xx `.code` (400–599) is a real Feathers response status — every
+ * Feathers error class lands there. The bound stops at 400 on purpose: a
+ * non-HTTP numeric `.code` — a POSIX errno, a provider-specific code, or a
+ * shell/child-process exit code (`1`, `127`, `128`, `130`, `137`, `143`, all
+ * ≤ 255 and so inside a naive 100–599 window) — would otherwise be tagged
+ * verbatim, landing the request outside the 4xx/5xx families where it hides a
+ * genuine server fault from error-rate alerting. Any code outside 400–599 is
+ * bucketed as `500`.
  */
 function errorStatus(error: unknown): number {
   if (error && typeof error === 'object') {
@@ -41,7 +44,7 @@ function errorStatus(error: unknown): number {
     if (
       typeof candidate === 'number' &&
       Number.isInteger(candidate) &&
-      candidate >= 100 &&
+      candidate >= 400 &&
       candidate <= 599
     ) {
       return candidate;

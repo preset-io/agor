@@ -133,8 +133,9 @@ const CLONE_WORKER_FIELDS: ReadonlySet<string> = new Set([
 
 function deriveLocalRepoSlug(remoteUrl: string | undefined, explicitSlug?: string): RepoSlug {
   if (explicitSlug) {
+    // A caller-supplied slug is untrusted input; a plain Error buckets as 500.
     if (!isValidSlug(explicitSlug)) {
-      throw new Error(`Invalid slug format: ${explicitSlug}`);
+      throw new BadRequest(`Invalid slug format: ${explicitSlug}`);
     }
     return explicitSlug as RepoSlug;
   }
@@ -700,7 +701,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     return withFreshTenantWrite(this.db, tenantId, async () => {
       const existing = await this.repoRepo.findBySlug(slug);
       if (existing) {
-        throw new Error(
+        // A duplicate slug is a 409 conflict, not a server fault (was 500).
+        throw new Conflict(
           `Repository '${slug}' already exists.\nUse a different slug with: --slug custom/name`
         );
       }

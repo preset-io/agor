@@ -29,6 +29,17 @@ export function createUserApiKeysService(apiKeysRepo: UserApiKeysRepository) {
       const user = params.user;
       if (!user) throw new NotAuthenticated('Authentication required');
 
+      // The body is untrusted transport input (reachable by any member over
+      // REST, including the CLI-login path). A null/non-object body, or a
+      // non-string `name`, would throw an uncoded TypeError on `.name`/`.trim()`
+      // that is misclassified as a server 5xx and pages on-call; reject it with
+      // a coded 400 instead.
+      if (data === null || typeof data !== 'object') {
+        throw new BadRequest('A request body is required');
+      }
+      if (data.name !== undefined && typeof data.name !== 'string') {
+        throw new BadRequest('Key name must be a string');
+      }
       const name = data.name?.trim();
       if (!name) throw new BadRequest('Key name is required');
       if (name.length > 100) throw new BadRequest('Key name must be 100 characters or less');

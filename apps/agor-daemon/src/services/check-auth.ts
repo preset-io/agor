@@ -400,6 +400,11 @@ export function createCheckAuthService(
       }
       const { tool, apiKey: rawKey } = data;
       if (!isAgenticToolName(tool)) return unknown('Unsupported tool');
+      // `apiKey` comes from the same untrusted body; a non-string value would
+      // throw an uncoded TypeError on the `rawKey?.trim()` below. Guard it here.
+      if (rawKey !== undefined && typeof rawKey !== 'string') {
+        throw new BadRequest('apiKey must be a string');
+      }
 
       const userId = params?.user?.user_id as UserID | undefined;
       const tenantId = getCurrentTenantId();
