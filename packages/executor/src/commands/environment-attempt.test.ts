@@ -184,15 +184,20 @@ describe('executor-owned attempt protocol', () => {
 });
 
 describe('environment report delivery retry policy', () => {
-  it('treats most 4xx as terminal but 5xx / 408 / 429 / networkless failures as retryable', () => {
+  it('treats only the daemon rejections (400/403/409) as terminal; everything else retries', () => {
+    // The daemon's deliberate, deterministic rejections — never succeed on retry.
     expect(isRetryableReportError(new EnvironmentReportError('stale', 409))).toBe(false);
     expect(isRetryableReportError(new EnvironmentReportError('bad input', 400))).toBe(false);
     expect(isRetryableReportError(new EnvironmentReportError('forbidden', 403))).toBe(false);
+    // Transient: server errors and overload.
     expect(isRetryableReportError(new EnvironmentReportError('server', 500))).toBe(true);
     expect(isRetryableReportError(new EnvironmentReportError('unavailable', 503))).toBe(true);
-    // 408/429 are transient client statuses worth retrying, not terminal.
     expect(isRetryableReportError(new EnvironmentReportError('request timeout', 408))).toBe(true);
     expect(isRetryableReportError(new EnvironmentReportError('too many requests', 429))).toBe(true);
+    // Transient: a not-yet-ready replica during rollout answers 401/404.
+    expect(isRetryableReportError(new EnvironmentReportError('unauthorized', 401))).toBe(true);
+    expect(isRetryableReportError(new EnvironmentReportError('not found', 404))).toBe(true);
+    // Transient: status-less network/timeout fault.
     expect(isRetryableReportError(new Error('socket hang up'))).toBe(true);
   });
 

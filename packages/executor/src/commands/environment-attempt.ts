@@ -27,15 +27,21 @@ export class EnvironmentReportError extends Error {
 }
 
 /**
- * Most client errors (4xx) are terminal: a stale, expired, or rejected attempt
- * never succeeds on retry, so retrying only storms the daemon (and an uncoded
- * 5xx-looking rejection pages on-call). Retry only genuinely transient failures —
- * server (5xx) errors, the explicitly retryable 408/429 client statuses, and
- * network/timeout faults that carry no status.
+ * The daemon's deliberate, deterministic report rejections: a malformed report
+ * (400), a credential/scope refusal (403), or a superseded/expired attempt (409).
+ * They are identical on every replica and never succeed on retry, so retrying only
+ * storms the daemon (and an uncoded 5xx-looking rejection would page on-call).
+ */
+const TERMINAL_REPORT_STATUSES = new Set([400, 403, 409]);
+
+/**
+ * Retry everything except those terminal rejections: server (5xx) errors, 408/429,
+ * an auth/route gap from a not-yet-ready replica during rollout (401/404), and
+ * status-less network/timeout faults are all transient and worth a backed-off retry.
  */
 export function isRetryableReportError(error: unknown): boolean {
   const status = error instanceof EnvironmentReportError ? error.status : undefined;
-  if (typeof status === 'number') return status >= 500 || status === 408 || status === 429;
+  if (typeof status === 'number') return !TERMINAL_REPORT_STATUSES.has(status);
   return true;
 }
 
@@ -99,11 +105,14 @@ async function sendReport(
       body: JSON.stringify(data),
     }
   );
-  if (!response.ok)
+  if (!response.ok) {
+    // Release the keep-alive socket; the error body is not needed.
+    await response.body?.cancel().catch(() => undefined);
     throw new EnvironmentReportError(
       `Environment report rejected (HTTP ${response.status})`,
       response.status
     );
+  }
   return response;
 }
 
