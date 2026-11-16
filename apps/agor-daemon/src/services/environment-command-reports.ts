@@ -132,13 +132,10 @@ export class EnvironmentCommandReportsService {
           // A report that no longer matches the live attempt (superseded, expired,
           // misclaimed, foreign actor) is an ordinary race, not a server fault.
           // Surface a coded 409 so the executor stops retrying (no storm) and the
-          // uncoded throw never reads as a 5xx that pages on-call.
-          if (error instanceof EnvironmentCommandConflictError) {
-            console.debug(
-              `[environment-command.report.conflict] branch_id=${report.branch_id} attempt_id=${report.attempt_id} action=${report.action} kind=${report.kind} reason=${error.message}`
-            );
-            throw new Conflict(error.message);
-          }
+          // uncoded throw never reads as a 5xx that pages on-call. The conflict is
+          // already observable as status_code:409 on the Feathers request metric,
+          // so no per-request log is emitted here (see context/guidelines/logging.md).
+          if (error instanceof EnvironmentCommandConflictError) throw new Conflict(error.message);
           throw error;
         });
       const branch = await branches.findById(report.branch_id);
