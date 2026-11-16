@@ -27,28 +27,33 @@ export class EnvironmentReportError extends Error {
 }
 
 /**
- * Client errors (4xx) are terminal: a stale, expired, or rejected attempt never
- * succeeds on retry, so retrying only storms the daemon (and an uncoded 5xx-looking
- * rejection pages on-call). Retry only genuinely transient failures — server (5xx)
- * errors and network/timeout faults that carry no status.
+ * Most client errors (4xx) are terminal: a stale, expired, or rejected attempt
+ * never succeeds on retry, so retrying only storms the daemon (and an uncoded
+ * 5xx-looking rejection pages on-call). Retry only genuinely transient failures —
+ * server (5xx) errors, the explicitly retryable 408/429 client statuses, and
+ * network/timeout faults that carry no status.
  */
 export function isRetryableReportError(error: unknown): boolean {
   const status = error instanceof EnvironmentReportError ? error.status : undefined;
-  if (typeof status === 'number') return status >= 500;
+  if (typeof status === 'number') return status >= 500 || status === 408 || status === 429;
   return true;
 }
 
+/** Why `deliverCompletionReport` stopped: accepted, authoritatively rejected, or out of time. */
+export type ReportDeliveryOutcome = 'delivered' | 'rejected' | 'exhausted';
+
 /**
  * Deliver the final result, retrying only transient failures with exponential
- * backoff until the deadline. Stops immediately on a terminal 4xx rejection.
- * Returns `true` once a report is durably accepted, `false` when the attempt is
- * terminally rejected or the deadline passes first.
+ * backoff until the deadline. Stops immediately on a terminal (4xx) rejection.
+ * Returns `'delivered'` once a report is durably accepted, `'rejected'` when the
+ * daemon authoritatively refuses it, or `'exhausted'` when the deadline passes
+ * first — the last two are distinguished so the caller can report the real cause.
  */
 export async function deliverCompletionReport(
   send: () => Promise<unknown>,
   resultDeadline: number,
   options: { now?: () => number; sleep?: (ms: number) => Promise<void> } = {}
-): Promise<boolean> {
+): Promise<ReportDeliveryOutcome> {
   const now = options.now ?? Date.now;
   const sleep =
     options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -56,16 +61,16 @@ export async function deliverCompletionReport(
   while (now() < resultDeadline) {
     try {
       await send();
-      return true;
+      return 'delivered';
     } catch (error) {
-      if (!isRetryableReportError(error)) return false;
+      if (!isRetryableReportError(error)) return 'rejected';
       const wait = Math.min(backoffMs, resultDeadline - now());
-      if (wait <= 0) return false;
+      if (wait <= 0) return 'exhausted';
       await sleep(wait);
       backoffMs = Math.min(backoffMs * 2, 30000);
     }
   }
-  return false;
+  return 'exhausted';
 }
 
 /** Each HTTP request authenticates independently and may reach any replica. */
@@ -223,16 +228,19 @@ export async function handleEnvironmentAttempt(
   // Retry only report delivery, never the command. First durable settlement wins.
   // A terminal 4xx (stale/expired/superseded attempt) stops at once; transient
   // failures back off instead of hammering the daemon once per second.
-  if (
-    await deliverCompletionReport(() => report(payload, completion, resultDeadline), resultDeadline)
-  )
-    return { success: outcome === 'succeeded' };
+  const delivery = await deliverCompletionReport(
+    () => report(payload, completion, resultDeadline),
+    resultDeadline
+  );
+  if (delivery === 'delivered') return { success: outcome === 'succeeded' };
   return {
     success: false,
     error: {
       code: 'ENVIRONMENT_REPORT_LOST',
       message:
-        'Command result could not be delivered before its deadline; outcome will be reported as unknown',
+        delivery === 'rejected'
+          ? 'Command result was rejected by the daemon (the attempt was superseded or expired); outcome will be reported as unknown. No retry.'
+          : 'Command result could not be delivered before its deadline; outcome will be reported as unknown.',
     },
   };
 }

@@ -26,14 +26,17 @@ import { EntityNotFoundError, RepositoryError } from './base';
 type Environment = BranchEnvironmentInstance;
 
 /**
- * A report that no longer matches the live attempt — the attempt was superseded,
- * archived, expired, or already settled. This is a client condition (map to 409),
- * not a server fault: the executor must stop retrying rather than storm the daemon.
+ * A report (claim/output/result) that cannot be applied to the live attempt — it
+ * was superseded, archived, expired, already settled, already claimed, not yet
+ * claimed, or sent by a different actor. Every case is a permanent client
+ * condition (map to 409 Conflict), never a server fault: the executor must stop
+ * retrying rather than storm the daemon, and an uncoded throw must never read as a
+ * 5xx that pages on-call.
  */
-export class StaleEnvironmentCommandError extends RepositoryError {
+export class EnvironmentCommandConflictError extends RepositoryError {
   constructor(message: string) {
     super(message);
-    this.name = 'StaleEnvironmentCommandError';
+    this.name = 'EnvironmentCommandConflictError';
   }
 }
 
@@ -189,23 +192,24 @@ export class EnvironmentCommandRepository {
         attempt.id !== report.attempt_id ||
         attempt.action !== report.action
       ) {
-        throw new StaleEnvironmentCommandError('Stale environment command report');
+        throw new EnvironmentCommandConflictError('Stale environment command report');
       }
       if (options?.expectedRequester && attempt.requested_by !== options.expectedRequester) {
-        throw new RepositoryError('Environment command actor changed');
+        throw new EnvironmentCommandConflictError('Environment command actor changed');
       }
       if (report.kind === 'result' && attempt.finished_at) {
         // Duplicate delivery is harmless; it never overwrites the first settlement.
         return { value: environment };
       }
       if (attempt.finished_at || expireEnvironmentCommand(environment, now) !== environment) {
-        throw new StaleEnvironmentCommandError(
+        throw new EnvironmentCommandConflictError(
           'Environment command attempt expired or already completed'
         );
       }
       const next: Environment = { ...environment, command_attempt: { ...attempt } };
       if (report.kind === 'claim') {
-        if (attempt.claimed_at) throw new RepositoryError('Environment command already claimed');
+        if (attempt.claimed_at)
+          throw new EnvironmentCommandConflictError('Environment command already claimed');
         next.command_attempt!.claimed_at = now.toISOString();
         // The command receives a full budget from claim, never past the hard admission deadline.
         next.command_attempt!.command_deadline = new Date(
@@ -216,7 +220,7 @@ export class EnvironmentCommandRepository {
         ).toISOString();
       } else {
         if (!attempt.claimed_at)
-          throw new RepositoryError('Environment command must be claimed first');
+          throw new EnvironmentCommandConflictError('Environment command must be claimed first');
         if (report.kind === 'output') {
           if (report.sequence <= (attempt.output_sequence ?? 0)) return { value: environment };
           next.command_attempt!.output = report.output;

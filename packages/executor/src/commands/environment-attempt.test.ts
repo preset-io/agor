@@ -154,7 +154,10 @@ describe('executor-owned attempt protocol', () => {
     });
     expect(await handleEnvironmentAttempt(h.payload)).toMatchObject({
       success: false,
-      error: { code: 'ENVIRONMENT_REPORT_LOST' },
+      error: {
+        code: 'ENVIRONMENT_REPORT_LOST',
+        message: expect.stringContaining('rejected by the daemon'),
+      },
     });
     // The storm metric: exactly one result delivery is attempted, not ~500.
     const resultSends = h.fetchMock.mock.calls.filter(
@@ -165,12 +168,15 @@ describe('executor-owned attempt protocol', () => {
 });
 
 describe('environment report delivery retry policy', () => {
-  it('treats 4xx as terminal and 5xx / networkless failures as retryable', () => {
+  it('treats most 4xx as terminal but 5xx / 408 / 429 / networkless failures as retryable', () => {
     expect(isRetryableReportError(new EnvironmentReportError('stale', 409))).toBe(false);
     expect(isRetryableReportError(new EnvironmentReportError('bad input', 400))).toBe(false);
     expect(isRetryableReportError(new EnvironmentReportError('forbidden', 403))).toBe(false);
     expect(isRetryableReportError(new EnvironmentReportError('server', 500))).toBe(true);
     expect(isRetryableReportError(new EnvironmentReportError('unavailable', 503))).toBe(true);
+    // 408/429 are transient client statuses worth retrying, not terminal.
+    expect(isRetryableReportError(new EnvironmentReportError('request timeout', 408))).toBe(true);
+    expect(isRetryableReportError(new EnvironmentReportError('too many requests', 429))).toBe(true);
     expect(isRetryableReportError(new Error('socket hang up'))).toBe(true);
   });
 
@@ -179,8 +185,8 @@ describe('environment report delivery retry policy', () => {
       throw new EnvironmentReportError('Environment report rejected (HTTP 409)', 409);
     });
     const sleep = vi.fn(async () => undefined);
-    const delivered = await deliverCompletionReport(send, 1_000_000, { now: () => 0, sleep });
-    expect(delivered).toBe(false);
+    const outcome = await deliverCompletionReport(send, 1_000_000, { now: () => 0, sleep });
+    expect(outcome).toBe('rejected');
     expect(send).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
   });
@@ -194,12 +200,28 @@ describe('environment report delivery retry policy', () => {
       clock += ms;
     });
     // ~8.5 min — the observed storm window; fixed 1s retries would be ~510 sends.
-    const delivered = await deliverCompletionReport(send, 510_000, { now: () => clock, sleep });
-    expect(delivered).toBe(false);
+    const outcome = await deliverCompletionReport(send, 510_000, { now: () => clock, sleep });
+    expect(outcome).toBe('exhausted');
     const waits = sleep.mock.calls.map((call) => call[0] as number);
     expect(waits.slice(0, 5)).toEqual([1000, 2000, 4000, 8000, 16000]);
     expect(Math.max(...waits)).toBeLessThanOrEqual(30000);
     expect(send.mock.calls.length).toBeLessThan(40);
+  });
+
+  it('retries a 429 (rate limit) rather than dropping the result as terminal', async () => {
+    let clock = 0;
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new EnvironmentReportError('Environment report rejected (HTTP 429)', 429)
+      )
+      .mockResolvedValueOnce({ command_deadline: 'x', result_deadline: 'y' });
+    const sleep = vi.fn(async (ms: number) => {
+      clock += ms;
+    });
+    const outcome = await deliverCompletionReport(send, 1_000_000, { now: () => clock, sleep });
+    expect(outcome).toBe('delivered');
+    expect(send).toHaveBeenCalledTimes(2);
   });
 
   it('returns delivered as soon as a retried transient failure is accepted', async () => {
@@ -213,8 +235,8 @@ describe('environment report delivery retry policy', () => {
     const sleep = vi.fn(async (ms: number) => {
       clock += ms;
     });
-    const delivered = await deliverCompletionReport(send, 1_000_000, { now: () => clock, sleep });
-    expect(delivered).toBe(true);
+    const outcome = await deliverCompletionReport(send, 1_000_000, { now: () => clock, sleep });
+    expect(outcome).toBe('delivered');
     expect(send).toHaveBeenCalledTimes(2);
   });
 });

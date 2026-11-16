@@ -212,6 +212,56 @@ describe('executor-owned command reports', () => {
   );
 
   dbTest(
+    'maps other permanent report conflicts (a result before claim) to a coded 409 too',
+    async ({ db }) => {
+      const { branch, user } = await seedManagedBranch(db);
+      const id = generateId();
+      await new EnvironmentCommandRepository(db).admit({
+        branch,
+        userId: user.user_id,
+        action: 'start',
+        attemptId: id,
+      });
+      const reporter = new EnvironmentCommandReportsService(db, {
+        service: () => ({ emit: vi.fn() }),
+      } as unknown as Application);
+      const params = {
+        provider: 'rest',
+        tenant: { tenant_id: tenantId, source: 'explicit' },
+        user: { ...user, role: 'member' },
+        authentication: {
+          strategy: 'jwt',
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-command',
+            session_id: environmentCommandTokenId('start', id),
+            branch_id: branch.branch_id,
+            tenant_id: tenantId,
+            sub: user.user_id,
+          },
+        },
+      } as AuthenticatedParams;
+      await runWithTenantContext(tenantId, async () => {
+        // A result before the claim is a permanent protocol conflict: coded 409,
+        // not an uncoded throw the executor would retry into a storm.
+        await expect(
+          reporter.create(
+            {
+              branch_id: branch.branch_id,
+              attempt_id: id,
+              action: 'start',
+              kind: 'result',
+              outcome: 'succeeded',
+              message: 'result arrived before any claim',
+            },
+            params
+          )
+        ).rejects.toMatchObject({ code: 409, name: 'Conflict' });
+      });
+    }
+  );
+
+  dbTest(
     'records a refused launch as failed and unclaimed, and any other handoff failure as unknown',
     async ({ db }) => {
       const { branch, user } = await seedManagedBranch(db);
