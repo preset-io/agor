@@ -124,7 +124,10 @@ export class ConfigService {
     if (typeof taskId !== 'string' || taskId.trim().length === 0) {
       throw new BadRequest('taskId is required');
     }
-    if (typeof keyName !== 'string' || !isResolvableApiKeyName(keyName)) {
+    if (typeof keyName !== 'string' || keyName.trim().length === 0) {
+      throw new BadRequest('keyName is required');
+    }
+    if (!isResolvableApiKeyName(keyName)) {
       throw new BadRequest('Unsupported API key name');
     }
     // `tool` is optional: a nullish value (absent or JSON `null`) keeps the

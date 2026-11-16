@@ -171,6 +171,32 @@ describe('ConfigService.resolveApiKey', () => {
     expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
   });
 
+  it('distinguishes a missing keyName from an unsupported one in the 400 message', async () => {
+    const service = new ConfigService({} as never);
+    const params = {
+      provider: 'socketio',
+      user: { user_id: 'executor-service', _isServiceAccount: true },
+    } as never;
+
+    const missing = await service.resolveApiKey({ taskId: 'task-1' } as never, params).then(
+      () => undefined,
+      (err: unknown) => err
+    );
+    expect(missing).toBeInstanceOf(BadRequest);
+    expect((missing as Error).message).toMatch(/keyName is required/);
+
+    const unsupported = await service
+      .resolveApiKey({ taskId: 'task-1', keyName: 'NOPE_TOKEN' } as never, params)
+      .then(
+        () => undefined,
+        (err: unknown) => err
+      );
+    expect(unsupported).toBeInstanceOf(BadRequest);
+    expect((unsupported as Error).message).toMatch(/Unsupported API key name/);
+
+    expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
+  });
+
   it('treats a nullish tool as the documented cross-tool sweep rather than a 400', async () => {
     const service = new ConfigService({} as never);
     service.app = {
