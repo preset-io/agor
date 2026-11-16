@@ -1719,7 +1719,7 @@ export class GatewayService {
   }
 
   /**
-   * Arm a timer whose callback runs under NO tenant identity.
+   * Arm a timer whose callback runs under NO tenant identity or database scope.
    *
    * A `setTimeout` callback inherits the AsyncLocalStorage identity it was
    * scheduled in. The repair and sweep timers are armed from one tenant's
@@ -1729,9 +1729,17 @@ export class GatewayService {
    * and throw. Shedding the inherited identity here lets each callback enter
    * its own tenant context cleanly. Timers that only ever re-enter their own
    * tenant do not need this and should use a bare `setTimeout`.
+   *
+   * Both the tenant context scope and any tenant database scope are shed, like
+   * the `setImmediate` deferral helpers: today every arming site is outside a
+   * database scope, but shedding both keeps the name honest and stops a future
+   * arming site from leaking an already-committed transaction into the timer.
    */
   private scheduleTenantNeutralTimer(delayMs: number, run: () => void): NodeJS.Timeout {
-    const timer = setTimeout(() => runWithoutTenantContext(run), delayMs);
+    const timer = setTimeout(
+      () => runWithoutTenantContext(() => runWithoutTenantDatabaseScope(run)),
+      delayMs
+    );
     timer.unref?.();
     return timer;
   }
