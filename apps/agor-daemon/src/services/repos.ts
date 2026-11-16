@@ -133,8 +133,9 @@ const CLONE_WORKER_FIELDS: ReadonlySet<string> = new Set([
 
 function deriveLocalRepoSlug(remoteUrl: string | undefined, explicitSlug?: string): RepoSlug {
   if (explicitSlug) {
+    // A caller-supplied slug is untrusted input; a plain Error buckets as 500.
     if (!isValidSlug(explicitSlug)) {
-      throw new Error(`Invalid slug format: ${explicitSlug}`);
+      throw new BadRequest(`Invalid slug format: ${explicitSlug}`);
     }
     return explicitSlug as RepoSlug;
   }
@@ -149,7 +150,8 @@ function deriveLocalRepoSlug(remoteUrl: string | undefined, explicitSlug?: strin
       .replace(/^-+|-+$/g, '');
 
     if (!sanitized) {
-      throw new Error('Could not derive a valid slug from local repository name');
+      // Caller-fixable: the detected name has no usable slug characters.
+      throw new BadRequest('Could not derive a valid slug from local repository name');
     }
 
     return `local/${sanitized}` as RepoSlug;
@@ -164,7 +166,9 @@ function deriveLocalRepoSlug(remoteUrl: string | undefined, explicitSlug?: strin
     }
   }
 
-  throw new Error(
+  // Caller-fixable: no usable remote origin and no explicit slug. Keep this
+  // message stable — add-repo.ts matches on it to prompt for --slug.
+  throw new BadRequest(
     'Could not auto-detect slug for local repository.\nUse --slug to provide one explicitly'
   );
 }
@@ -654,14 +658,23 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         'Local repository registration is unavailable in hosted multi-tenant mode.'
       );
     }
-    if (!data.path) {
-      throw new Error('Path is required to add a local repository');
+    // The body is untrusted transport input. A null/non-object body or a
+    // non-string `path` would throw an uncoded TypeError (misclassified as a
+    // server 5xx that pages on-call); a plain Error is likewise uncoded. Reject
+    // malformed input with a coded 400 before touching the executor.
+    if (data === null || typeof data !== 'object') {
+      throw new BadRequest('A request body with a path is required');
+    }
+    if (typeof data.path !== 'string' || data.path.trim().length === 0) {
+      throw new BadRequest('Path is required to add a local repository');
+    }
+    // A non-string slug (e.g. `{slug: ["a/b"]}` over REST) coerces through
+    // isValidSlug and reaches .split, throwing an uncoded 500. Reject it here.
+    if (data.slug !== undefined && typeof data.slug !== 'string') {
+      throw new BadRequest('Slug must be a string');
     }
 
     const inputPath = data.path.trim();
-    if (!inputPath) {
-      throw new Error('Path is required to add a local repository');
-    }
 
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
     // Both MCP and HTTP enter with tenant identity only. Admit in a short
@@ -696,7 +709,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     return withFreshTenantWrite(this.db, tenantId, async () => {
       const existing = await this.repoRepo.findBySlug(slug);
       if (existing) {
-        throw new Error(
+        // A duplicate slug is a 409 conflict, not a server fault (was 500).
+        throw new Conflict(
           `Repository '${slug}' already exists.\nUse a different slug with: --slug custom/name`
         );
       }

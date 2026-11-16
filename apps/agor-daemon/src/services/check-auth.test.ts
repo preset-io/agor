@@ -82,6 +82,25 @@ beforeEach(() => {
   resolveApiKeyMock.mockResolvedValue({ apiKey: undefined, source: 'none', useNativeAuth: false });
 });
 
+describe('check-auth input validation', () => {
+  it('rejects a null request body with a coded 400 instead of an uncoded TypeError', async () => {
+    // The body is untrusted transport input. Destructuring `data` blind would
+    // throw an uncoded TypeError misclassified as a server 5xx.
+    await expect(service().create(null as never)).rejects.toMatchObject({ name: 'BadRequest' });
+  });
+
+  it('rejects a non-object request body with a coded 400', async () => {
+    await expect(service().create('nope' as never)).rejects.toMatchObject({ name: 'BadRequest' });
+  });
+
+  it('rejects a non-string apiKey with a coded 400 instead of an uncoded TypeError', async () => {
+    // {apiKey: 123} would throw on the later rawKey?.trim(); guard it up front.
+    await expect(
+      service().create({ tool: 'claude-code', apiKey: 123 } as never)
+    ).rejects.toMatchObject({ name: 'BadRequest' });
+  });
+});
+
 // #1867 — Claude subscription-token handling (kept verbatim; `authenticated`
 // boolean is the derived convenience these assertions rely on).
 describe('check-auth Claude subscription tokens', () => {

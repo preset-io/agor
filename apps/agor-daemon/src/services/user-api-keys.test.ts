@@ -92,4 +92,34 @@ describe('user API keys service', () => {
       fresh.service.create({ name: 'agor-cli-other-9f9f', source: 'cli_login' }, params)
     ).rejects.toThrow('Maximum of 25 API keys per user');
   });
+
+  it('rejects a null create body with a coded 400 instead of an uncoded TypeError', async () => {
+    const { repo, service } = setup();
+    await expect(service.create(null as never, params)).rejects.toMatchObject({
+      name: 'BadRequest',
+    });
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-string create name with a coded 400 instead of an uncoded TypeError', async () => {
+    const { repo, service } = setup();
+    await expect(service.create({ name: 123 } as never, params)).rejects.toMatchObject({
+      name: 'BadRequest',
+    });
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a null patch body with a coded 400 instead of an uncoded TypeError', async () => {
+    const { service } = setup();
+    await expect(service.patch('key-1', null as never, params)).rejects.toMatchObject({
+      name: 'BadRequest',
+    });
+  });
+
+  it('rejects a non-string patch name with a coded 400 instead of an uncoded TypeError', async () => {
+    const { service } = setup();
+    await expect(service.patch('key-1', { name: 123 } as never, params)).rejects.toMatchObject({
+      name: 'BadRequest',
+    });
+  });
 });
