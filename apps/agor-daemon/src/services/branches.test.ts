@@ -3020,9 +3020,9 @@ describe('BranchesService environment health requests', () => {
       { code: 'EAGOROUTBOUND' }
     );
     vi.spyOn(
-      service as unknown as { fetchWebhook: typeof fetch },
-      'fetchWebhook'
-    ).mockRejectedValue(refusal);
+      service as unknown as { createWebhookFetch: (maxBytes: number) => typeof fetch },
+      'createWebhookFetch'
+    ).mockReturnValue(vi.fn().mockRejectedValue(refusal) as unknown as typeof fetch);
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
     const error = await (

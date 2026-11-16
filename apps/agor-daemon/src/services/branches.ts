@@ -326,18 +326,21 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // its first body chunk; an empty response still completes on `end`.
     isBodyComplete: () => true,
   });
-  // Reusable pinned, public-only fetch for managed-environment webhooks
-  // (logs/start/stop/nuke) — same SSRF posture as fetchEnvironmentHealth. It
-  // reads up to LOGS_MAX_BYTES (the largest caller cap); readLimitedWebhookBody
-  // then trims to the caller's maxBytes and flags truncation, so a large body is
-  // truncated, not refused. The hard ceiling (plus generous slack) only guards a
-  // single pathological chunk, and executeEnvironmentWebhook's AbortController
-  // trips at LOGS_TIMEOUT_MS and owns the user-facing timeout message.
-  private readonly fetchWebhook = createPinnedFetch({
-    timeoutMs: ENVIRONMENT.LOGS_TIMEOUT_MS + 5_000,
-    maxBytes: ENVIRONMENT.LOGS_MAX_BYTES + 2 * 1024 * 1024,
-    isBodyComplete: (text) => Buffer.byteLength(text, 'utf8') > ENVIRONMENT.LOGS_MAX_BYTES,
-  });
+  // Builds a pinned, public-only fetch for a managed-environment webhook
+  // (logs/start/stop/nuke) sized to the caller's byte cap — same SSRF posture as
+  // fetchEnvironmentHealth. isBodyComplete stops reading once the body passes
+  // maxBytes, and readLimitedWebhookBody then trims to exactly maxBytes and flags
+  // truncation, so a large body is truncated, not refused. The hard ceiling
+  // (maxBytes plus generous slack) only guards a single pathological chunk, and
+  // executeEnvironmentWebhook's AbortController trips at LOGS_TIMEOUT_MS and owns
+  // the user-facing timeout message. Sizing per call (rather than a shared field)
+  // keeps truncation correct for any cap; it is a field so tests can stub it.
+  private readonly createWebhookFetch = (maxBytes: number) =>
+    createPinnedFetch({
+      timeoutMs: ENVIRONMENT.LOGS_TIMEOUT_MS + 5_000,
+      maxBytes: maxBytes + 2 * 1024 * 1024,
+      isBodyComplete: (text) => Buffer.byteLength(text, 'utf8') > maxBytes,
+    });
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
   private boardObjectsService?: {
     find: (params?: unknown) => Promise<unknown>;
@@ -647,11 +650,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     );
 
     // The webhook URL is attacker-controllable branch configuration fetched from
-    // the daemon's privileged network position, so it goes through the reusable
-    // pinned fetch (this.fetchWebhook): it refuses non-public URLs, resolves the
-    // name and refuses any private/loopback/link-local/metadata answer at connect
-    // time (defeating wildcard-DNS and DNS rebinding), and never follows
-    // redirects, so a 3xx is reported as a failure rather than chased.
+    // the daemon's privileged network position, so it goes through the pinned
+    // fetch: it refuses non-public URLs, resolves the name and refuses any
+    // private/loopback/link-local/metadata answer at connect time (defeating
+    // wildcard-DNS and DNS rebinding), and never follows redirects, so a 3xx is
+    // reported as a failure rather than chased.
+    const webhookFetch = this.createWebhookFetch(maxBytes);
     const controller = new AbortController();
     let timedOut = false;
     const timeout = setTimeout(() => {
@@ -660,7 +664,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }, ENVIRONMENT.LOGS_TIMEOUT_MS);
 
     try {
-      const response = await this.fetchWebhook(url, {
+      const response = await webhookFetch(url, {
         method: 'GET',
         signal: controller.signal,
         headers: {
