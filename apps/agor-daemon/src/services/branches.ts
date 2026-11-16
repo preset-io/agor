@@ -317,7 +317,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   // trusted-local single-tenant install instead probes a loopback/private dev
   // server through a plain fetch (see fetchEnvironmentHealthObservation).
   private readonly fetchEnvironmentHealth = createPinnedFetch({
-    timeoutMs: ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS,
+    // Backstop only: fetchEnvironmentHealthObservation's AbortController trips at
+    // HEALTH_CHECK_TIMEOUT_MS and carries the "Timeout" message, so this stays
+    // longer to stay the authoritative-timeout's backstop rather than racing it.
+    timeoutMs: ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS + 5_000,
     maxBytes: 64 * 1024,
     // Health only needs the status. Stop consuming a streaming response after
     // its first body chunk; an empty response still completes on `end`.

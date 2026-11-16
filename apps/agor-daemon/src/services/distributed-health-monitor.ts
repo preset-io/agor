@@ -532,14 +532,14 @@ export class DistributedHealthMonitor {
         this.options.httpTimeoutMs
       );
       timeout.unref?.();
+      // The pinned fetch never follows redirects, so a 302 to a link-local
+      // metadata endpoint returns not-ok and is reported unhealthy rather than
+      // being chased — the distributed/managed path is where that matters most.
       const response = await (isDynamicHealth ? this.fetchDynamicHealth : this.fetchHealth)(
         healthUrl,
         {
           method: 'GET',
           signal: controller.signal,
-          // Do not follow redirects (see branches.ts): the distributed/managed
-          // path is where a 302 to a link-local metadata endpoint matters most.
-          redirect: 'manual',
         }
       );
       return {

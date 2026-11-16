@@ -91,7 +91,7 @@ describe('DistributedHealthMonitor loop contract', () => {
 
     expect(fetchDynamicHealth).toHaveBeenCalledWith(
       branch.environment_instance.health_url,
-      expect.objectContaining({ method: 'GET', redirect: 'manual' })
+      expect.objectContaining({ method: 'GET' })
     );
     expect(fetchHealth).not.toHaveBeenCalled();
     expect(observation).toMatchObject({ status: 'healthy', message: 'HTTP 200' });
