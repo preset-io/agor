@@ -44,7 +44,9 @@ describe('createGuardedLookup', () => {
     ['RFC 1918', '10.0.0.5'],
     ['RFC 1918 in the 172 range', '172.20.1.1'],
     ['cloud metadata link-local', '169.254.169.254'],
+    ['AWS IPv6 metadata (IMDSv6)', 'fd00:ec2::254'],
     ['CGNAT', '100.64.0.1'],
+    ['in-cluster ClusterIP range', '172.20.0.1'],
     ['IPv6 loopback', '::1'],
     ['IPv6 unique-local', 'fd00::1'],
     ['IPv6 link-local', 'fe80::1'],
@@ -273,4 +275,28 @@ describe('createPinnedFetch', () => {
     const error = await guarded(`${origin}/`).catch((thrown) => thrown);
     expect(isOutboundRefusal(error)).toBe(true);
   });
+
+  it.each([
+    ['cloud metadata', '169.254.169.254'],
+    ['AWS IPv6 metadata (IMDSv6)', 'fd00:ec2::254'],
+    ['an in-cluster ClusterIP', '172.20.0.1'],
+  ])(
+    'refuses a wildcard-DNS webhook/health hostname that resolves to %s',
+    async (_label, resolved) => {
+      // The exact exploited shape: a branch's webhook/health URL uses a
+      // wildcard-DNS hostname (e.g. `169-254-169-254.sslip.io`) that passes the
+      // syntactic URL allowlist and resolves to an internal address. The pinned
+      // fetch refuses it at connect time rather than probing the daemon's own
+      // network.
+      const guarded = createPinnedFetch({
+        timeoutMs: 3_000,
+        maxBytes: 1_000,
+        lookup: createGuardedLookup(answering(resolved)),
+      });
+      const error = await guarded('http://169-254-169-254.sslip.io/latest/meta-data/').catch(
+        (thrown) => thrown
+      );
+      expect(isOutboundRefusal(error)).toBe(true);
+    }
+  );
 });

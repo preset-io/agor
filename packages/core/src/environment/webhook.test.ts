@@ -30,18 +30,40 @@ describe('managed environment webhook URL detection', () => {
     );
   });
 
-  it('uses a stricter webhook destination policy than health checks', () => {
+  it('allows public destinations and rejects loopback/private/metadata targets', () => {
     expect(isAllowedManagedEnvWebhookUrl('https://hooks.example.com/start')).toBe(true);
     expect(isAllowedManagedEnvWebhookUrl('http://localhost:3000/start')).toBe(false);
     expect(isAllowedManagedEnvWebhookUrl('http://127.0.0.1:3000/start')).toBe(false);
     expect(isAllowedManagedEnvWebhookUrl('http://10.0.0.5/start')).toBe(false);
     expect(isAllowedManagedEnvWebhookUrl('http://192.168.1.20/start')).toBe(false);
     expect(isAllowedManagedEnvWebhookUrl('http://172.16.0.1/start')).toBe(false);
+    expect(isAllowedManagedEnvWebhookUrl('http://100.64.0.1/start')).toBe(false); // CGNAT
     expect(isAllowedManagedEnvWebhookUrl('http://metadata.google.internal/')).toBe(false);
     expect(isAllowedManagedEnvWebhookUrl('http://[::ffff:127.0.0.1]/start')).toBe(false);
     expect(isAllowedManagedEnvWebhookUrl('http://[::ffff:169.254.169.254]/start')).toBe(false);
     expect(isAllowedManagedEnvWebhookUrl('http://[fe90::1]/start')).toBe(false);
     expect(isAllowedManagedEnvWebhookUrl('http://[fea0::1]/start')).toBe(false);
+    expect(isAllowedManagedEnvWebhookUrl('http://[fd00:ec2::254]/start')).toBe(false); // AWS IPv6 metadata
+  });
+
+  it('rejects alternate IPv4 spellings that the old dotted-quad check let through', () => {
+    // These all resolve to 127.0.0.1 and used to pass the syntactic webhook guard.
+    expect(isAllowedManagedEnvWebhookUrl('http://2130706433/start')).toBe(false); // decimal
+    expect(isAllowedManagedEnvWebhookUrl('http://0x7f.0.0.1/start')).toBe(false); // hex
+    expect(isAllowedManagedEnvWebhookUrl('http://017700000001/start')).toBe(false); // octal
+    expect(isAllowedManagedEnvWebhookUrl('https://user:pass@hooks.example.com/start')).toBe(false); // credentials
+  });
+
+  it('rejects internal-zone and mDNS hostnames by name', () => {
+    expect(isAllowedManagedEnvWebhookUrl('http://orchestrator.internal/start')).toBe(false);
+    expect(isAllowedManagedEnvWebhookUrl('http://internal/start')).toBe(false);
+    expect(isAllowedManagedEnvWebhookUrl('http://foo.local/start')).toBe(false);
+  });
+
+  it('passes wildcard-DNS hostnames (rejected at fetch time, not by this syntactic filter)', () => {
+    // `169-254-169-254.sslip.io` resolves to 169.254.169.254 but is not a literal
+    // private address, so the connect-time DNS pin — not this filter — refuses it.
+    expect(isAllowedManagedEnvWebhookUrl('http://169-254-169-254.sslip.io/start')).toBe(true);
   });
 
   it('redacts query strings for audit logging', () => {
@@ -108,6 +130,9 @@ describe('managed environment policy validation', () => {
   });
 
   it('validates rendered health and app as URL-only fields', () => {
+    // Render-time health validation is the lenient trusted-local check; the
+    // public-only policy is enforced at the observation boundary (see
+    // enforcesPublicHealthEgress), so localhost here is allowed.
     expect(() =>
       validateRenderedManagedEnvUrlFields({
         health: 'http://localhost:3000/health',
