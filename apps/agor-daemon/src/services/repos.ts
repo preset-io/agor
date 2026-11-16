@@ -654,14 +654,18 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         'Local repository registration is unavailable in hosted multi-tenant mode.'
       );
     }
-    if (!data.path) {
-      throw new Error('Path is required to add a local repository');
+    // The body is untrusted transport input. A null/non-object body or a
+    // non-string `path` would throw an uncoded TypeError (misclassified as a
+    // server 5xx that pages on-call); a plain Error is likewise uncoded. Reject
+    // malformed input with a coded 400 before touching the executor.
+    if (data === null || typeof data !== 'object') {
+      throw new BadRequest('A request body with a path is required');
+    }
+    if (typeof data.path !== 'string' || data.path.trim().length === 0) {
+      throw new BadRequest('Path is required to add a local repository');
     }
 
     const inputPath = data.path.trim();
-    if (!inputPath) {
-      throw new Error('Path is required to add a local repository');
-    }
 
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
     // Both MCP and HTTP enter with tenant identity only. Admit in a short

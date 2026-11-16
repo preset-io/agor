@@ -28,11 +28,24 @@ type FeathersMetricsOptions = FeathersInstrumentationOptions & {
  * Services must reject malformed input with a coded 4xx so input bugs never
  * reach this path; a `500` here is a genuine server error worth paging on, not
  * a client input bug masquerading as infrastructure failure.
+ *
+ * Only an HTTP-family `.code` (100–599) is a real response status. A non-HTTP
+ * numeric `.code` — e.g. a child-process exit code (`1`, `127`), a POSIX errno,
+ * or a provider-specific numeric code — would otherwise be tagged verbatim,
+ * landing the request outside the 4xx/5xx families where it hides a genuine
+ * server fault from error-rate alerting. Such codes are bucketed as `500`.
  */
 function errorStatus(error: unknown): number {
   if (error && typeof error === 'object') {
     const candidate = (error as { code?: unknown }).code;
-    if (typeof candidate === 'number' && Number.isInteger(candidate)) return candidate;
+    if (
+      typeof candidate === 'number' &&
+      Number.isInteger(candidate) &&
+      candidate >= 100 &&
+      candidate <= 599
+    ) {
+      return candidate;
+    }
   }
   return 500;
 }

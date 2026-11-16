@@ -184,6 +184,50 @@ describe('Feathers metrics hook', () => {
     expect(metrics.calls[0]?.tags).toMatchObject({ outcome: 'error', status_code: 400 });
   });
 
+  it('buckets a non-HTTP numeric code (e.g. a child-process exit code) as a real 500', async () => {
+    const metrics = new RecordingMetrics();
+    const hook = createFeathersMetricsHook(metrics);
+    // A child_process / exec failure carries its exit code in `.code` (here 1).
+    // That is not an HTTP status: tagging it verbatim lands the request outside
+    // the 4xx/5xx families and hides a genuine server fault from alerting.
+    const childProcessFailure = Object.assign(new Error('git exited with 1'), { code: 1 });
+    await expect(
+      hook(
+        {
+          path: 'repos',
+          method: 'create',
+          params: { provider: 'socketio' },
+        } as unknown as HookContext,
+        async () => {
+          throw childProcessFailure;
+        }
+      )
+    ).rejects.toBe(childProcessFailure);
+    expect(metrics.calls[0]?.tags).toMatchObject({ outcome: 'error', status_code: 500 });
+    expect(metrics.calls[0]?.tags?.status_code).not.toBe(1);
+  });
+
+  it('buckets an out-of-range numeric code as a real 500', async () => {
+    const metrics = new RecordingMetrics();
+    const hook = createFeathersMetricsHook(metrics);
+    // 600 is above the HTTP family; 99 would be below. Neither is a response
+    // status, so both collapse to 500 rather than a phantom status bucket.
+    const outOfRange = Object.assign(new Error('nonsense status'), { code: 600 });
+    await expect(
+      hook(
+        {
+          path: 'repos',
+          method: 'create',
+          params: { provider: 'socketio' },
+        } as unknown as HookContext,
+        async () => {
+          throw outOfRange;
+        }
+      )
+    ).rejects.toBe(outOfRange);
+    expect(metrics.calls[0]?.tags).toMatchObject({ outcome: 'error', status_code: 500 });
+  });
+
   it('preserves MCP as a distinct low-cardinality transport', async () => {
     const metrics = new RecordingMetrics();
     const hook = createFeathersMetricsHook(metrics);

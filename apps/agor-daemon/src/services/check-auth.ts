@@ -25,6 +25,7 @@ import {
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
 } from '@agor/core/db';
+import { BadRequest } from '@agor/core/feathers';
 import type { SDKUserMessage } from '@agor/core/sdk';
 import type {
   AuthCheckResult,
@@ -388,6 +389,15 @@ export function createCheckAuthService(
       data: { tool: string; apiKey?: string; validateNative?: boolean },
       params?: AuthenticatedParams
     ): Promise<AuthCheckResult> {
+      // Validate the request body before using it. This endpoint receives
+      // untrusted transport input; a null, missing, or non-object body is a
+      // client error. Destructuring it blind throws an uncoded TypeError that is
+      // misclassified as a server 5xx and pages on-call, so guard first and
+      // return a coded 400. A malformed `tool` stays the existing graceful
+      // `unknown('Unsupported tool')` below.
+      if (data === null || typeof data !== 'object') {
+        throw new BadRequest('A request body with a tool is required');
+      }
       const { tool, apiKey: rawKey } = data;
       if (!isAgenticToolName(tool)) return unknown('Unsupported tool');
 

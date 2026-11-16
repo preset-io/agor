@@ -400,6 +400,38 @@ describe('ReposService.addLocalRepository executor boundary', () => {
     ).rejects.toThrow(/Not a valid git repository/);
     expect(create).not.toHaveBeenCalled();
   });
+
+  it('rejects a missing path with a coded 400 before touching the executor', async () => {
+    const service = new ReposService(
+      {} as never,
+      { get: () => ({}), service: vi.fn() } as unknown as Application
+    );
+    await expect(
+      service.addLocalRepository(
+        {} as never,
+        {
+          user: { user_id: '550e8400-e29b-41d4-a716-446655440000' },
+        } as never
+      )
+    ).rejects.toMatchObject({ name: 'BadRequest' });
+    expect(executorMocks.requestExecutor).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-string path with a coded 400 (no uncoded TypeError on .trim())', async () => {
+    const service = new ReposService(
+      {} as never,
+      { get: () => ({}), service: vi.fn() } as unknown as Application
+    );
+    await expect(
+      service.addLocalRepository(
+        { path: 123 } as never,
+        {
+          user: { user_id: '550e8400-e29b-41d4-a716-446655440000' },
+        } as never
+      )
+    ).rejects.toMatchObject({ name: 'BadRequest' });
+    expect(executorMocks.requestExecutor).not.toHaveBeenCalled();
+  });
 });
 
 describe('ReposService.createBranch Git lifecycle execution', () => {
