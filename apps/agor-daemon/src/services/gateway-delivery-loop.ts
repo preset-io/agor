@@ -8,6 +8,8 @@
  */
 
 import {
+  runWithoutTenantContext,
+  runWithoutTenantDatabaseScope,
   runWithSystemDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
@@ -218,10 +220,27 @@ export class GatewayDeliveryLoop<Ref extends { tenant_id: string }> {
 
   private schedule(delayMs: number): void {
     if (this.stopped) return;
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      void this.runLoopIteration();
-    }, delayMs);
+    // A setTimeout callback inherits the AsyncLocalStorage identity it was armed
+    // in. wake() is armed from a tenant's message-routing request
+    // (gateway.ts calls worker.wake() inside runWithTenantContext), and the
+    // catch-path reschedule in runLoopIteration perpetuates whatever identity
+    // armed it. The loop then dispatches work for OTHER tenants via
+    // runWithTenantContext, which throws on a conflicting active identity —
+    // wedging cross-tenant delivery retries and the per-tenant purge for every
+    // other tenant on the replica. Shed the inherited tenant context and
+    // database scope at this single choke point so each iteration enters every
+    // tenant cleanly, matching the setImmediate deferral helpers and the sibling
+    // wake timers in distributed-health-monitor / knowledge-embedding-indexer.
+    this.timer = setTimeout(
+      () =>
+        runWithoutTenantContext(() =>
+          runWithoutTenantDatabaseScope(() => {
+            this.timer = null;
+            void this.runLoopIteration();
+          })
+        ),
+      delayMs
+    );
     this.timer.unref?.();
   }
 
