@@ -1798,11 +1798,22 @@ export class GatewayService {
               )
             )
             .finally(() => this.mcpSlackRepairTenants.delete(tenantId));
-        } finally {
-          // If entering the tenant context threw synchronously, the promise
-          // chain above was never attached and nothing else will clear the
-          // flag; clear it here so a tenant is never wedged "repair in flight".
-          if (!repairStarted) this.mcpSlackRepairTenants.delete(tenantId);
+        } catch (error: unknown) {
+          // Entering the tenant context threw synchronously, so the promise
+          // chain above was never attached: clear the flag so the tenant is
+          // never wedged "repair in flight", and route the failure to the same
+          // bounded log the async path uses instead of letting it escape the
+          // timer as an uncaughtException. Guarded so the healthy path (which
+          // never reaches here) cannot double-clear or double-log.
+          if (!repairStarted) {
+            this.mcpSlackRepairTenants.delete(tenantId);
+            this.logMcpSlackOperationFailure(
+              'mcp_slack_bounded_repair_failed',
+              'recovery',
+              { tenant_sweep: tenantId },
+              error
+            );
+          }
         }
       });
     }, 0).unref?.();
