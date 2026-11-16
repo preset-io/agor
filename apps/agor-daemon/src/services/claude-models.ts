@@ -6,7 +6,7 @@
  * AVAILABLE_CLAUDE_MODEL_ALIASES when no API key is configured or the call fails.
  */
 
-import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
+import { type AgorConfig, isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
@@ -16,6 +16,7 @@ import {
 import { AVAILABLE_CLAUDE_MODEL_ALIASES, DEFAULT_CLAUDE_MODEL } from '@agor/core/models';
 import type { Params, UserID } from '@agor/core/types';
 import Anthropic from '@anthropic-ai/sdk';
+import { createPinnedModelFetch } from '../utils/model-base-url.js';
 
 export interface ClaudeModelOption {
   id: string;
@@ -106,7 +107,10 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, message: string):
 }
 
 export class ClaudeModelsService {
-  constructor(private db: TenantScopeAwareDatabase) {}
+  constructor(
+    private db: TenantScopeAwareDatabase,
+    private config: AgorConfig
+  ) {}
 
   async find(params?: AuthenticatedParams): Promise<ClaudeModelsResult> {
     const tenantId = getCurrentTenantId();
@@ -131,10 +135,18 @@ export class ClaudeModelsService {
     }
 
     try {
+      // The base URL is attacker-controllable per-user/workspace config. The SDK's
+      // default fetch follows redirects, so even a validated public URL could 302
+      // to an internal target. On an isolated/multi-tenant/HA deployment pin the
+      // SDK to public-only, DNS-pinned egress with no redirects and no retries;
+      // this also covers rows saved before validation existed. Trusted-local keeps
+      // the default fetch so it can reach a local/self-hosted endpoint.
+      const pinnedFetch = createPinnedModelFetch(this.config);
       const client = new Anthropic({
         apiKey: resolution.apiKey,
         baseURL: (resolution.connection as { ANTHROPIC_BASE_URL?: string } | undefined)
           ?.ANTHROPIC_BASE_URL,
+        ...(pinnedFetch ? { fetch: pinnedFetch, maxRetries: 0 } : {}),
       });
       const page = await withTimeout(
         client.models.list({ limit: 100 }),
@@ -171,6 +183,9 @@ export class ClaudeModelsService {
   }
 }
 
-export function createClaudeModelsService(db: TenantScopeAwareDatabase): ClaudeModelsService {
-  return new ClaudeModelsService(db);
+export function createClaudeModelsService(
+  db: TenantScopeAwareDatabase,
+  config: AgorConfig
+): ClaudeModelsService {
+  return new ClaudeModelsService(db, config);
 }

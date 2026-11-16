@@ -19,7 +19,6 @@ import {
   assertInlineAgenticConfigurationAllowed,
   assertSecurePassword,
   assertV05Scope,
-  enforcesPublicHealthEgress,
   getEnvVarBlockReason,
   AgorIdentityCapability as IdentityCapability,
   isEnvVarAllowed,
@@ -108,9 +107,9 @@ import {
   toAgenticToolsStatus,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
-import { assertSafeOutboundUrl } from '@agor/core/utils/safe-outbound-fetch';
 import { toUserDirectoryEntry } from '../auth/user-redaction.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
+import { assertSafeModelBaseUrl } from '../utils/model-base-url.js';
 import { resolveOwnerHomeStore } from '../utils/sandbox-context.js';
 import type { ClaudeUserCredentialPatchCoordinator } from './claude-credential-mutation.js';
 import { lockTenantAuthorizationFence } from './tenant-authorization-fence.js';
@@ -344,51 +343,26 @@ function ensureCanExactEmailLookup(params: Params | undefined, email: string): v
  *
  * Returns the next stored shape (caller writes it back to `data.agentic_tools`).
  */
-/** Per-tool model-provider base-URL fields the daemon later fetches. */
+/** Per-user agentic-tools patch buckets that carry a model-provider base URL. */
 const AGENTIC_BASE_URL_FIELDS = [
   ['claude-code', 'ANTHROPIC_BASE_URL'],
   ['codex', 'OPENAI_BASE_URL'],
 ] as const;
 
-const BASE_URL_VALIDATION_TIMEOUT_MS = 5_000;
-
 /**
- * Validate any model-provider base URL in an agentic-tools patch before it is
- * stored. The daemon later fetches this URL from its own network position (auth
- * checks in `check-auth.ts`, model discovery via the SDK in `claude-models.ts`),
- * so on an isolated, multi-tenant, or HA deployment an attacker-set base URL is
- * a blind SSRF / port-scan oracle. There it must be a public destination: public
- * HTTPS that does not resolve to a private/loopback/link-local/ULA/metadata
- * address — the same policy as `safeOutboundFetch`. A trusted-local single-tenant
- * install may still point at a local/self-hosted endpoint, so only basic http(s)
- * shape is required there. Gated by the shared deployment-egress policy.
+ * Validate any model-provider base URL in a per-user agentic-tools patch before
+ * it is stored. The daemon later fetches this URL, so the mode-gated public-only
+ * policy applies; see {@link assertSafeModelBaseUrl}.
  */
 export async function validateAgenticBaseUrls(
   patch: AgenticToolsUpdate,
   config: AgorConfig
 ): Promise<void> {
-  const enforcePublic = enforcesPublicHealthEgress(config);
   const buckets = patch as Record<string, Record<string, string | null | undefined> | undefined>;
   for (const [tool, field] of AGENTIC_BASE_URL_FIELDS) {
     const raw = buckets[tool]?.[field];
-    if (typeof raw !== 'string') continue;
-    const value = raw.trim();
-    if (value.length === 0) continue;
-    try {
-      if (enforcePublic) {
-        await assertSafeOutboundUrl(value, { timeoutMs: BASE_URL_VALIDATION_TIMEOUT_MS });
-      } else {
-        const parsed = new URL(value);
-        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-          throw new Error('unsupported protocol');
-        }
-      }
-    } catch {
-      throw new BadRequest(
-        enforcePublic
-          ? `${field} must be a public HTTPS URL that does not resolve to a private or reserved address`
-          : `${field} must be a valid http(s) URL`
-      );
+    if (typeof raw === 'string') {
+      await assertSafeModelBaseUrl(raw, field, config);
     }
   }
 }

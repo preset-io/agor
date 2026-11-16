@@ -497,4 +497,35 @@ describe('validateProviderCredential outbound egress gating', () => {
     );
     fetchSpy.mockRestore();
   });
+
+  it('refuses a base-URL hostname that resolves to a private address (rebinding)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const status = await validateProviderCredential(
+      'codex',
+      { OPENAI_API_KEY: 'sk-test', OPENAI_BASE_URL: 'https://models.example.com' },
+      enforced,
+      { resolveDns: async () => [{ address: '10.0.0.8', family: 4 }] }
+    );
+    expect(status).toBe('unknown');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it.each([
+    [
+      'HA + simple + static',
+      { deployment: { mode: 'ha' }, execution: { unix_user_mode: 'simple' } },
+    ],
+    ['sandbox execution', { execution: { unix_user_mode: 'sandbox' } }],
+  ])('enforces public-only egress on %s deployments', async (_label, config) => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const status = await validateProviderCredential(
+      'codex',
+      { OPENAI_API_KEY: 'sk-test', OPENAI_BASE_URL: 'https://169.254.169.254' },
+      config as never
+    );
+    expect(status).toBe('unknown');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
 });

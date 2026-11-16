@@ -39,7 +39,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { isAgenticToolName } from '@agor/core/types';
-import { safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
+import { type OutboundDnsLookup, safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
 import { inspectClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
 import { inspectCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
@@ -176,7 +176,8 @@ async function validateClaudeSubscriptionToken(token: string): Promise<AuthCheck
 export async function validateProviderCredential(
   tool: string,
   connection: Record<string, string | undefined>,
-  config: DeepReadonly<AgorConfig>
+  config: DeepReadonly<AgorConfig>,
+  options: { resolveDns?: OutboundDnsLookup } = {}
 ): Promise<AuthCheckStatus> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -242,6 +243,7 @@ export async function validateProviderCredential(
           signal: controller.signal,
           redirect: 'error',
           timeoutMs: FETCH_TIMEOUT_MS,
+          resolveDns: options.resolveDns,
         })
       : await fetch(url, { method: 'GET', headers, signal: controller.signal });
     if (res.ok) return 'authenticated';
