@@ -16,10 +16,25 @@ type FeathersMetricsOptions = FeathersInstrumentationOptions & {
   operationalMetrics?: DaemonOperationalMetrics;
 };
 
-function errorStatus(error: unknown): string | number {
-  if (!error || typeof error !== 'object') return 'error';
-  const candidate = (error as { code?: unknown }).code;
-  return typeof candidate === 'number' && Number.isInteger(candidate) ? candidate : 'error';
+/**
+ * Classify a thrown error for the `status_code` metric tag.
+ *
+ * Feathers errors carry their HTTP status in `.code` (BadRequest=400,
+ * Forbidden=403, GeneralError=500, …), so a validation refusal lands in the 4xx
+ * family and a genuine framework fault in 5xx. An uncoded throw — a raw
+ * `TypeError` from unvalidated input, or any non-`Error` value — is a real
+ * server-side fault, so it is bucketed as `500` rather than a non-numeric
+ * `"error"` label that 5xx alerting cannot reconcile with an HTTP status family.
+ * Services must reject malformed input with a coded 4xx so input bugs never
+ * reach this path; a `500` here is a genuine server error worth paging on, not
+ * a client input bug masquerading as infrastructure failure.
+ */
+function errorStatus(error: unknown): number {
+  if (error && typeof error === 'object') {
+    const candidate = (error as { code?: unknown }).code;
+    if (typeof candidate === 'number' && Number.isInteger(candidate)) return candidate;
+  }
+  return 500;
 }
 
 /**

@@ -131,6 +131,40 @@ describe('ConfigService.resolveApiKey', () => {
     expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['a null body', null],
+    ['an undefined body', undefined],
+    ['a non-object body', 'not-an-object'],
+    ['a body missing taskId', { keyName: 'OPENAI_API_KEY' }],
+    ['a body with a non-string taskId', { taskId: 123, keyName: 'OPENAI_API_KEY' }],
+    ['a body missing keyName', { taskId: 'task-1' }],
+    ['a body with a non-string keyName', { taskId: 'task-1', keyName: 42 }],
+  ])('returns a coded 400 (not an uncoded TypeError) for %s', async (_case, body) => {
+    const service = new ConfigService({} as never);
+
+    const error = await service
+      .resolveApiKey(
+        body as never,
+        {
+          provider: 'socketio',
+          user: { user_id: 'executor-service', _isServiceAccount: true },
+        } as never
+      )
+      .then(
+        () => {
+          throw new Error('expected a rejection');
+        },
+        (err: unknown) => err
+      );
+
+    // Malformed input must surface as a Feathers client error carrying an
+    // HTTP code, never a raw TypeError the metrics layer would bucket as 5xx.
+    expect(error).toBeInstanceOf(BadRequest);
+    expect(error).not.toBeInstanceOf(TypeError);
+    expect((error as { code?: unknown }).code).toBe(400);
+    expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
+  });
+
   it('allows an explicit daemon service account and resolves for the task creator', async () => {
     const service = new ConfigService({} as never);
     service.app = {
