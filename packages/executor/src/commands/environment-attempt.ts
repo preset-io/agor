@@ -15,6 +15,59 @@ import type { EnvironmentLifecyclePayload, ExecutorResult } from '../payload-typ
 import { EnvironmentCommandOutputCapture } from './environment-command-output.js';
 import { runBoundedEnvironmentShell } from './environment-shell.js';
 
+/** A rejected report. `status` carries the daemon's HTTP status when it answered. */
+export class EnvironmentReportError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number
+  ) {
+    super(message);
+    this.name = 'EnvironmentReportError';
+  }
+}
+
+/**
+ * Client errors (4xx) are terminal: a stale, expired, or rejected attempt never
+ * succeeds on retry, so retrying only storms the daemon (and an uncoded 5xx-looking
+ * rejection pages on-call). Retry only genuinely transient failures — server (5xx)
+ * errors and network/timeout faults that carry no status.
+ */
+export function isRetryableReportError(error: unknown): boolean {
+  const status = error instanceof EnvironmentReportError ? error.status : undefined;
+  if (typeof status === 'number') return status >= 500;
+  return true;
+}
+
+/**
+ * Deliver the final result, retrying only transient failures with exponential
+ * backoff until the deadline. Stops immediately on a terminal 4xx rejection.
+ * Returns `true` once a report is durably accepted, `false` when the attempt is
+ * terminally rejected or the deadline passes first.
+ */
+export async function deliverCompletionReport(
+  send: () => Promise<unknown>,
+  resultDeadline: number,
+  options: { now?: () => number; sleep?: (ms: number) => Promise<void> } = {}
+): Promise<boolean> {
+  const now = options.now ?? Date.now;
+  const sleep =
+    options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let backoffMs = 1000;
+  while (now() < resultDeadline) {
+    try {
+      await send();
+      return true;
+    } catch (error) {
+      if (!isRetryableReportError(error)) return false;
+      const wait = Math.min(backoffMs, resultDeadline - now());
+      if (wait <= 0) return false;
+      await sleep(wait);
+      backoffMs = Math.min(backoffMs * 2, 30000);
+    }
+  }
+  return false;
+}
+
 /** Each HTTP request authenticates independently and may reach any replica. */
 async function report(
   payload: EnvironmentLifecyclePayload,
@@ -22,7 +75,7 @@ async function report(
   deadline: number
 ) {
   const remaining = deadline - Date.now();
-  if (remaining <= 0) throw new Error('Environment report deadline expired');
+  if (remaining <= 0) throw new EnvironmentReportError('Environment report deadline expired');
   const response = await fetch(
     `${payload.daemonUrl!.replace(/\/$/, '')}/${ENVIRONMENT_COMMAND_REPORT_SERVICE}`,
     {
@@ -36,7 +89,11 @@ async function report(
       body: JSON.stringify(data),
     }
   );
-  if (!response.ok) throw new Error(`Environment report rejected (HTTP ${response.status})`);
+  if (!response.ok)
+    throw new EnvironmentReportError(
+      `Environment report rejected (HTTP ${response.status})`,
+      response.status
+    );
   return response.json() as Promise<{ command_deadline: string; result_deadline: string }>;
 }
 
@@ -164,14 +221,12 @@ export async function handleEnvironmentAttempt(
     ...(lifecycleResult ? { lifecycle_result: lifecycleResult } : {}),
   };
   // Retry only report delivery, never the command. First durable settlement wins.
-  while (Date.now() < resultDeadline) {
-    try {
-      await report(payload, completion, resultDeadline);
-      return { success: outcome === 'succeeded' };
-    } catch {
-      if (Date.now() < resultDeadline) await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-  }
+  // A terminal 4xx (stale/expired/superseded attempt) stops at once; transient
+  // failures back off instead of hammering the daemon once per second.
+  if (
+    await deliverCompletionReport(() => report(payload, completion, resultDeadline), resultDeadline)
+  )
+    return { success: outcome === 'succeeded' };
   return {
     success: false,
     error: {

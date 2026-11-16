@@ -25,6 +25,18 @@ import { EntityNotFoundError, RepositoryError } from './base';
 
 type Environment = BranchEnvironmentInstance;
 
+/**
+ * A report that no longer matches the live attempt — the attempt was superseded,
+ * archived, expired, or already settled. This is a client condition (map to 409),
+ * not a server fault: the executor must stop retrying rather than storm the daemon.
+ */
+export class StaleEnvironmentCommandError extends RepositoryError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StaleEnvironmentCommandError';
+  }
+}
+
 /** All transitions serialize on the existing tenant-owned branch row. No provider work here. */
 export class EnvironmentCommandRepository {
   constructor(private readonly db: Database) {}
@@ -177,7 +189,7 @@ export class EnvironmentCommandRepository {
         attempt.id !== report.attempt_id ||
         attempt.action !== report.action
       ) {
-        throw new RepositoryError('Stale environment command report');
+        throw new StaleEnvironmentCommandError('Stale environment command report');
       }
       if (options?.expectedRequester && attempt.requested_by !== options.expectedRequester) {
         throw new RepositoryError('Environment command actor changed');
@@ -187,7 +199,9 @@ export class EnvironmentCommandRepository {
         return { value: environment };
       }
       if (attempt.finished_at || expireEnvironmentCommand(environment, now) !== environment) {
-        throw new RepositoryError('Environment command attempt expired or already completed');
+        throw new StaleEnvironmentCommandError(
+          'Environment command attempt expired or already completed'
+        );
       }
       const next: Environment = { ...environment, command_attempt: { ...attempt } };
       if (report.kind === 'claim') {

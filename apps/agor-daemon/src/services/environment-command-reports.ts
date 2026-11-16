@@ -3,10 +3,11 @@ import {
   EnvironmentCommandRepository,
   requireCurrentTenantId,
   runWithTenantDatabaseScope,
+  StaleEnvironmentCommandError,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { decodeEnvironmentLifecycleResult } from '@agor/core/environment/lifecycle-result';
-import { type Application, BadRequest, Forbidden } from '@agor/core/feathers';
+import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import {
   type AuthenticatedParams,
   ENVIRONMENT_COMMAND_ACTIONS,
@@ -125,9 +126,20 @@ export class EnvironmentCommandReportsService {
       // Claim checks current permission. Later progress/result reports carry no
       // new authority: the exact token and persisted initiating actor may only
       // settle the already-authorized attempt, even after permission revocation.
-      const environment = await new EnvironmentCommandRepository(scoped).report(report, {
-        expectedRequester,
-      });
+      const environment = await new EnvironmentCommandRepository(scoped)
+        .report(report, { expectedRequester })
+        .catch((error: unknown) => {
+          // A superseded/expired attempt is an ordinary race, not a server fault.
+          // Surface a coded 409 so the executor stops retrying (no storm) and the
+          // uncoded throw never reads as a 5xx that pages on-call.
+          if (error instanceof StaleEnvironmentCommandError) {
+            console.debug(
+              `[environment-command.report.stale] branch_id=${report.branch_id} attempt_id=${report.attempt_id} action=${report.action} kind=${report.kind} reason=${error.message}`
+            );
+            throw new Conflict(error.message);
+          }
+          throw error;
+        });
       const branch = await branches.findById(report.branch_id);
       if (branch)
         emitServiceEvent(this.app, {

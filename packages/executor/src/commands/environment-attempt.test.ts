@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { EnvironmentLifecyclePayload } from '../payload-types';
-import { handleEnvironmentAttempt } from './environment-attempt';
+import {
+  deliverCompletionReport,
+  EnvironmentReportError,
+  handleEnvironmentAttempt,
+  isRetryableReportError,
+} from './environment-attempt';
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -136,5 +141,80 @@ describe('executor-owned attempt protocol', () => {
     expect(await handleEnvironmentAttempt(h.payload)).toMatchObject({ success: true });
     expect(h.reports.at(-1)).not.toHaveProperty('lifecycle_result');
     expect(h.reports.at(-1)?.output).toContain('stderr.example.test');
+  });
+
+  it('stops at a terminal 4xx result rejection instead of storming the daemon', async () => {
+    const h = await fixture('true');
+    const implementation = h.fetchMock.getMockImplementation()!;
+    h.fetchMock.mockImplementation(async (...args) => {
+      // Simulate a daemon that rejects a superseded attempt with a coded 409.
+      if (JSON.parse(args[1].body as string).kind === 'result')
+        return new Response('{"name":"Conflict"}', { status: 409 });
+      return implementation(...args);
+    });
+    expect(await handleEnvironmentAttempt(h.payload)).toMatchObject({
+      success: false,
+      error: { code: 'ENVIRONMENT_REPORT_LOST' },
+    });
+    // The storm metric: exactly one result delivery is attempted, not ~500.
+    const resultSends = h.fetchMock.mock.calls.filter(
+      (call) => JSON.parse(call[1].body as string).kind === 'result'
+    );
+    expect(resultSends).toHaveLength(1);
+  });
+});
+
+describe('environment report delivery retry policy', () => {
+  it('treats 4xx as terminal and 5xx / networkless failures as retryable', () => {
+    expect(isRetryableReportError(new EnvironmentReportError('stale', 409))).toBe(false);
+    expect(isRetryableReportError(new EnvironmentReportError('bad input', 400))).toBe(false);
+    expect(isRetryableReportError(new EnvironmentReportError('forbidden', 403))).toBe(false);
+    expect(isRetryableReportError(new EnvironmentReportError('server', 500))).toBe(true);
+    expect(isRetryableReportError(new EnvironmentReportError('unavailable', 503))).toBe(true);
+    expect(isRetryableReportError(new Error('socket hang up'))).toBe(true);
+  });
+
+  it('does not retry a terminal 4xx rejection — one attempt, no sleep, no storm', async () => {
+    const send = vi.fn(async () => {
+      throw new EnvironmentReportError('Environment report rejected (HTTP 409)', 409);
+    });
+    const sleep = vi.fn(async () => undefined);
+    const delivered = await deliverCompletionReport(send, 1_000_000, { now: () => 0, sleep });
+    expect(delivered).toBe(false);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('retries transient failures with exponential backoff, not once per second', async () => {
+    let clock = 0;
+    const send = vi.fn(async () => {
+      throw new EnvironmentReportError('Environment report rejected (HTTP 503)', 503);
+    });
+    const sleep = vi.fn(async (ms: number) => {
+      clock += ms;
+    });
+    // ~8.5 min — the observed storm window; fixed 1s retries would be ~510 sends.
+    const delivered = await deliverCompletionReport(send, 510_000, { now: () => clock, sleep });
+    expect(delivered).toBe(false);
+    const waits = sleep.mock.calls.map((call) => call[0] as number);
+    expect(waits.slice(0, 5)).toEqual([1000, 2000, 4000, 8000, 16000]);
+    expect(Math.max(...waits)).toBeLessThanOrEqual(30000);
+    expect(send.mock.calls.length).toBeLessThan(40);
+  });
+
+  it('returns delivered as soon as a retried transient failure is accepted', async () => {
+    let clock = 0;
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new EnvironmentReportError('Environment report rejected (HTTP 500)', 500)
+      )
+      .mockResolvedValueOnce({ command_deadline: 'x', result_deadline: 'y' });
+    const sleep = vi.fn(async (ms: number) => {
+      clock += ms;
+    });
+    const delivered = await deliverCompletionReport(send, 1_000_000, { now: () => clock, sleep });
+    expect(delivered).toBe(true);
+    expect(send).toHaveBeenCalledTimes(2);
   });
 });
