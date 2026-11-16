@@ -1,6 +1,10 @@
 import { resolveVariant } from '../config/variant-resolver.js';
 import type { RepoEnvironment } from '../types/branch.js';
-import { isAllowedHealthCheckUrl, normalizeOptionalHttpUrl } from '../utils/url.js';
+import {
+  isAllowedHealthCheckUrl,
+  isPublicHttpUrl,
+  normalizeOptionalHttpUrl,
+} from '../utils/url.js';
 
 /**
  * How Agor executes rendered managed-environment lifecycle fields.
@@ -36,70 +40,23 @@ export function isUrlShapedManagedEnvCommand(value: string): boolean {
   return HTTP_URL_PREFIX.test(value.trim());
 }
 
-function hostnameEqualsOrEndsWith(hostname: string, suffix: string): boolean {
-  return hostname === suffix || hostname.endsWith(`.${suffix}`);
-}
-
-function isBlockedIPv4(hostname: string): boolean {
-  const parts = hostname.split('.');
-  if (parts.length !== 4) return false;
-  const octets = parts.map((part) => Number(part));
-  if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
-    return false;
-  }
-  const [a, b] = octets;
-  return (
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    a >= 224
-  );
-}
-
-function isBlockedIPv6(hostname: string): boolean {
-  const normalized = hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  if (!normalized.includes(':')) return false;
-  const mappedIPv4 = normalized.match(/:ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mappedIPv4) return isBlockedIPv4(mappedIPv4[1]);
-
-  const hextets = normalized.split(':').filter(Boolean);
-  const mappedIndex = hextets.lastIndexOf('ffff');
-  if (mappedIndex >= 0 && hextets.length - mappedIndex === 3) {
-    const high = Number.parseInt(hextets[mappedIndex + 1], 16);
-    const low = Number.parseInt(hextets[mappedIndex + 2], 16);
-    if (
-      Number.isInteger(high) &&
-      Number.isInteger(low) &&
-      high >= 0 &&
-      high <= 0xffff &&
-      low >= 0 &&
-      low <= 0xffff
-    ) {
-      const ipv4 = `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
-      return isBlockedIPv4(ipv4);
-    }
-  }
-
-  const firstHextet = Number.parseInt(hextets[0] ?? '', 16);
-  return (
-    normalized === '::1' ||
-    normalized === '::' ||
-    (Number.isInteger(firstHextet) && firstHextet >= 0xfe80 && firstHextet <= 0xfebf) ||
-    (Number.isInteger(firstHextet) && firstHextet >= 0xfc00 && firstHextet <= 0xfdff)
-  );
-}
-
 /**
- * Webhook destinations have a stricter SSRF posture than health checks.
+ * Managed-environment webhook destinations are public-HTTP(S) only.
  *
- * Health checks intentionally allow localhost/private networks because they
- * often probe branch-local services. Managed environment webhooks are outbound
- * orchestration calls, so V1 allows public HTTP(S) destinations only. This is
- * a syntactic guard (no DNS resolution); operators should still point webhooks
- * at trusted orchestration services.
+ * A webhook is an outbound orchestration call the daemon makes from a privileged
+ * network position, so it must never reach loopback, RFC 1918, CGNAT,
+ * link-local/cloud-metadata, or unique-local space. This is a syntactic
+ * pre-filter (no DNS resolution) built on {@link isPublicHttpUrl}, which — unlike
+ * the earlier dotted-quad check — also rejects the decimal/octal/hex and
+ * IPv4-mapped spellings of those addresses, URL credentials, and non-HTTP
+ * schemes.
+ *
+ * The pre-filter cannot see where a hostname resolves: `evil.example` passes
+ * here and still answers with 169.254.169.254, and `169-254-169-254.sslip.io`
+ * is a wildcard-DNS hostname that resolves to a blocked IP. The fetch itself
+ * therefore goes through `createPinnedFetch`, which resolves the name, refuses
+ * any private answer at connect time, and connects to the vetted address
+ * (defeating DNS rebinding).
  */
 export function isAllowedManagedEnvWebhookUrl(urlString: string): boolean {
   let normalized: string | undefined;
@@ -110,27 +67,17 @@ export function isAllowedManagedEnvWebhookUrl(urlString: string): boolean {
   }
   if (!normalized) return false;
 
-  const url = new URL(normalized);
-  const hostname = url.hostname.toLowerCase();
-
-  if (url.username || url.password) return false;
-  if (hostname === 'localhost' || hostnameEqualsOrEndsWith(hostname, 'localhost')) return false;
-  if (hostname === 'metadata.google.internal') return false;
-  if (hostnameEqualsOrEndsWith(hostname, 'internal')) return false;
-  if (hostname.endsWith('.local')) return false;
-  if (isBlockedIPv4(hostname)) return false;
-  if (isBlockedIPv6(hostname)) return false;
-
-  return true;
+  return isPublicHttpUrl(normalized);
 }
 
 /**
  * Normalize and validate a managed-environment webhook URL.
  *
- * V1 deliberately supports only GET to HTTP(S) URLs. It blocks obvious cloud
- * metadata/link-local targets and URL credentials, but it is not a complete
- * SSRF sandbox; operators should point webhooks at trusted orchestration
- * services and avoid embedding secrets in query strings.
+ * Supports only GET to public HTTP(S) URLs and rejects URL credentials. This is
+ * the config/render-time pre-filter; the authoritative SSRF control is the
+ * connect-time DNS pin applied when the webhook is actually fetched (see
+ * `executeEnvironmentWebhook`). Operators should still point webhooks at trusted
+ * orchestration services and avoid embedding secrets in query strings.
  */
 export function normalizeManagedEnvWebhookUrl(value: string, fieldName = 'environment webhook') {
   const normalized = normalizeOptionalHttpUrl(value, fieldName);

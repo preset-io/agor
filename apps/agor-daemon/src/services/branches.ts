@@ -308,7 +308,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   private db: TenantScopeAwareDatabase;
   private app: Application;
   private processes = new Map<BranchID, ManagedProcess>();
-  private readonly fetchDynamicEnvironmentHealth = createPinnedFetch({
+  // Both the dynamic (provider-reported) and static (branch-configured) health
+  // URLs are attacker-controllable and probed from the daemon's privileged
+  // network position, so both go through this pinned, public-only fetch: it
+  // resolves the name and refuses any private/loopback/link-local/metadata
+  // answer at connect time, defeating the wildcard-DNS and DNS-rebinding SSRF
+  // oracle, and never follows redirects.
+  private readonly fetchEnvironmentHealth = createPinnedFetch({
     timeoutMs: ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS,
     maxBytes: 64 * 1024,
     // Health only needs the status. Stop consuming a streaming response after
@@ -623,13 +629,33 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       })}`
     );
 
+    // The webhook URL is attacker-controllable branch configuration fetched from
+    // the daemon's privileged network position, so it goes through the pinned
+    // fetch: it refuses non-public URLs, resolves the name and refuses any
+    // private/loopback/link-local/metadata answer at connect time (defeating
+    // wildcard-DNS and DNS rebinding), and never follows redirects, so a 3xx is
+    // reported as a failure rather than chased. `isBodyComplete` preserves the
+    // existing truncate-at-cap behavior — a body past the cap is truncated and
+    // flagged, not refused — while the hard byte ceiling only guards against a
+    // single oversize chunk.
+    const pinnedWebhookFetch = createPinnedFetch({
+      // Backstop only: the AbortController below trips first and carries the
+      // user-facing "timed out" message, so this stays a hair longer.
+      timeoutMs: ENVIRONMENT.LOGS_TIMEOUT_MS + 5_000,
+      maxBytes: maxBytes + ENVIRONMENT.LOGS_MAX_BYTES,
+      isBodyComplete: (text) => Buffer.byteLength(text, 'utf8') > maxBytes,
+    });
+
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), ENVIRONMENT.LOGS_TIMEOUT_MS);
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort(new Error('Environment webhook timed out'));
+    }, ENVIRONMENT.LOGS_TIMEOUT_MS);
 
     try {
-      const response = await fetch(url, {
+      const response = await pinnedWebhookFetch(url, {
         method: 'GET',
-        redirect: 'manual',
         signal: controller.signal,
         headers: {
           'User-Agent': 'Agor managed-environment webhook',
@@ -649,7 +675,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         contentType: response.headers.get('content-type'),
       };
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
+      if (timedOut) {
         throw new Error(
           `Environment ${commandType} webhook timed out after ${ENVIRONMENT.LOGS_TIMEOUT_MS / 1000}s`
         );
@@ -3018,18 +3044,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }, ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS);
     timeout.unref?.();
     try {
-      const response = await (isDynamicHealth ? this.fetchDynamicEnvironmentHealth : fetch)(
-        healthUrl,
-        {
-          signal: controller.signal,
-          method: 'GET',
-          // Do not follow redirects: an otherwise-allowed health URL could 302 to
-          // a link-local metadata endpoint (169.254.169.254), bypassing
-          // isAllowedHealthCheckUrl. A 3xx returns not-ok and is reported
-          // unhealthy. Mirrors the managed-env webhook fetch.
-          redirect: 'manual',
-        }
-      );
+      // The pinned fetch never follows redirects, so a 302 to a link-local
+      // metadata endpoint (169.254.169.254) returns not-ok and is reported
+      // unhealthy rather than being chased to a destination nothing checked.
+      const response = await this.fetchEnvironmentHealth(healthUrl, {
+        signal: controller.signal,
+        method: 'GET',
+      });
       return {
         status: response.ok ? 'healthy' : 'unhealthy',
         message: response.ok

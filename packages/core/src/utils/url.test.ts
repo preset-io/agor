@@ -167,18 +167,31 @@ describe('normalizeOptionalHttpUrl', () => {
 });
 
 describe('isAllowedHealthCheckUrl', () => {
-  it('allows http localhost URLs', () => {
-    expect(isAllowedHealthCheckUrl('http://localhost:3000/health')).toBe(true);
-    expect(isAllowedHealthCheckUrl('http://127.0.0.1:8080/health')).toBe(true);
-  });
-
-  it('allows https URLs', () => {
+  it('allows public https URLs', () => {
     expect(isAllowedHealthCheckUrl('https://example.com/health')).toBe(true);
+    expect(isAllowedHealthCheckUrl('http://example.com/health')).toBe(true);
   });
 
-  it('allows private network URLs (legitimate health check targets)', () => {
-    expect(isAllowedHealthCheckUrl('http://192.168.1.100:8080/health')).toBe(true);
-    expect(isAllowedHealthCheckUrl('http://10.0.0.5:3000/health')).toBe(true);
+  // A branch's health URL is attacker-controllable and probed from the daemon's
+  // privileged position, so the policy is public-only (matching the dynamic
+  // managed-env health policy). Loopback/private targets became a blind SSRF
+  // oracle into the cluster.
+  it('blocks loopback targets', () => {
+    expect(isAllowedHealthCheckUrl('http://localhost:3000/health')).toBe(false);
+    expect(isAllowedHealthCheckUrl('http://127.0.0.1:8080/health')).toBe(false);
+  });
+
+  it('blocks private-network targets', () => {
+    expect(isAllowedHealthCheckUrl('http://192.168.1.100:8080/health')).toBe(false);
+    expect(isAllowedHealthCheckUrl('http://10.0.0.5:3000/health')).toBe(false);
+    expect(isAllowedHealthCheckUrl('http://172.20.0.1:443/health')).toBe(false); // in-cluster ClusterIP range
+    expect(isAllowedHealthCheckUrl('http://100.64.0.1/health')).toBe(false); // CGNAT
+  });
+
+  it('blocks alternate IPv4 spellings of loopback/private addresses', () => {
+    expect(isAllowedHealthCheckUrl('http://2130706433/health')).toBe(false); // 127.0.0.1 decimal
+    expect(isAllowedHealthCheckUrl('http://0x7f.0.0.1/health')).toBe(false); // 127.0.0.1 hex
+    expect(isAllowedHealthCheckUrl('http://[::ffff:169.254.169.254]/health')).toBe(false); // IPv4-mapped metadata
   });
 
   it('blocks cloud metadata endpoints (169.254.x.x)', () => {
@@ -204,6 +217,13 @@ describe('isAllowedHealthCheckUrl', () => {
 
   it('blocks IPv6 link-local', () => {
     expect(isAllowedHealthCheckUrl('http://[fe80::1]/health')).toBe(false);
+  });
+
+  // The literal filter cannot see where a hostname resolves. A wildcard-DNS
+  // hostname passes here (it is not a literal private address) and is refused at
+  // the fetch boundary instead — see createPinnedFetch / createGuardedLookup.
+  it('passes wildcard-DNS hostnames that resolve to private IPs (rejected at fetch time)', () => {
+    expect(isAllowedHealthCheckUrl('http://169-254-169-254.sslip.io/latest/meta-data/')).toBe(true);
   });
 
   it('returns false for invalid URLs', () => {

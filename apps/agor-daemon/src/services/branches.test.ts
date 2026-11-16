@@ -2759,7 +2759,7 @@ describe('BranchesService environment health requests', () => {
       name: 'wt-health-recover',
       path: '/tmp/wt-health-recover',
       branch_unique_id: 1,
-      health_check_url: 'http://localhost:3030/health',
+      health_check_url: 'https://hooks.example.com/health',
       environment_instance: {
         status: 'error',
         last_health_check: {
@@ -2788,11 +2788,17 @@ describe('BranchesService environment health requests', () => {
           },
         }) as never
     );
-    globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response);
+    // Static health now goes through the pinned public-only fetch, not global fetch.
+    const healthFetch = vi
+      .spyOn(
+        service as unknown as { fetchEnvironmentHealth: typeof fetch },
+        'fetchEnvironmentHealth'
+      )
+      .mockResolvedValue(new Response('', { status: 200, statusText: 'OK' }));
 
     const result = await service.checkHealth(branch.branch_id);
 
-    expect(globalThis.fetch).toHaveBeenCalledWith(
+    expect(healthFetch).toHaveBeenCalledWith(
       branch.health_check_url,
       expect.objectContaining({ method: 'GET' })
     );
@@ -2825,19 +2831,19 @@ describe('BranchesService environment health requests', () => {
     } as unknown as Application;
     const service = new BranchesService(createTenantScopeTestDb() as never, app);
     vi.spyOn(service, 'get').mockResolvedValue(branch as never);
-    const dynamicFetch = vi
+    const healthFetch = vi
       .spyOn(
-        service as unknown as { fetchDynamicEnvironmentHealth: typeof fetch },
-        'fetchDynamicEnvironmentHealth'
+        service as unknown as { fetchEnvironmentHealth: typeof fetch },
+        'fetchEnvironmentHealth'
       )
       .mockResolvedValue(new Response('', { status: 200 }));
     globalThis.fetch = vi.fn();
 
     const result = await service.checkHealth(branch.branch_id);
 
-    expect(dynamicFetch).toHaveBeenCalledWith(
+    expect(healthFetch).toHaveBeenCalledWith(
       branch.environment_instance.health_url,
-      expect.objectContaining({ method: 'GET', redirect: 'manual' })
+      expect.objectContaining({ method: 'GET' })
     );
     expect(globalThis.fetch).not.toHaveBeenCalled();
     expect(result.environment_instance?.last_health_check).toMatchObject({
@@ -2868,15 +2874,15 @@ describe('BranchesService environment health requests', () => {
     } as unknown as Application;
     const service = new BranchesService(createTenantScopeTestDb() as never, app);
     vi.spyOn(service, 'get').mockResolvedValue(branch as never);
-    const dynamicFetch = vi.spyOn(
-      service as unknown as { fetchDynamicEnvironmentHealth: typeof fetch },
-      'fetchDynamicEnvironmentHealth'
+    const healthFetch = vi.spyOn(
+      service as unknown as { fetchEnvironmentHealth: typeof fetch },
+      'fetchEnvironmentHealth'
     );
     globalThis.fetch = vi.fn();
 
     const result = await service.checkHealth(branch.branch_id);
 
-    expect(dynamicFetch).not.toHaveBeenCalled();
+    expect(healthFetch).not.toHaveBeenCalled();
     expect(globalThis.fetch).not.toHaveBeenCalled();
     expect(result.environment_instance?.last_health_check).toMatchObject({
       status: 'unhealthy',
@@ -3022,12 +3028,14 @@ describe('BranchesService environment health requests', () => {
         },
       } as unknown as Application;
       const service = new BranchesService(db as never, app);
-      const fetchMock = vi.fn(async () => {
-        throw new Error('Health endpoint unreachable');
-      });
+      const fetchMock = vi
+        .spyOn(
+          service as unknown as { fetchEnvironmentHealth: typeof fetch },
+          'fetchEnvironmentHealth'
+        )
+        .mockRejectedValue(new Error('Health endpoint unreachable'));
       const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const warnLog = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-      globalThis.fetch = fetchMock;
 
       try {
         for (let cycle = 0; cycle < 3; cycle += 1) {
@@ -3089,6 +3097,10 @@ describe('BranchesService environment health requests', () => {
       if (!current) throw new Error('branch disappeared');
       return current as never;
     });
+    const healthFetch = vi.spyOn(
+      service as unknown as { fetchEnvironmentHealth: typeof fetch },
+      'fetchEnvironmentHealth'
+    );
 
     for (const [index, transition] of (['stop', 'archive'] as const).entries()) {
       const branch = await branchRepo.create({
@@ -3103,16 +3115,16 @@ describe('BranchesService environment health requests', () => {
         environment_instance: { status: 'running' },
       });
       let finishFetch: (() => void) | undefined;
-      const fetchMock = vi.fn(
+      healthFetch.mockClear();
+      healthFetch.mockImplementation(
         () =>
           new Promise<Response>((resolve) => {
             finishFetch = () => resolve(new Response('', { status: 200 }));
           })
       );
-      globalThis.fetch = fetchMock;
 
       const health = service.checkHealth(branch.branch_id);
-      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(healthFetch).toHaveBeenCalledOnce());
       await branchRepo.update(
         branch.branch_id,
         transition === 'stop' ? { environment_instance: { status: 'stopped' } } : { archived: true }

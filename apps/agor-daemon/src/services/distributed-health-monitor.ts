@@ -41,7 +41,8 @@ export interface DistributedHealthMonitorOptions {
   shutdownDrainTimeoutMs: number;
   random?: () => number;
   generateClaimToken?: () => string;
-  fetchHealth?: typeof fetch;
+  /** Test seam for branch-configured static health URLs. Production defaults to a pinned fetch. */
+  fetchHealth?: ReturnType<typeof createPinnedFetch>;
   /** Test seam for command/provider-reported public health URLs. */
   fetchDynamicHealth?: ReturnType<typeof createPinnedFetch>;
   /** Test seam; production always uses capability-scoped PostgreSQL discovery. */
@@ -92,7 +93,7 @@ export class DistributedHealthMonitor {
   private cursor: EnvironmentHealthRoutingCursor | undefined;
   private readonly random: () => number;
   private readonly generateClaimToken: () => string;
-  private readonly fetchHealth: typeof fetch;
+  private readonly fetchHealth: ReturnType<typeof createPinnedFetch>;
   private readonly fetchDynamicHealth: ReturnType<typeof createPinnedFetch>;
   private readonly activeClaims = new Map<
     string,
@@ -112,7 +113,18 @@ export class DistributedHealthMonitor {
   ) {
     this.random = options.random ?? Math.random;
     this.generateClaimToken = options.generateClaimToken ?? generateId;
-    this.fetchHealth = options.fetchHealth ?? fetch;
+    // Both health URLs are attacker-controllable branch configuration probed
+    // from the daemon's privileged position, so the static path uses the same
+    // pinned, public-only fetch as the dynamic path: it resolves the name and
+    // refuses any private/loopback/link-local/metadata answer at connect time,
+    // defeating the wildcard-DNS and DNS-rebinding SSRF oracle.
+    this.fetchHealth =
+      options.fetchHealth ??
+      createPinnedFetch({
+        timeoutMs: options.httpTimeoutMs,
+        maxBytes: 64 * 1024,
+        isBodyComplete: () => true,
+      });
     this.fetchDynamicHealth =
       options.fetchDynamicHealth ??
       createPinnedFetch({
