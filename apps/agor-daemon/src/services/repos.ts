@@ -150,7 +150,8 @@ function deriveLocalRepoSlug(remoteUrl: string | undefined, explicitSlug?: strin
       .replace(/^-+|-+$/g, '');
 
     if (!sanitized) {
-      throw new Error('Could not derive a valid slug from local repository name');
+      // Caller-fixable: the detected name has no usable slug characters.
+      throw new BadRequest('Could not derive a valid slug from local repository name');
     }
 
     return `local/${sanitized}` as RepoSlug;
@@ -165,7 +166,9 @@ function deriveLocalRepoSlug(remoteUrl: string | undefined, explicitSlug?: strin
     }
   }
 
-  throw new Error(
+  // Caller-fixable: no usable remote origin and no explicit slug. Keep this
+  // message stable — add-repo.ts matches on it to prompt for --slug.
+  throw new BadRequest(
     'Could not auto-detect slug for local repository.\nUse --slug to provide one explicitly'
   );
 }
@@ -664,6 +667,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     }
     if (typeof data.path !== 'string' || data.path.trim().length === 0) {
       throw new BadRequest('Path is required to add a local repository');
+    }
+    // A non-string slug (e.g. `{slug: ["a/b"]}` over REST) coerces through
+    // isValidSlug and reaches .split, throwing an uncoded 500. Reject it here.
+    if (data.slug !== undefined && typeof data.slug !== 'string') {
+      throw new BadRequest('Slug must be a string');
     }
 
     const inputPath = data.path.trim();

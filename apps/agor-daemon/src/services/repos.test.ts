@@ -474,6 +474,69 @@ describe('ReposService.addLocalRepository executor boundary', () => {
     ).rejects.toMatchObject({ name: 'Conflict' });
     expect(create).not.toHaveBeenCalled();
   });
+
+  it('maps an undetectable slug (no origin, no --slug) to a coded 400 with a stable message', async () => {
+    executorMocks.requestExecutor.mockResolvedValueOnce({
+      success: true,
+      // No remoteUrl and no explicit slug -> nothing to derive from.
+      data: { path: '/trusted/repo', defaultBranch: 'main', credentialFindingCount: 0 },
+    });
+    const service = new ReposService(
+      {} as never,
+      { get: () => ({}), service: vi.fn() } as unknown as Application
+    );
+    const create = vi.spyOn(service, 'create');
+    await expect(
+      service.addLocalRepository({ path: '/submitted/repo' }, {
+        user: { user_id: '550e8400-e29b-41d4-a716-446655440000' },
+      } as never)
+    ).rejects.toMatchObject({
+      name: 'BadRequest',
+      // add-repo.ts matches on this message to prompt for --slug.
+      message: expect.stringContaining('Use --slug'),
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('maps a remote that yields no valid slug to a coded 400', async () => {
+    executorMocks.requestExecutor.mockResolvedValueOnce({
+      success: true,
+      // A valid git URL whose repo name sanitizes to empty ('---' -> '').
+      data: {
+        path: '/trusted/repo',
+        defaultBranch: 'main',
+        remoteUrl: 'https://github.com/org/---',
+        credentialFindingCount: 0,
+      },
+    });
+    const service = new ReposService(
+      {} as never,
+      { get: () => ({}), service: vi.fn() } as unknown as Application
+    );
+    const create = vi.spyOn(service, 'create');
+    await expect(
+      service.addLocalRepository({ path: '/submitted/repo' }, {
+        user: { user_id: '550e8400-e29b-41d4-a716-446655440000' },
+      } as never)
+    ).rejects.toMatchObject({ name: 'BadRequest' });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-string slug with a coded 400 before touching the executor', async () => {
+    const service = new ReposService(
+      {} as never,
+      { get: () => ({}), service: vi.fn() } as unknown as Application
+    );
+    await expect(
+      service.addLocalRepository(
+        { path: '/submitted/repo', slug: ['a/b'] } as never,
+        {
+          user: { user_id: '550e8400-e29b-41d4-a716-446655440000' },
+        } as never
+      )
+    ).rejects.toMatchObject({ name: 'BadRequest' });
+    expect(executorMocks.requestExecutor).not.toHaveBeenCalled();
+  });
 });
 
 describe('ReposService.createBranch Git lifecycle execution', () => {
