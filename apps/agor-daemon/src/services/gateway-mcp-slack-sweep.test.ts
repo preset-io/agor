@@ -456,6 +456,11 @@ describe('Slack MCP bounded repair tenant-context isolation', () => {
 
   async function waitForRepairToSettle(service: GatewayService, tenantId: string): Promise<void> {
     const internals = service as unknown as { mcpSlackRepairTenants: Set<string> };
+    // The in-flight flag is added synchronously when the repair is armed, so it
+    // must be set here; asserting it first stops this wait from returning
+    // immediately (and the isolation assertions from passing vacuously) if a
+    // repair never actually ran.
+    expect(internals.mcpSlackRepairTenants.has(tenantId)).toBe(true);
     const deadline = Date.now() + 20_000;
     while (internals.mcpSlackRepairTenants.has(tenantId)) {
       if (Date.now() > deadline) throw new Error('Bounded repair did not settle');
@@ -483,28 +488,22 @@ describe('Slack MCP bounded repair tenant-context isolation', () => {
         seenTenants.push(getCurrentTenantId());
         return findRecoveryPage.apply(this, args);
       });
-    // The production symptom is a `[FATAL]`/console.error cross-tenant throw.
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
     try {
       armRepairFromContext(harness.service, FOREIGN_TENANT, TENANT);
       await waitForRepairToSettle(harness.service, TENANT);
     } finally {
       pageSpy.mockRestore();
-      errorSpy.mockRestore();
     }
 
-    // The repair never inherited the foreign identity that armed it.
+    // The repair ran (seenTenants is non-empty) and never inherited the foreign
+    // identity that armed it. Without the shed, the repair would instead throw
+    // `Cannot enter tenant context ...` synchronously out of the timer, so this
+    // test fails on an uncaught exception plus a settle timeout.
     expect(seenTenants.length).toBeGreaterThan(0);
     for (const tenant of seenTenants) expect(tenant).toBe(TENANT);
     expect(seenTenants).not.toContain(FOREIGN_TENANT);
     // And it did its actual work: the healthy card was delivered.
     expect(sent.messages).toHaveLength(1);
-    // No cross-tenant-context throw escaped to the logs.
-    const crossTenantThrow = errorSpy.mock.calls
-      .map((call) => call.join(' '))
-      .find((line) => line.includes('Cannot enter tenant context'));
-    expect(crossTenantThrow).toBeUndefined();
   }, 30_000);
 
   it('clears the in-flight flag when a repair armed from another tenant throws', async () => {
