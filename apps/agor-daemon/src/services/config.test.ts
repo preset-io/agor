@@ -139,6 +139,11 @@ describe('ConfigService.resolveApiKey', () => {
     ['a body with a non-string taskId', { taskId: 123, keyName: 'OPENAI_API_KEY' }],
     ['a body missing keyName', { taskId: 'task-1' }],
     ['a body with a non-string keyName', { taskId: 'task-1', keyName: 42 }],
+    ['a body with a non-string tool', { taskId: 'task-1', keyName: 'OPENAI_API_KEY', tool: 123 }],
+    [
+      'a body with an unknown tool',
+      { taskId: 'task-1', keyName: 'OPENAI_API_KEY', tool: 'made-up-tool' },
+    ],
   ])('returns a coded 400 (not an uncoded TypeError) for %s', async (_case, body) => {
     const service = new ConfigService({} as never);
 

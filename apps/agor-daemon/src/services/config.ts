@@ -30,6 +30,7 @@ import type {
   TaskID,
   UserID,
 } from '@agor/core/types';
+import { isAgenticToolName } from '@agor/core/types';
 import {
   authenticatedTaskExecutorRuntimeAuthority,
   authenticatedTaskExecutorRuntimeScope,
@@ -125,6 +126,14 @@ export class ConfigService {
     }
     if (typeof keyName !== 'string' || !isResolvableApiKeyName(keyName)) {
       throw new BadRequest('Unsupported API key name');
+    }
+    // `tool` is optional (absent falls back to a cross-tool sweep), but when
+    // present it comes from the same untrusted body and must be a known tool.
+    // An unvalidated value flows into TOOL_API_KEY_NAMES and the core resolver,
+    // where a malformed one could throw uncoded — the exact 500-mislabel this
+    // guard exists to prevent.
+    if (tool !== undefined && !isAgenticToolName(tool)) {
+      throw new BadRequest('Unsupported tool');
     }
 
     // This method returns plaintext secret material and is only for trusted
