@@ -426,11 +426,13 @@ describe('Slack MCP connect bounded repair sweep', () => {
  *
  * §7 of the 2026-11-14 incident report: the periodic sweep arms a repair for
  * every active tenant while still carrying the FIRST tenant's AsyncLocalStorage
- * identity (a timer callback inherits the context it was scheduled in). The
- * per-tenant `runWithTenantContext(otherTenant)` then throws synchronously —
- * before the `.finally` that clears the in-flight flag — logged in production as
- * 26× `[FATAL] Cannot enter tenant context X from active tenant context Y`, and
- * the tenant stays stuck "repair in flight" until the pod restarts.
+ * identity (a timer callback inherits the context it was scheduled in). Without
+ * the fix the per-tenant `runWithTenantContext(otherTenant)` would throw
+ * synchronously — before the `.finally` that clears the in-flight flag —
+ * logged in production as 26× `[FATAL] Cannot enter tenant context X from active
+ * tenant context Y`, leaving the tenant stuck "repair in flight" until the pod
+ * restarts. The fix sheds the inherited identity before entering each tenant's
+ * own, so that throw can no longer happen.
  *
  * SQLite carries one tenant's rows, so the FOREIGN identity here is purely the
  * leaked AsyncLocalStorage value the fix must shed; arming the repair from it is
@@ -513,7 +515,10 @@ describe('Slack MCP bounded repair tenant-context isolation', () => {
       requestedAt: new Date(Date.now() - 60_000).toISOString(),
     });
 
-    // Make the repair pass itself throw, after it has started doing work.
+    // Make the repair pass itself throw, after it has started doing work. It
+    // runs inside the async repair body, so it rejects the repair promise and
+    // is handled by the `.catch().finally()` chain — the path that must still
+    // clear the in-flight flag.
     (harness.service as unknown as Record<string, unknown>).reportMcpSlackRepairFailures = () => {
       throw new Error('repair pass blew up');
     };

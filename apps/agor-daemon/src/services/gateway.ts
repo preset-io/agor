@@ -1718,131 +1718,113 @@ export class GatewayService {
     }
   }
 
+  /**
+   * Arm a timer whose callback runs under NO tenant identity.
+   *
+   * A `setTimeout` callback inherits the AsyncLocalStorage identity it was
+   * scheduled in. The repair and sweep timers are armed from one tenant's
+   * `refreshChannelState` (and the sweep perpetuates that identity across its
+   * own reschedules), then dispatch work for OTHER tenants — so a per-tenant
+   * `runWithTenantContext(otherTenant)` would see a conflicting active identity
+   * and throw. Shedding the inherited identity here lets each callback enter
+   * its own tenant context cleanly. Timers that only ever re-enter their own
+   * tenant do not need this and should use a bare `setTimeout`.
+   */
+  private scheduleTenantNeutralTimer(delayMs: number, run: () => void): NodeJS.Timeout {
+    const timer = setTimeout(() => runWithoutTenantContext(run), delayMs);
+    timer.unref?.();
+    return timer;
+  }
+
   private scheduleMcpSlackRecoveryRepair(tenantId: string): void {
     if (this.mcpSlackRepairTenants.has(tenantId)) return;
     this.mcpSlackRepairTenants.add(tenantId);
-    setTimeout(() => {
-      // A timer callback inherits the AsyncLocalStorage identity of whoever
-      // armed it: the first tenant's `refreshChannelState`, or the periodic
-      // sweep perpetuating that identity as it re-arms repairs for OTHER
-      // tenants. Entered as-is, `runWithTenantContext(tenantId)` for a
-      // different tenant throws synchronously — before the `.finally` that
-      // clears the in-flight flag can run — and the tenant is wedged "repair
-      // in flight" until the pod restarts. Leave the inherited identity first,
-      // then enter this tenant's own, and clear the flag whether entry throws
-      // synchronously or the repair pass rejects.
-      runWithoutTenantContext(() => {
-        if (this.listenerStopped) {
-          this.mcpSlackRepairTenants.delete(tenantId);
-          return;
+    this.scheduleTenantNeutralTimer(0, () => {
+      if (this.listenerStopped) {
+        this.mcpSlackRepairTenants.delete(tenantId);
+        return;
+      }
+      // No ambient identity here (the timer sheds it), so this enters the
+      // tenant's own context fresh. The `.finally` clears the in-flight flag
+      // on every outcome, so a repair that throws can never wedge the tenant.
+      void runWithTenantContext(tenantId, async () => {
+        const now = new Date();
+        const horizon = new Date(now.getTime() - MCP_SLACK_REPAIR_HORIZON_MS);
+        // Per-item repair failures, tallied rather than logged one by one:
+        // the two lanes' silent swallows are how four missing tenant scopes
+        // reached a running daemon, and a page of them is not fifty events.
+        const failures = new Map<string, McpSlackRepairFailureTally>();
+        const page = await this.taskRepo.findMcpSlackRecoveryNoticePage({
+          limit: MCP_SLACK_REPAIR_BATCH,
+          now,
+          horizon,
+        });
+        for (const task of page.tasks) {
+          await this.syncMcpSlackRecoveryNotice(task.task_id, failures).catch((error) =>
+            this.tallyMcpSlackRepairFailure(failures, 'recovery', task.task_id, error)
+          );
         }
-        let repairStarted = false;
-        try {
-          const repair = runWithTenantContext(tenantId, async () => {
-            const now = new Date();
-            const horizon = new Date(now.getTime() - MCP_SLACK_REPAIR_HORIZON_MS);
-            // Per-item repair failures, tallied rather than logged one by one:
-            // the two lanes' silent swallows are how four missing tenant scopes
-            // reached a running daemon, and a page of them is not fifty events.
-            const failures = new Map<string, McpSlackRepairFailureTally>();
-            const page = await this.taskRepo.findMcpSlackRecoveryNoticePage({
-              limit: MCP_SLACK_REPAIR_BATCH,
-              now,
-              horizon,
-            });
-            for (const task of page.tasks) {
-              await this.syncMcpSlackRecoveryNotice(task.task_id, failures).catch((error) =>
-                this.tallyMcpSlackRepairFailure(failures, 'recovery', task.task_id, error)
-              );
-            }
-            // The connect lane rides the same sweep, on its own indexed due-work
-            // column. One tenant visit repairs both rather than two schedules
-            // racing each other for the same Slack rate limit.
-            //
-            // Paged, because one page is otherwise all a tenant ever sees: any
-            // card the sweep cannot advance stays at the front of the ordering
-            // and hides everything behind it. Rescheduling a refused first-card
-            // marker is the primary fix for that; this bounds what a card the
-            // reschedule does not cover can hide, without giving up the bound
-            // that makes this sweep safe to run every tick.
-            let cursor: MCPSlackConnectDueCursor | undefined;
-            for (let pageIndex = 0; pageIndex < MCP_SLACK_CONNECT_REPAIR_PAGES; pageIndex += 1) {
-              const cards = await this.messagesRepo.findMcpSlackConnectDuePage({
-                limit: MCP_SLACK_REPAIR_BATCH,
-                now,
-                horizon,
-                ...(cursor ? { after: cursor } : {}),
-              });
-              for (const card of cards.messages) {
-                await this.deliverMcpSlackConnectCard(
-                  card.message_id as MessageID,
-                  0,
-                  failures
-                ).catch((error) =>
-                  this.tallyMcpSlackRepairFailure(failures, 'connect', card.message_id, error)
-                );
-              }
-              if (cards.messages.length < MCP_SLACK_REPAIR_BATCH || !cards.cursor) break;
-              cursor = cards.cursor;
-            }
-            this.reportMcpSlackRepairFailures(failures);
+        // The connect lane rides the same sweep, on its own indexed due-work
+        // column. One tenant visit repairs both rather than two schedules
+        // racing each other for the same Slack rate limit.
+        //
+        // Paged, because one page is otherwise all a tenant ever sees: any
+        // card the sweep cannot advance stays at the front of the ordering
+        // and hides everything behind it. Rescheduling a refused first-card
+        // marker is the primary fix for that; this bounds what a card the
+        // reschedule does not cover can hide, without giving up the bound
+        // that makes this sweep safe to run every tick.
+        let cursor: MCPSlackConnectDueCursor | undefined;
+        for (let pageIndex = 0; pageIndex < MCP_SLACK_CONNECT_REPAIR_PAGES; pageIndex += 1) {
+          const cards = await this.messagesRepo.findMcpSlackConnectDuePage({
+            limit: MCP_SLACK_REPAIR_BATCH,
+            now,
+            horizon,
+            ...(cursor ? { after: cursor } : {}),
           });
-          repairStarted = true;
-          void repair
-            .catch((error: unknown) =>
-              this.logMcpSlackOperationFailure(
-                'mcp_slack_bounded_repair_failed',
-                'recovery',
-                { tenant_sweep: tenantId },
-                error
-              )
-            )
-            .finally(() => this.mcpSlackRepairTenants.delete(tenantId));
-        } catch (error: unknown) {
-          // Entering the tenant context threw synchronously, so the promise
-          // chain above was never attached: clear the flag so the tenant is
-          // never wedged "repair in flight", and route the failure to the same
-          // bounded log the async path uses instead of letting it escape the
-          // timer as an uncaughtException. Guarded so the healthy path (which
-          // never reaches here) cannot double-clear or double-log.
-          if (!repairStarted) {
-            this.mcpSlackRepairTenants.delete(tenantId);
-            this.logMcpSlackOperationFailure(
-              'mcp_slack_bounded_repair_failed',
-              'recovery',
-              { tenant_sweep: tenantId },
-              error
+          for (const card of cards.messages) {
+            await this.deliverMcpSlackConnectCard(card.message_id as MessageID, 0, failures).catch(
+              (error) =>
+                this.tallyMcpSlackRepairFailure(failures, 'connect', card.message_id, error)
             );
           }
+          if (cards.messages.length < MCP_SLACK_REPAIR_BATCH || !cards.cursor) break;
+          cursor = cards.cursor;
         }
-      });
-    }, 0).unref?.();
+        this.reportMcpSlackRepairFailures(failures);
+      })
+        .catch((error: unknown) =>
+          this.logMcpSlackOperationFailure(
+            'mcp_slack_bounded_repair_failed',
+            'recovery',
+            { tenant_sweep: tenantId },
+            error
+          )
+        )
+        .finally(() => this.mcpSlackRepairTenants.delete(tenantId));
+    });
   }
 
   private ensureMcpSlackPeriodicSweep(): void {
     if (this.listenerStopped || this.mcpSlackSweepTimer) return;
-    this.mcpSlackSweepTimer = setTimeout(() => {
-      // Re-arm and dispatch under no tenant identity. This timer was first
-      // armed from one tenant's `refreshChannelState`, so it inherits that
-      // tenant's AsyncLocalStorage context and would otherwise perpetuate it
-      // through every self-reschedule — then hand it to the per-tenant repairs
-      // it arms for OTHER tenants, which is the leak that wedged them.
-      runWithoutTenantContext(() => {
-        this.mcpSlackSweepTimer = null;
-        if (this.listenerStopped) return;
-        const tenants = [...this.mcpSlackRecoveryTenants].sort();
-        if (tenants.length > 0) {
-          const count = Math.min(MCP_SLACK_SWEEP_TENANT_BUDGET, tenants.length);
-          for (let index = 0; index < count; index += 1) {
-            const tenant = tenants[(this.mcpSlackSweepCursor + index) % tenants.length];
-            if (tenant) this.scheduleMcpSlackRecoveryRepair(tenant);
-          }
-          this.mcpSlackSweepCursor = (this.mcpSlackSweepCursor + count) % tenants.length;
+    // Re-armed under no tenant identity: this timer is first armed from one
+    // tenant's `refreshChannelState` and would otherwise perpetuate that
+    // identity through every self-reschedule, then hand it to the per-tenant
+    // repairs it arms for OTHER tenants — the leak that wedged them.
+    this.mcpSlackSweepTimer = this.scheduleTenantNeutralTimer(MCP_SLACK_SWEEP_INTERVAL_MS, () => {
+      this.mcpSlackSweepTimer = null;
+      if (this.listenerStopped) return;
+      const tenants = [...this.mcpSlackRecoveryTenants].sort();
+      if (tenants.length > 0) {
+        const count = Math.min(MCP_SLACK_SWEEP_TENANT_BUDGET, tenants.length);
+        for (let index = 0; index < count; index += 1) {
+          const tenant = tenants[(this.mcpSlackSweepCursor + index) % tenants.length];
+          if (tenant) this.scheduleMcpSlackRecoveryRepair(tenant);
         }
-        this.ensureMcpSlackPeriodicSweep();
-      });
-    }, MCP_SLACK_SWEEP_INTERVAL_MS);
-    this.mcpSlackSweepTimer.unref?.();
+        this.mcpSlackSweepCursor = (this.mcpSlackSweepCursor + count) % tenants.length;
+      }
+      this.ensureMcpSlackPeriodicSweep();
+    });
   }
 
   /**
