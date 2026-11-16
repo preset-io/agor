@@ -2759,7 +2759,7 @@ describe('BranchesService environment health requests', () => {
       name: 'wt-health-recover',
       path: '/tmp/wt-health-recover',
       branch_unique_id: 1,
-      health_check_url: 'https://hooks.example.com/health',
+      health_check_url: 'http://localhost:3030/health',
       environment_instance: {
         status: 'error',
         last_health_check: {
@@ -2788,17 +2788,13 @@ describe('BranchesService environment health requests', () => {
           },
         }) as never
     );
-    // Static health now goes through the pinned public-only fetch, not global fetch.
-    const healthFetch = vi
-      .spyOn(
-        service as unknown as { fetchEnvironmentHealth: typeof fetch },
-        'fetchEnvironmentHealth'
-      )
-      .mockResolvedValue(new Response('', { status: 200, statusText: 'OK' }));
+    // Trusted-local (default: simple + static) probes a loopback dev server via
+    // a plain fetch, not the pinned public-only path.
+    globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response);
 
     const result = await service.checkHealth(branch.branch_id);
 
-    expect(healthFetch).toHaveBeenCalledWith(
+    expect(globalThis.fetch).toHaveBeenCalledWith(
       branch.health_check_url,
       expect.objectContaining({ method: 'GET' })
     );
@@ -2887,6 +2883,85 @@ describe('BranchesService environment health requests', () => {
     expect(result.environment_instance?.last_health_check).toMatchObject({
       status: 'unhealthy',
       message: 'Health check URL blocked by security policy',
+    });
+  });
+
+  it('blocks a private static health URL on an isolated (sandbox) deployment', async () => {
+    const branch = {
+      branch_id: 'wt-health-isolated-private' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-health-isolated-private',
+      path: '/tmp/wt-health-isolated-private',
+      branch_unique_id: 13,
+      health_check_url: 'http://127.0.0.1:9000/health',
+      environment_instance: { status: 'error' },
+    };
+    const app = {
+      get: (name: string) =>
+        name === 'config' ? { execution: { unix_user_mode: 'sandbox' } } : {},
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const healthFetch = vi.spyOn(
+      service as unknown as { fetchEnvironmentHealth: typeof fetch },
+      'fetchEnvironmentHealth'
+    );
+    globalThis.fetch = vi.fn();
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    // Private static health is blocked before any fetch when egress is public-only.
+    expect(healthFetch).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(result.environment_instance?.last_health_check).toMatchObject({
+      status: 'unhealthy',
+      message: 'Health check URL blocked by security policy',
+    });
+  });
+
+  it('uses the pinned public-only fetch for a public static health URL on an isolated deployment', async () => {
+    const branch = {
+      branch_id: 'wt-health-isolated-public' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-health-isolated-public',
+      path: '/tmp/wt-health-isolated-public',
+      branch_unique_id: 14,
+      health_check_url: 'https://hooks.example.com/health',
+      environment_instance: { status: 'error' },
+    };
+    const app = {
+      get: (name: string) =>
+        name === 'config' ? { execution: { unix_user_mode: 'sandbox' } } : {},
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const healthFetch = vi
+      .spyOn(
+        service as unknown as { fetchEnvironmentHealth: typeof fetch },
+        'fetchEnvironmentHealth'
+      )
+      .mockResolvedValue(new Response('', { status: 200 }));
+    globalThis.fetch = vi.fn();
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    // Public static health goes through the pinned fetch, never the plain one.
+    expect(healthFetch).toHaveBeenCalledWith(
+      branch.health_check_url,
+      expect.objectContaining({ method: 'GET' })
+    );
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(result.environment_instance?.last_health_check).toMatchObject({
+      status: 'healthy',
+      message: 'HTTP 200',
     });
   });
 
@@ -3028,14 +3103,14 @@ describe('BranchesService environment health requests', () => {
         },
       } as unknown as Application;
       const service = new BranchesService(db as never, app);
-      const fetchMock = vi
-        .spyOn(
-          service as unknown as { fetchEnvironmentHealth: typeof fetch },
-          'fetchEnvironmentHealth'
-        )
-        .mockRejectedValue(new Error('Health endpoint unreachable'));
+      // Trusted-local (default: simple + static) static health probes via a plain
+      // fetch, not the pinned public-only path.
+      const fetchMock = vi.fn(async () => {
+        throw new Error('Health endpoint unreachable');
+      });
       const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const warnLog = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      globalThis.fetch = fetchMock;
 
       try {
         for (let cycle = 0; cycle < 3; cycle += 1) {
@@ -3097,10 +3172,6 @@ describe('BranchesService environment health requests', () => {
       if (!current) throw new Error('branch disappeared');
       return current as never;
     });
-    const healthFetch = vi.spyOn(
-      service as unknown as { fetchEnvironmentHealth: typeof fetch },
-      'fetchEnvironmentHealth'
-    );
 
     for (const [index, transition] of (['stop', 'archive'] as const).entries()) {
       const branch = await branchRepo.create({
@@ -3115,16 +3186,18 @@ describe('BranchesService environment health requests', () => {
         environment_instance: { status: 'running' },
       });
       let finishFetch: (() => void) | undefined;
-      healthFetch.mockClear();
-      healthFetch.mockImplementation(
+      // Trusted-local (default: simple + static) static health probes via a plain
+      // fetch, not the pinned public-only path.
+      const fetchMock = vi.fn(
         () =>
           new Promise<Response>((resolve) => {
             finishFetch = () => resolve(new Response('', { status: 200 }));
           })
       );
+      globalThis.fetch = fetchMock;
 
       const health = service.checkHealth(branch.branch_id);
-      await vi.waitFor(() => expect(healthFetch).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
       await branchRepo.update(
         branch.branch_id,
         transition === 'stop' ? { environment_instance: { status: 'stopped' } } : { archived: true }

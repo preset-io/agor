@@ -643,24 +643,22 @@ export function isPublicHttpUrl(rawUrl: string): boolean {
 }
 
 /**
- * Validates that a static environment health-check URL targets an allowed
- * destination before the daemon probes it.
+ * Validates a **trusted-local** static health-check URL.
  *
- * Public-HTTP(S) only, matching {@link isPublicHttpUrl} and the dynamic
- * managed-environment health policy. A branch's health URL is
- * attacker-controllable configuration, and the daemon probes it from a
- * privileged network position, so a health check resolving to loopback, RFC
- * 1918, CGNAT, link-local/cloud-metadata, or unique-local space turned the
- * daemon into a blind SSRF / port-scan oracle into its own cluster. The earlier
- * policy string-matched only `169.254.`/`metadata.google.internal`, which a
- * wildcard-DNS hostname (`169-254-169-254.sslip.io`) sailed past.
+ * Deliberately weaker than {@link isPublicHttpUrl}: a health check on a
+ * trusted-local single-tenant install legitimately targets localhost/private
+ * networks, because that is where a branch's dev server runs (see the
+ * environment-configuration guide's `health: http://localhost:.../health`
+ * example). It only string-blocks the obvious cloud-metadata/link-local
+ * literals.
  *
- * This is a literal-address pre-filter only. A hostname that passes here can
- * still resolve to a private address, so the observation boundary fetches
+ * This is used ONLY on the permissive path. Isolated or multi-tenant
+ * deployments (`sandbox`/`delegated`/`required_from_auth`) and dynamic
+ * (provider-reported) health instead require {@link isPublicHttpUrl} and fetch
  * through `createPinnedFetch`, which resolves the name and refuses any private
- * answer at connect time (defeating wildcard-DNS and DNS rebinding). The health
- * URL is validated here, at the observation boundary, rather than at branch
- * materialization so an inactive environment never blocks a branch write.
+ * answer at connect time (defeating wildcard-DNS and DNS rebinding). The caller
+ * chooses between the two via `enforcesPublicHealthEgress`; see
+ * `fetchEnvironmentHealthObservation` in `branches.ts`.
  */
 export function isAllowedHealthCheckUrl(urlString: string): boolean {
   // Reuse existing protocol validation (http/https only, rejects non-string/empty/non-http)
@@ -672,5 +670,14 @@ export function isAllowedHealthCheckUrl(urlString: string): boolean {
   }
   if (!normalized) return false;
 
-  return isPublicHttpUrl(normalized);
+  const url = new URL(normalized);
+  const hostname = url.hostname;
+
+  // Block cloud metadata endpoints
+  if (hostname.startsWith('169.254.')) return false; // AWS/Azure link-local metadata
+  if (hostname.startsWith('[fe80:')) return false; // IPv6 link-local
+  if (hostname === 'metadata.google.internal') return false; // GCP metadata
+  if (hostname === '[fd00:ec2::254]') return false; // AWS IPv6 metadata
+
+  return true;
 }

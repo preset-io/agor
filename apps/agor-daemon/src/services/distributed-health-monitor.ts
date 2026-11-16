@@ -26,7 +26,7 @@ import { isAllowedDynamicEnvironmentHealthUrl } from '@agor/core/environment/lif
 import type { Application } from '@agor/core/feathers';
 import type { Branch, BranchID, TenantID } from '@agor/core/types';
 import { createPinnedFetch } from '@agor/core/utils/pinned-fetch';
-import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
+import { isPublicHttpUrl } from '@agor/core/utils/url';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 
 export interface DistributedHealthMonitorOptions {
@@ -510,10 +510,13 @@ export class DistributedHealthMonitor {
       };
     }
     const isDynamicHealth = dynamicHealthUrl !== undefined;
+    // The distributed monitor only runs on HA (shared-Postgres, multi-pod)
+    // deployments, where the daemon is shared and localhost is never a branch's
+    // dev server, so both dynamic and static health are public-only here.
     if (
       isDynamicHealth
         ? !isAllowedDynamicEnvironmentHealthUrl(healthUrl)
-        : !isAllowedHealthCheckUrl(healthUrl)
+        : !isPublicHttpUrl(healthUrl)
     ) {
       return {
         status: 'unhealthy',

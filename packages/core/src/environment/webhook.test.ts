@@ -124,11 +124,12 @@ describe('managed environment policy validation', () => {
   });
 
   it('validates rendered health and app as URL-only fields', () => {
-    // `app` is client-facing metadata (browser-reachable), so localhost is fine;
-    // `health` is daemon-probed, so it must be public.
+    // Render-time health validation is the lenient trusted-local check; the
+    // public-only policy is enforced at the observation boundary (see
+    // enforcesPublicHealthEgress), so localhost here is allowed.
     expect(() =>
       validateRenderedManagedEnvUrlFields({
-        health: 'https://hooks.example.com/health',
+        health: 'http://localhost:3000/health',
         app: 'http://localhost:3000',
       })
     ).not.toThrow();
@@ -137,10 +138,6 @@ describe('managed environment policy validation', () => {
     );
     expect(() =>
       validateRenderedManagedEnvUrlFields({ health: 'http://169.254.169.254/latest/meta-data' })
-    ).toThrow(/health must render to an allowed http\(s\) URL/);
-    // Health is public-only now: a loopback/private daemon-probe target is rejected.
-    expect(() =>
-      validateRenderedManagedEnvUrlFields({ health: 'http://localhost:3000/health' })
     ).toThrow(/health must render to an allowed http\(s\) URL/);
   });
 });

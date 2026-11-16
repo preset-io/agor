@@ -17,6 +17,7 @@ import {
   createInitialConfig,
   DEFAULT_REFRESH_TOKEN_TTL_SECONDS,
   DEFAULT_SESSION_MAX_LIFETIME_SECONDS,
+  enforcesPublicHealthEgress,
   ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   expandHomePath,
@@ -1830,6 +1831,33 @@ describe('unixUserModeRequiresExecutionHomeKey', () => {
     expect(unixUserModeRequiresExecutionHomeKey('simple')).toBe(false);
     expect(unixUserModeRequiresExecutionHomeKey('sandbox')).toBe(false);
     expect(unixUserModeRequiresExecutionHomeKey('delegated')).toBe(true);
+  });
+});
+
+describe('enforcesPublicHealthEgress', () => {
+  it('allows private health egress only on a trusted-local single-tenant install', () => {
+    expect(enforcesPublicHealthEgress({} as AgorConfig)).toBe(false);
+    expect(
+      enforcesPublicHealthEgress({ execution: { unix_user_mode: 'simple' } } as AgorConfig)
+    ).toBe(false);
+  });
+
+  it('enforces public-only health egress on isolated execution modes', () => {
+    expect(
+      enforcesPublicHealthEgress({ execution: { unix_user_mode: 'sandbox' } } as AgorConfig)
+    ).toBe(true);
+    expect(
+      enforcesPublicHealthEgress({ execution: { unix_user_mode: 'delegated' } } as AgorConfig)
+    ).toBe(true);
+  });
+
+  it('enforces public-only health egress on a multi-tenant deployment even in simple mode', () => {
+    expect(
+      enforcesPublicHealthEgress({
+        execution: { unix_user_mode: 'simple' },
+        multi_tenancy: { mode: 'required_from_auth' },
+      } as AgorConfig)
+    ).toBe(true);
   });
 });
 

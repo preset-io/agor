@@ -37,7 +37,7 @@ import {
   assertValidRawExternalLaunchConfig,
   resolveEffectiveExternalLaunchConfig,
 } from './external-launch';
-import { assertValidMultiTenancyConfig } from './multitenancy';
+import { assertValidMultiTenancyConfig, resolveMultiTenancyConfig } from './multitenancy';
 import { AgorPasswordPolicyProfile } from './password-policy';
 import { isPlainConfigRecord } from './plain-record';
 import {
@@ -2406,6 +2406,33 @@ export function unixUserModeRequiresExecutionHomeKey(
   mode: import('./types').UnixUserMode
 ): boolean {
   return mode === 'delegated';
+}
+
+/**
+ * Whether outbound managed-environment **static** health probes must be
+ * restricted to public destinations.
+ *
+ * A branch's `health_check_url` is attacker-controllable configuration that the
+ * daemon probes from its own network position. On any isolated or multi-tenant
+ * deployment — `sandbox`/`delegated` execution, or `required_from_auth` tenancy
+ * — probing a loopback/private/metadata address lets one tenant drive the shared
+ * daemon into internal services (an SSRF / port-scan oracle), so health egress
+ * is public-only and DNS-pinned there.
+ *
+ * On a trusted-local single-tenant install (`simple` execution mode, static
+ * tenancy) the daemon and a branch's dev server share a host, probing a
+ * loopback/private address is the documented, legitimate use (see the
+ * environment-configuration guide's `health: http://localhost:.../health`
+ * example), and no tenant boundary exists for an SSRF to cross — so private
+ * destinations stay allowed.
+ *
+ * Dynamic (provider-reported) health and the HA distributed health monitor are
+ * always public-only regardless of this flag.
+ */
+export function enforcesPublicHealthEgress(config: AgorConfig = loadConfigSync()): boolean {
+  const { unixUserMode } = resolveExecutionSecurityMode(config);
+  const multiTenant = resolveMultiTenancyConfig(config).mode === 'required_from_auth';
+  return unixUserMode !== 'simple' || multiTenant;
 }
 
 /**

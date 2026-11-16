@@ -18,6 +18,7 @@ import {
   branchMaintenanceCapabilities,
   createUserProcessEnvironment,
   ENVIRONMENT,
+  enforcesPublicHealthEgress,
   ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   environmentCommandCapabilities,
@@ -126,7 +127,7 @@ import {
 } from '@agor/core/types';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { createPinnedFetch } from '@agor/core/utils/pinned-fetch';
-import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
+import { isAllowedHealthCheckUrl, isPublicHttpUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { matchesExecutorCommandRuntimeScope } from '../auth/executor-runtime-scope.js';
 import {
@@ -308,12 +309,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   private db: TenantScopeAwareDatabase;
   private app: Application;
   private processes = new Map<BranchID, ManagedProcess>();
-  // Both the dynamic (provider-reported) and static (branch-configured) health
-  // URLs are attacker-controllable and probed from the daemon's privileged
-  // network position, so both go through this pinned, public-only fetch: it
-  // resolves the name and refuses any private/loopback/link-local/metadata
-  // answer at connect time, defeating the wildcard-DNS and DNS-rebinding SSRF
-  // oracle, and never follows redirects.
+  // Pinned, public-only health fetch: used for dynamic (provider-reported)
+  // health always, and for static (branch-configured) health on
+  // isolated/multi-tenant deployments. It resolves the name and refuses any
+  // private/loopback/link-local/metadata answer at connect time, defeating the
+  // wildcard-DNS and DNS-rebinding SSRF oracle, and never follows redirects. A
+  // trusted-local single-tenant install instead probes a loopback/private dev
+  // server through a plain fetch (see fetchEnvironmentHealthObservation).
   private readonly fetchEnvironmentHealth = createPinnedFetch({
     timeoutMs: ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS,
     maxBytes: 64 * 1024,
@@ -3020,11 +3022,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       };
     }
     const isDynamicHealth = dynamicHealthUrl !== undefined;
-    if (
-      isDynamicHealth
-        ? !isAllowedDynamicEnvironmentHealthUrl(healthUrl)
-        : !isAllowedHealthCheckUrl(healthUrl)
-    ) {
+    // Dynamic (provider-reported) health is always public-only. Static
+    // (branch-configured) health is public-only on isolated/multi-tenant
+    // deployments — where it is an attacker-controllable SSRF/port-scan oracle —
+    // but keeps probing loopback/private dev servers on a trusted-local
+    // single-tenant install, the documented use where no tenant boundary exists.
+    const requirePublicEgress =
+      isDynamicHealth || enforcesPublicHealthEgress(this.app.get('config'));
+    const urlAllowed = isDynamicHealth
+      ? isAllowedDynamicEnvironmentHealthUrl(healthUrl)
+      : requirePublicEgress
+        ? isPublicHttpUrl(healthUrl)
+        : isAllowedHealthCheckUrl(healthUrl);
+    if (!urlAllowed) {
       return {
         status: 'unhealthy',
         message: 'Health check URL blocked by security policy',
@@ -3044,13 +3054,22 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }, ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS);
     timeout.unref?.();
     try {
-      // The pinned fetch never follows redirects, so a 302 to a link-local
-      // metadata endpoint (169.254.169.254) returns not-ok and is reported
-      // unhealthy rather than being chased to a destination nothing checked.
-      const response = await this.fetchEnvironmentHealth(healthUrl, {
-        signal: controller.signal,
-        method: 'GET',
-      });
+      // On isolated/multi-tenant deployments the pinned, public-only fetch
+      // resolves the name and refuses any private/loopback/link-local/metadata
+      // answer at connect time (defeating wildcard-DNS and DNS rebinding) and
+      // never follows redirects. On a trusted-local single-tenant install a plain
+      // fetch reaches the branch's loopback/private dev server; redirects are
+      // still not followed, so a 302 to a metadata endpoint is reported unhealthy.
+      const response = requirePublicEgress
+        ? await this.fetchEnvironmentHealth(healthUrl, {
+            signal: controller.signal,
+            method: 'GET',
+          })
+        : await fetch(healthUrl, {
+            signal: controller.signal,
+            method: 'GET',
+            redirect: 'manual',
+          });
       return {
         status: response.ok ? 'healthy' : 'unhealthy',
         message: response.ok
