@@ -10,6 +10,7 @@ describe('tenant agentic tool deployment boundary', () => {
     vi.spyOn(TenantAgenticToolSettingsRepository.prototype, 'find').mockResolvedValue({});
     const service = new TenantAgenticToolSettingsService(
       {} as TenantScopeAwareDatabase,
+      {} as never,
       (tool) => tool === 'claude-code'
     );
 
@@ -30,6 +31,7 @@ describe('tenant agentic tool deployment boundary', () => {
   it('rejects enabling a package the deployment operator did not configure', async () => {
     const service = new TenantAgenticToolSettingsService(
       {} as TenantScopeAwareDatabase,
+      {} as never,
       (tool) => tool === 'claude-code'
     );
 
@@ -44,7 +46,10 @@ describe('tenant agentic tool deployment boundary', () => {
       revision: 7,
       connection: { ANTHROPIC_AUTH_TOKEN: syntheticSecret },
     });
-    const service = new TenantAgenticToolSettingsService({} as TenantScopeAwareDatabase);
+    const service = new TenantAgenticToolSettingsService(
+      {} as TenantScopeAwareDatabase,
+      {} as never
+    );
 
     const settings = await service.get('claude-code');
 
@@ -71,6 +76,7 @@ describe('tenant agentic tool deployment boundary', () => {
       );
     const service = new TenantAgenticToolSettingsService(
       {} as TenantScopeAwareDatabase,
+      {} as never,
       (tool) => tool !== 'codex'
     );
     const settings = await service.find();

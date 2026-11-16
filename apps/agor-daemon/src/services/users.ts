@@ -109,6 +109,7 @@ import {
 } from '@agor/core/types';
 import { toUserDirectoryEntry } from '../auth/user-redaction.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
+import { assertSafeModelBaseUrl } from '../utils/model-base-url.js';
 import { resolveOwnerHomeStore } from '../utils/sandbox-context.js';
 import type { ClaudeUserCredentialPatchCoordinator } from './claude-credential-mutation.js';
 import { lockTenantAuthorizationFence } from './tenant-authorization-fence.js';
@@ -342,6 +343,30 @@ function ensureCanExactEmailLookup(params: Params | undefined, email: string): v
  *
  * Returns the next stored shape (caller writes it back to `data.agentic_tools`).
  */
+/** Per-user agentic-tools patch buckets that carry a model-provider base URL. */
+const AGENTIC_BASE_URL_FIELDS = [
+  ['claude-code', 'ANTHROPIC_BASE_URL'],
+  ['codex', 'OPENAI_BASE_URL'],
+] as const;
+
+/**
+ * Validate any model-provider base URL in a per-user agentic-tools patch before
+ * it is stored. The daemon later fetches this URL, so the mode-gated public-only
+ * policy applies; see {@link assertSafeModelBaseUrl}.
+ */
+export async function validateAgenticBaseUrls(
+  patch: AgenticToolsUpdate,
+  config: AgorConfig
+): Promise<void> {
+  const buckets = patch as Record<string, Record<string, string | null | undefined> | undefined>;
+  for (const [tool, field] of AGENTIC_BASE_URL_FIELDS) {
+    const raw = buckets[tool]?.[field];
+    if (typeof raw === 'string') {
+      await assertSafeModelBaseUrl(raw, field, config);
+    }
+  }
+}
+
 function applyAgenticToolsPatch(
   current: StoredAgenticTools,
   patch: AgenticToolsUpdate
@@ -1199,6 +1224,12 @@ export class UsersService {
           if (isInvalidModelConfigError(error)) throw new BadRequest(error.message);
           throw error;
         }
+      }
+
+      // Reject an unsafe model-provider base URL before it is persisted (the
+      // daemon later fetches it; see validateAgenticBaseUrls).
+      if (data.agentic_tools) {
+        await validateAgenticBaseUrls(data.agentic_tools, this.config);
       }
 
       // Handle per-tool credential patches (encrypt-on-write, drop-on-null).

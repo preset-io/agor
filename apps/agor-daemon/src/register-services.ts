@@ -1010,7 +1010,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   configService.app = app;
   app.use(
     '/agentic-tool-settings',
-    createTenantAgenticToolSettingsService(db, deploymentAgenticToolPolicy)
+    createTenantAgenticToolSettingsService(db, config, deploymentAgenticToolPolicy)
   );
   app.service('/agentic-tool-settings').hooks({ before: { all: [ctx.requireAuth] } });
   app.use('/agentic-tool-presets', createAgenticToolPresetsService(db));
@@ -1135,7 +1135,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Claude dynamic model discovery via @anthropic-ai/sdk's models.list().
   // Resolves ANTHROPIC_API_KEY per-user (with config.yaml + env fallback)
   // and falls back to AVAILABLE_CLAUDE_MODEL_ALIASES if no key or API failure.
-  app.use('/claude-models', createClaudeModelsService(db));
+  app.use('/claude-models', createClaudeModelsService(db, config));
   app.service('/claude-models').hooks({ before: { find: [ctx.requireAuth] } });
 
   // Copilot dynamic model discovery via @github/copilot-sdk's listModels().

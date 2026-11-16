@@ -1,4 +1,5 @@
 import {
+  type AgorConfig,
   type DeploymentAgenticToolPolicy,
   isDeploymentAgenticToolAvailable,
 } from '@agor/core/config';
@@ -20,6 +21,7 @@ import {
   TENANT_AGENTIC_TOOL_NAMES,
   TENANT_PROVIDER_CONNECTION_FIELDS,
 } from '@agor/core/types';
+import { assertSafeConnectionBaseUrls } from '../utils/model-base-url.js';
 import { deploymentAgenticToolUnavailableMessage } from './agentic-tool-deployment.js';
 
 function parseTool(id: string): TenantAgenticToolName {
@@ -35,6 +37,7 @@ export class TenantAgenticToolSettingsService {
 
   constructor(
     db: TenantScopeAwareDatabase,
+    private config: AgorConfig,
     private deploymentAvailable: (tool: TenantAgenticToolName) => boolean = () => true
   ) {
     this.repository = new TenantAgenticToolSettingsRepository(db);
@@ -112,6 +115,15 @@ export class TenantAgenticToolSettingsService {
     ) {
       throw new BadRequest('connection must be an object');
     }
+    // Reject an unsafe workspace model-provider base URL before it is persisted;
+    // the daemon later fetches it (model discovery, auth checks). Mirrors the
+    // per-user validation in users.ts.
+    if (data.connection) {
+      await assertSafeConnectionBaseUrls(
+        data.connection as Record<string, string | null | undefined>,
+        this.config
+      );
+    }
     try {
       await this.repository.patch(
         tool,
@@ -130,9 +142,10 @@ export class TenantAgenticToolSettingsService {
 
 export function createTenantAgenticToolSettingsService(
   db: TenantScopeAwareDatabase,
+  config: AgorConfig,
   policy: DeploymentAgenticToolPolicy
 ) {
-  return new TenantAgenticToolSettingsService(db, (tool) =>
+  return new TenantAgenticToolSettingsService(db, config, (tool) =>
     isDeploymentAgenticToolAvailable(tool, policy)
   );
 }
