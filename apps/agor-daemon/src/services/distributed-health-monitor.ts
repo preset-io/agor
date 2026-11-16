@@ -546,7 +546,7 @@ export class DistributedHealthMonitor {
         status: response.ok ? 'healthy' : 'unhealthy',
         message: response.ok
           ? `HTTP ${response.status}`
-          : `HTTP ${response.status} ${response.statusText}`,
+          : `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`,
         recordWhileStarting: true,
       };
     } catch {

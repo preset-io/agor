@@ -636,15 +636,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // fetch: it refuses non-public URLs, resolves the name and refuses any
     // private/loopback/link-local/metadata answer at connect time (defeating
     // wildcard-DNS and DNS rebinding), and never follows redirects, so a 3xx is
-    // reported as a failure rather than chased. `isBodyComplete` preserves the
-    // existing truncate-at-cap behavior — a body past the cap is truncated and
-    // flagged, not refused — while the hard byte ceiling only guards against a
-    // single oversize chunk.
+    // reported as a failure rather than chased.
+    //
+    // `isBodyComplete` preserves the existing truncate-at-cap behavior: once the
+    // body passes `maxBytes` it stops reading, and `readLimitedWebhookBody`
+    // trims to exactly `maxBytes` and flags `truncated` — a large body is
+    // truncated, not refused. The hard ceiling (`maxBytes` plus generous slack)
+    // is only a guard against a single pathological chunk; a realistic HTTP
+    // `data` chunk is well under it, so `isBodyComplete` always trims first.
     const pinnedWebhookFetch = createPinnedFetch({
       // Backstop only: the AbortController below trips first and carries the
       // user-facing "timed out" message, so this stays a hair longer.
       timeoutMs: ENVIRONMENT.LOGS_TIMEOUT_MS + 5_000,
-      maxBytes: maxBytes + ENVIRONMENT.LOGS_MAX_BYTES,
+      maxBytes: maxBytes + 2 * 1024 * 1024,
       isBodyComplete: (text) => Buffer.byteLength(text, 'utf8') > maxBytes,
     });
 
@@ -3074,16 +3078,21 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         status: response.ok ? 'healthy' : 'unhealthy',
         message: response.ok
           ? `HTTP ${response.status}`
-          : `HTTP ${response.status} ${response.statusText}`,
+          : `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`,
         recordWhileStarting: true,
       };
     } catch (error) {
       if (cancellationSignal?.aborted) return null;
       return {
         status: 'unhealthy',
+        // On public-egress paths the pinned fetch's refusal names the resolved
+        // address (e.g. "...resolves to 169.254.169.254"); surfacing it would
+        // hand an attacker the DNS/SSRF oracle this guard exists to close, so
+        // report a generic failure. Only a trusted-local probe (plain fetch, own
+        // network) surfaces the underlying error.
         message: timedOut
           ? 'Timeout'
-          : isDynamicHealth
+          : requirePublicEgress
             ? 'Health endpoint unreachable'
             : error instanceof Error
               ? error.message

@@ -57,6 +57,9 @@ export function isUrlShapedManagedEnvCommand(value: string): boolean {
  * therefore goes through `createPinnedFetch`, which resolves the name, refuses
  * any private answer at connect time, and connects to the vetted address
  * (defeating DNS rebinding).
+ *
+ * Internal-zone (`*.internal`) and mDNS (`*.local`) names are also rejected by
+ * name, as the previous guard did, even on the off chance they resolve public.
  */
 export function isAllowedManagedEnvWebhookUrl(urlString: string): boolean {
   let normalized: string | undefined;
@@ -66,8 +69,13 @@ export function isAllowedManagedEnvWebhookUrl(urlString: string): boolean {
     return false;
   }
   if (!normalized) return false;
+  if (!isPublicHttpUrl(normalized)) return false;
 
-  return isPublicHttpUrl(normalized);
+  const hostname = new URL(normalized).hostname.toLowerCase();
+  if (hostname === 'internal' || hostname.endsWith('.internal')) return false;
+  if (hostname.endsWith('.local')) return false;
+
+  return true;
 }
 
 /**

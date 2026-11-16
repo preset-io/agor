@@ -54,6 +54,12 @@ describe('managed environment webhook URL detection', () => {
     expect(isAllowedManagedEnvWebhookUrl('https://user:pass@hooks.example.com/start')).toBe(false); // credentials
   });
 
+  it('rejects internal-zone and mDNS hostnames by name', () => {
+    expect(isAllowedManagedEnvWebhookUrl('http://orchestrator.internal/start')).toBe(false);
+    expect(isAllowedManagedEnvWebhookUrl('http://internal/start')).toBe(false);
+    expect(isAllowedManagedEnvWebhookUrl('http://foo.local/start')).toBe(false);
+  });
+
   it('passes wildcard-DNS hostnames (rejected at fetch time, not by this syntactic filter)', () => {
     // `169-254-169-254.sslip.io` resolves to 169.254.169.254 but is not a literal
     // private address, so the connect-time DNS pin — not this filter — refuses it.

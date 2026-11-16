@@ -2965,6 +2965,46 @@ describe('BranchesService environment health requests', () => {
     });
   });
 
+  it('does not leak the resolved internal IP when a wildcard-DNS static health URL is refused', async () => {
+    // Passes the literal public-URL check but resolves to an internal IP; the
+    // pinned fetch refuses at connect time naming that IP. The reported message
+    // must stay generic so it does not become a DNS/SSRF oracle.
+    const branch = {
+      branch_id: 'wt-health-rebind' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-health-rebind',
+      path: '/tmp/wt-health-rebind',
+      branch_unique_id: 15,
+      health_check_url: 'https://169-254-169-254.sslip.io/latest/meta-data/',
+      environment_instance: { status: 'error' },
+    };
+    const app = {
+      get: (name: string) =>
+        name === 'config' ? { execution: { unix_user_mode: 'sandbox' } } : {},
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    // Mirror createPinnedFetch's guarded-lookup refusal, which names the IP.
+    vi.spyOn(
+      service as unknown as { fetchEnvironmentHealth: typeof fetch },
+      'fetchEnvironmentHealth'
+    ).mockRejectedValue(
+      new Error('Refusing to connect: 169-254-169-254.sslip.io resolves to 169.254.169.254')
+    );
+    globalThis.fetch = vi.fn();
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    const message = result.environment_instance?.last_health_check?.message ?? '';
+    expect(message).toBe('Health endpoint unreachable');
+    expect(message).not.toContain('169.254.169.254');
+    expect(result.environment_instance?.last_health_check?.status).toBe('unhealthy');
+  });
+
   it('does not probe an errored environment for an automatic observation', async () => {
     const branch = {
       branch_id: 'wt-health-error-automatic' as BranchID,
