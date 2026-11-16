@@ -124,6 +124,66 @@ describe('Feathers metrics hook', () => {
     expect(operationalMetrics.finished).toEqual(['socketio']);
   });
 
+  it('buckets an uncoded throw as a real 500, not a non-numeric label that 5xx alerting cannot reconcile', async () => {
+    const metrics = new RecordingMetrics();
+    const hook = createFeathersMetricsHook(metrics);
+    // A raw TypeError from unvalidated input carries no `.code`. It must not be
+    // tagged `status_code: 'error'` (the old behavior), which downstream 5xx
+    // alerting could not line up with an HTTP status family.
+    const uncoded = new TypeError("Cannot destructure property 'taskId' of 'null'");
+    await expect(
+      hook(
+        {
+          path: 'config/resolve-api-key',
+          method: 'create',
+          params: { provider: 'socketio' },
+        } as unknown as HookContext,
+        async () => {
+          throw uncoded;
+        }
+      )
+    ).rejects.toBe(uncoded);
+    expect(metrics.calls[0]?.tags).toMatchObject({ outcome: 'error', status_code: 500 });
+    expect(metrics.calls[0]?.tags?.status_code).not.toBe('error');
+  });
+
+  it('buckets a thrown non-object value as a real 500', async () => {
+    const metrics = new RecordingMetrics();
+    const hook = createFeathersMetricsHook(metrics);
+    await expect(
+      hook(
+        {
+          path: 'sessions',
+          method: 'get',
+          params: { provider: 'rest' },
+        } as unknown as HookContext,
+        async () => {
+          throw 'kaboom';
+        }
+      )
+    ).rejects.toBe('kaboom');
+    expect(metrics.calls[0]?.tags).toMatchObject({ outcome: 'error', status_code: 500 });
+  });
+
+  it('keeps a coded 4xx in the client-error family (never promoted to 5xx)', async () => {
+    const metrics = new RecordingMetrics();
+    const hook = createFeathersMetricsHook(metrics);
+    const badRequest = Object.assign(new Error('bad input'), { code: 400 });
+    await expect(
+      hook(
+        {
+          path: 'config/resolve-api-key',
+          method: 'create',
+          params: { provider: 'socketio' },
+        } as unknown as HookContext,
+        async () => {
+          throw badRequest;
+        }
+      )
+    ).rejects.toBe(badRequest);
+    expect(metrics.calls[0]?.tags).toMatchObject({ outcome: 'error', status_code: 400 });
+  });
+
   it('preserves MCP as a distinct low-cardinality transport', async () => {
     const metrics = new RecordingMetrics();
     const hook = createFeathersMetricsHook(metrics);
