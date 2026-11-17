@@ -8,18 +8,21 @@ import type {
   User,
 } from '@agor-live/client';
 import { Alert, Button, Flex, Spin, theme } from 'antd';
-import { useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { type AppActionsContextValue, AppActionsProvider } from '../../contexts/AppActionsContext';
 import { usePermissionDecision } from '../../hooks/usePermissionDecision';
 import { usePinnedOpenRows } from '../../hooks/usePinnedRows';
 import { useSessionMcpServerIds } from '../../hooks/useSessionMcpServerIds';
+import { useSessionTabs } from '../../hooks/useSessionTabs';
 import { useAgorStore } from '../../store/agorStore';
+import { clearOpenedSessionFlags } from '../../utils/sessionAttention';
 import { resolveSessionFromShortIdPure } from '../../utils/urlResolution';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { CompactNotice } from '../CompactNotice';
 import { SessionPanel } from '../SessionPanel';
 import { SessionSettingsModal } from '../SessionSettingsModal';
+import { OpenSessionsSwitcher } from '../SessionTabs';
 import { mobilePageStyle } from './constants';
 import { MobileHeader } from './MobileHeader';
 import { sessionBoardId } from './sessionBoardId';
@@ -113,6 +116,23 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   // Forward stay intact.
   const closeSession = useMobileBack(boardId ? `/m/board/${boardId}` : '/m');
 
+  // Same per-board open sessions as the desktop tabs; Back keeps them open.
+  const navigate = useNavigate();
+  const switchSession = (id: string) => {
+    clearOpenedSessionFlags(client, id);
+    navigate(`/m/session/${id}`, { replace: true });
+  };
+  const sessionTabs = useSessionTabs(client, currentUser?.user_id, boardId ?? null, {
+    displayedId: canonicalSessionId,
+    onSelect: switchSession,
+    onCloseLast: closeSession,
+  });
+  const { open: openSessionTab } = sessionTabs;
+  useEffect(() => {
+    if (canonicalSessionId) openSessionTab(canonicalSessionId);
+  }, [canonicalSessionId, openSessionTab]);
+  const hasSessionTabs = !!canonicalSessionId && sessionTabs.shownIds.length > 1;
+
   const handlePermissionDecision = usePermissionDecision(client);
 
   const appActions = useMemo(
@@ -205,6 +225,19 @@ export const SessionPage: React.FC<SessionPageProps> = ({
           onSessionMcpRetry={retrySessionMcpLoad}
           open
           onClose={closeSession}
+          onCloseOtherTabs={
+            hasSessionTabs ? () => sessionTabs.closeOthers(session.session_id) : undefined
+          }
+          headerExtra={
+            hasSessionTabs ? (
+              <OpenSessionsSwitcher
+                ids={sessionTabs.shownIds}
+                selectedId={session.session_id}
+                onSelect={switchSession}
+                onClose={sessionTabs.close}
+              />
+            ) : undefined
+          }
         />
       </div>
       <SessionSettingsModal

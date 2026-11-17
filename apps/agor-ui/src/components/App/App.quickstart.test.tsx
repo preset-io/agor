@@ -317,6 +317,8 @@ describe('App quick-start — always shows the tool picker', () => {
           removeCalls.push(id);
           return Promise.resolve();
         },
+        on: vi.fn(),
+        removeListener: vi.fn(),
       }),
     };
     const onCreateSession = optimisticCreate(SESSION_A, SESSION_B);
