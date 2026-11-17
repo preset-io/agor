@@ -2267,12 +2267,15 @@ describe('agor_models_list', () => {
     expect(parsed.codex.note).toContain('omit modelConfig');
 
     const codexIds = parsed.codex.models.map((m: { id: string }) => m.id);
-    expect(parsed.codex.default).toBe('gpt-6-astra');
-    expect(codexIds.slice(0, 5)).toEqual([
+    expect(parsed.codex.default).toBe('gpt-6.2-astra');
+    expect(codexIds.slice(0, 8)).toEqual([
+      'gpt-6.2-astra',
+      'gpt-6.2-sol',
       'gpt-6-astra',
       'gpt-6.1-sol',
       'gpt-6-sol',
       'gpt-6-luna',
+      'gpt-6.1-terra',
       'gpt-5.6-terra',
     ]);
     expect(codexIds).toContain('gpt-5.5');

@@ -30,3 +30,19 @@ reference, checked on 2026-09-29. Standard per-million-token rates are $2 input,
 $0.10 cached input, $2.50 cache writes, and $10 output. Requests above 272k input
 tokens use 2x input and cache rates and 1.5x output; the estimator uses base rates
 for the same reason as Astra.
+
+The `gpt-6.2-astra` and `gpt-6.2-sol` entries are supplemented from OpenAI's
+[GPT-6.2 Astra](https://developers.openai.com/api/docs/models/gpt-6.2-astra) and
+[GPT-6.2 Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol) model
+references, checked on 2026-11-17. Standard per-million-token rates are $8 input,
+$0.40 cached input, $10 cache writes, and $40 output for Astra, and $2 input,
+$0.10 cached input, $2.50 cache writes, and $10 output for Sol. Requests above 272k
+input tokens use 2x input and cache rates and 1.5x output; the estimator uses base
+rates for the same reason as Astra.
+
+The `gpt-6.1-terra` entry is supplemented from OpenAI's
+[GPT-6.1 Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra) model
+reference, checked on 2026-11-17. Standard per-million-token rates are $1 input,
+$0.05 cached input, $1.25 cache writes, and $5 output. Requests above 272k input
+tokens use 2x input and cache rates and 1.5x output; the estimator uses base rates
+for the same reason as Astra.
