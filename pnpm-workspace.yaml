@@ -132,8 +132,8 @@ minimumReleaseAgeExclude:
   - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.321'
   - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.321'
   - '@anthropic-ai/claude-agent-sdk@0.3.321'
-  - '@openai/codex-sdk@0.160.0'
-  - '@openai/codex@0.160.0-darwin-arm64 || 0.160.0-darwin-x64 || 0.160.0-linux-arm64 || 0.160.0-linux-x64 || 0.160.0-win32-arm64 || 0.160.0-win32-x64 || 0.160.0'
+  - '@openai/codex-sdk@0.169.0'
+  - '@openai/codex@0.169.0-darwin-arm64 || 0.169.0-darwin-x64 || 0.169.0-linux-arm64 || 0.169.0-linux-x64 || 0.169.0-win32-arm64 || 0.169.0-win32-x64 || 0.169.0'
   - '@opencode-ai/sdk@1.18.31'
   - opencode-ai@1.18.31
   - opencode-darwin-arm64@1.18.31
