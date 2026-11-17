@@ -2620,3 +2620,59 @@ describe('agor_sessions_archive tools', () => {
     });
   });
 });
+
+describe('MCP cleanup retry', () => {
+  it('passes the exact task/request revision to the authenticated stop route and preserves its outcome', async () => {
+    const create = vi.fn().mockResolvedValue({
+      success: true,
+      outcome: 'cleanup_verified',
+      stoppedTaskId: 'full-task',
+    });
+    const { agor_sessions_retry_cleanup } = await registerAndCaptureHandlers(
+      {
+        app: makeFakeApp({ '/sessions/:id/stop': { create } }),
+        userId: 'user-1',
+      },
+      ['agor_sessions_retry_cleanup']
+    );
+    const result = await agor_sessions_retry_cleanup({
+      sessionId: 'session',
+      taskId: 'task',
+      terminationRequestedAt: 'epoch',
+      recoveryRevision: 'observed-revision',
+    });
+    expect(create).toHaveBeenCalledWith(
+      {
+        retry_cleanup: true,
+        expected_task_id: 'full-task',
+        termination_requested_at: 'epoch',
+        recovery_revision: 'observed-revision',
+      },
+      expect.objectContaining({ route: { id: 'session' } })
+    );
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      success: true,
+      outcome: 'cleanup_verified',
+      stoppedTaskId: 'full-task',
+    });
+  });
+  it('propagates authorization failures without attempting a different session or task', async () => {
+    const create = vi.fn().mockRejectedValue(new Error('Forbidden'));
+    const { agor_sessions_retry_cleanup } = await registerAndCaptureHandlers(
+      {
+        app: makeFakeApp({ '/sessions/:id/stop': { create } }),
+        userId: 'user-1',
+      },
+      ['agor_sessions_retry_cleanup']
+    );
+    await expect(
+      agor_sessions_retry_cleanup({
+        sessionId: 'session',
+        taskId: 'foreign-task',
+        terminationRequestedAt: 'epoch',
+        recoveryRevision: 'revision',
+      })
+    ).rejects.toThrow('Forbidden');
+    expect(create).toHaveBeenCalledOnce();
+  });
+});

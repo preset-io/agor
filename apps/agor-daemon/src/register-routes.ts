@@ -128,6 +128,7 @@ import {
   isBranchArchiveOrDeleteOptions,
   isCanonicalFullUuid,
   isTaskPendingDispatch,
+  isTerminalTaskStatus,
   isUserApiKeySource,
   MCP_MEMBER_POLICIES,
   MCP_MEMBER_POLICY_CHANGED_EVENT,
@@ -252,7 +253,11 @@ import {
   markLocalAuthenticationLookup,
 } from './services/users.js';
 import { resolveWebTerminalCapability } from './terminal-capability.js';
-import { beginExecutorTermination, forceFailUnverifiedTask } from './termination-coordinator.js';
+import {
+  beginExecutorTermination,
+  forceFailUnverifiedTask,
+  reconcileTerminalExecutorCleanup,
+} from './termination-coordinator.js';
 import { createFeathersTracingHook } from './tracing/feathers.js';
 import {
   REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE,
@@ -3511,20 +3516,45 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         if (body.retry_cleanup === true) {
           const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
-          const { target, retry } = await runInFreshTerminationTenantWriteDatabase(async () => {
-            const target = await resolveCleanupRetryTarget({
+          const target = await runInFreshTerminationTenantWriteDatabase(() =>
+            resolveCleanupRetryTarget({
               sessionId: session.session_id,
               body,
               findTask: (taskId) => app.service('tasks').get(taskId, params),
+            })
+          );
+          const observed = await inCurrentTenantDatabaseScope(() =>
+            tasksService.get(target.taskId, params)
+          );
+          if (isTerminalTaskStatus(observed.status)) {
+            const cleanup = await reconcileTerminalExecutorCleanup({
+              app,
+              taskId: target.taskId,
+              sessionId: session.session_id,
+              requestedAt: target.requestedAt,
+              revision: target.revision,
+              params,
+              runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase,
             });
-            const retry = await tasksService.retryTermination(
-              target.taskId,
-              target.requestedAt,
-              target.revision,
-              { ...params, provider: undefined }
-            );
-            return { target, retry };
-          });
+            if (cleanup.status === 'terminal') {
+              return { success: true, outcome: 'cleanup_verified', stoppedTaskId: target.taskId };
+            }
+            return {
+              success: false,
+              outcome: cleanup.status === 'unverified' ? 'cleanup_unverified' : 'condition_changed',
+              reason:
+                'reason' in cleanup
+                  ? cleanup.reason
+                  : 'Cleanup state changed; refresh the task before retrying.',
+              stoppedTaskId: target.taskId,
+            };
+          }
+          const retry = await runInFreshTerminationTenantWriteDatabase(() =>
+            tasksService.retryTermination(target.taskId, target.requestedAt, target.revision, {
+              ...params,
+              provider: undefined,
+            })
+          );
           const taskId = target.taskId;
           if (!retry?.termination_request)
             return {

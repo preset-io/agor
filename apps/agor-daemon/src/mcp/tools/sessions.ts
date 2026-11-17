@@ -1799,6 +1799,41 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     }
   );
 
+  server.registerTool(
+    'agor_sessions_retry_cleanup',
+    {
+      description:
+        'Retry executor cleanup for an exact task, including a force-failed task whose executor termination remains unverified. Read agor_tasks_get first and pass its original termination request and current recovery revision. A terminal task keeps its recorded outcome. Only a trusted executor cleanup helper can verify a terminal remote executor stopped. A stale revision or different session is refused.',
+      annotations: { destructiveHint: true },
+      inputSchema: z.object({
+        sessionId: mcpRequiredId('sessionId', 'Session'),
+        taskId: mcpRequiredId('taskId', 'Task'),
+        terminationRequestedAt: mcpRequiredString(
+          'terminationRequestedAt',
+          'Exact termination_request.requested_at from agor_tasks_get.'
+        ),
+        recoveryRevision: mcpRequiredString(
+          'recoveryRevision',
+          'Exact termination_request.recovery_revision, or requested_at for an older request.'
+        ),
+      }),
+    },
+    async (args) => {
+      const sessionId = await resolveSessionId(ctx, args.sessionId);
+      const taskId = await resolveTaskId(ctx, args.taskId);
+      const result = await ctx.app.service('/sessions/:id/stop').create(
+        {
+          retry_cleanup: true,
+          expected_task_id: taskId,
+          termination_requested_at: args.terminationRequestedAt,
+          recovery_revision: args.recoveryRevision,
+        },
+        { ...ctx.baseServiceParams, route: { id: sessionId } }
+      );
+      return textResult(result);
+    }
+  );
+
   // Tool 13: agor_models_list
   //
   // Discovery tool so MCP-driven agents can find valid `model` strings without
