@@ -2127,8 +2127,8 @@ export async function registerMCPServices(
    * grant. Best effort: the grant is already gone and the user has to reconnect
    * either way.
    */
-  const invalidateRegistrationOnInvalidClient = (tenantId: string) =>
-    durableOAuthClientRegistrations
+  const invalidateRegistrationOnInvalidClient = (tenantId: string | undefined) =>
+    durableOAuthClientRegistrations && tenantId
       ? async (info: { mcpServerId: MCPServerID }) => {
           await durableOAuthClientRegistrations.invalidateForServer(tenantId, info.mcpServerId);
         }
