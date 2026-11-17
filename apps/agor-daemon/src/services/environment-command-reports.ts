@@ -1,12 +1,13 @@
 import {
   BranchRepository,
+  EnvironmentCommandConflictError,
   EnvironmentCommandRepository,
   requireCurrentTenantId,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { decodeEnvironmentLifecycleResult } from '@agor/core/environment/lifecycle-result';
-import { type Application, BadRequest, Forbidden } from '@agor/core/feathers';
+import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import {
   type AuthenticatedParams,
   ENVIRONMENT_COMMAND_ACTIONS,
@@ -125,9 +126,18 @@ export class EnvironmentCommandReportsService {
       // Claim checks current permission. Later progress/result reports carry no
       // new authority: the exact token and persisted initiating actor may only
       // settle the already-authorized attempt, even after permission revocation.
-      const environment = await new EnvironmentCommandRepository(scoped).report(report, {
-        expectedRequester,
-      });
+      const environment = await new EnvironmentCommandRepository(scoped)
+        .report(report, { expectedRequester })
+        .catch((error: unknown) => {
+          // A report that no longer matches the live attempt (superseded, expired,
+          // misclaimed, foreign actor) is an ordinary race, not a server fault.
+          // Surface a coded 409 so the executor stops retrying (no storm) and the
+          // uncoded throw never reads as a 5xx that pages on-call. The conflict is
+          // already observable as status_code:409 on the Feathers request metric,
+          // so no per-request log is emitted here (see context/guidelines/logging.md).
+          if (error instanceof EnvironmentCommandConflictError) throw new Conflict(error.message);
+          throw error;
+        });
       const branch = await branches.findById(report.branch_id);
       if (branch)
         emitServiceEvent(this.app, {
