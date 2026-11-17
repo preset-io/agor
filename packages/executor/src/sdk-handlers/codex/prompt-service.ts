@@ -481,20 +481,27 @@ export class CodexPromptService {
   /**
    * Build CodexOptions for `new Codex({...})`.
    *
-   * Subscription mode (no apiKey + useNativeAuth) scrubs `OPENAI_API_KEY` and
-   * `CODEX_API_KEY` from the spawned Codex CLI process so it falls back to
-   * `$CODEX_HOME/auth.json`. The SDK does NOT inherit `process.env` when an
-   * `env` object is provided, so we forward all other vars explicitly.
+   * We always provide an explicit `env` and hand the spawned Codex CLI its MCP
+   * bearer tokens / auth-header values through that child-process env ONLY —
+   * never via the executor's own `process.env`, where a same-uid shell the
+   * agent spawns could read them from `/proc/<executor-pid>/environ` (F26). The
+   * Codex CLI resolves each server's `bearer_token_env_var` / `env_http_headers`
+   * from this child env, and `applyAgorCodexLaunchPolicy` blanks those same
+   * variables from the shells Codex itself spawns (defense-in-depth).
    *
-   * API-key mode omits `env` entirely so the SDK inherits `process.env`
-   * normally and injects `CODEX_API_KEY` itself. Agor's product policy is
-   * applied here, at the one SDK launch boundary shared by every Codex
-   * executor topology.
+   * The SDK uses this `env` verbatim (no `process.env` inheritance) and still
+   * injects `CODEX_API_KEY` from `apiKey`, so forwarding the rest of
+   * `process.env` preserves prior inheritance behavior. Subscription mode
+   * (no apiKey + useNativeAuth) additionally scrubs `OPENAI_API_KEY` /
+   * `CODEX_API_KEY` so the CLI falls back to `$CODEX_HOME/auth.json`. Agor's
+   * product policy is applied here, at the one SDK launch boundary shared by
+   * every Codex executor topology.
    */
   private buildCodexOptions(
     apiKey: string | undefined,
     baseUrl: string | undefined,
     config: CodexConfigObject | undefined,
+    mcpEnv: Record<string, string> = {},
     includePlugins = false
   ): ConstructorParameters<typeof CodexSdk.Codex>[0] {
     const useSubscription = this.useNativeAuth && !apiKey;
@@ -505,15 +512,17 @@ export class CodexPromptService {
       config: applyAgorCodexLaunchPolicy(config, includePlugins),
     };
 
-    if (useSubscription) {
-      const env: Record<string, string> = {};
-      for (const [k, v] of Object.entries(process.env)) {
-        if (v === undefined) continue;
-        if (k === 'OPENAI_API_KEY' || k === 'CODEX_API_KEY') continue;
-        env[k] = v;
-      }
-      options.env = env;
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      if (v === undefined) continue;
+      if (useSubscription && (k === 'OPENAI_API_KEY' || k === 'CODEX_API_KEY')) continue;
+      env[k] = v;
     }
+    // MCP credentials live only on this child env, keyed by the same names the
+    // config's `bearer_token_env_var` / `env_http_headers` reference. They are
+    // intentionally absent from the executor's own `process.env`.
+    Object.assign(env, mcpEnv);
+    options.env = env;
 
     return options;
   }
@@ -544,38 +553,19 @@ export class CodexPromptService {
   }
 
   /**
-   * Snapshot the values of every `AGOR_MCP_*` env var (set by
-   * `buildMcpServersConfig` for built-in + per-server bearer tokens). Folded
-   * into the client fingerprint so a token rotation invalidates the cached
-   * Codex instance even when the config object's shape (server names,
-   * `bearer_token_env_var` keys) is unchanged.
-   *
-   * Without this, both subscription mode (where we pass `env` snapshot to
-   * `CodexOptions.env`) and API-key mode (where the SDK snapshots
-   * `process.env` at construction time) would keep spawning the cached Codex
-   * with a stale token after rotation.
-   */
-  private snapshotMcpEnvValues(): Record<string, string> {
-    const snapshot: Record<string, string> = {};
-    for (const key of Object.keys(process.env)) {
-      if (key.startsWith('AGOR_MCP_')) {
-        snapshot[key] = process.env[key] ?? '';
-      }
-    }
-    return snapshot;
-  }
-
-  /**
    * Recreate `this.codex` with the per-session `config` payload (instructions
    * file + MCP servers) only when the fingerprint changed. Prevents per-turn
    * SDK churn (issue #133) while still reflecting fresh per-session config.
    *
-   * The fingerprint includes a snapshot of `AGOR_MCP_*` env values so that
-   * rotated MCP bearer tokens invalidate the cache even when the config
-   * shape stays the same — see `snapshotMcpEnvValues()`.
+   * The fingerprint includes the resolved MCP credential env map (`mcpEnv`) so
+   * that rotated MCP bearer tokens invalidate the cache even when the config
+   * shape (server names, `bearer_token_env_var` keys) stays the same. The map
+   * is scoped to this call and handed to the Codex CLI child env via
+   * `buildCodexOptions`; it is never written to the executor's `process.env`.
    */
   private async ensureCodexClient(
     config: CodexConfigObject,
+    mcpEnv: Record<string, string> = {},
     includePlugins = false
   ): Promise<void> {
     const baseUrl = this.resolveBaseUrl();
@@ -585,7 +575,7 @@ export class CodexPromptService {
       useNativeAuth: this.useNativeAuth,
       includePlugins,
       config,
-      mcpEnv: this.snapshotMcpEnvValues(),
+      mcpEnv,
     });
 
     if (this.lastClientFingerprint === fingerprint) {
@@ -596,7 +586,7 @@ export class CodexPromptService {
       `🔄 [Codex] Per-session config changed, reinitializing SDK (apiKey=${this.apiKey ? 'set' : 'unset'}, useNativeAuth=${this.useNativeAuth})`
     );
     await this.replaceCodexClient(
-      this.buildCodexOptions(this.apiKey, baseUrl, config, includePlugins)
+      this.buildCodexOptions(this.apiKey, baseUrl, config, mcpEnv, includePlugins)
     );
     this.lastApiKey = this.apiKey || null;
     this.lastBaseUrl = baseUrl ?? null;
@@ -726,8 +716,13 @@ export class CodexPromptService {
    * `--config mcp_servers.<name>.<field>=<value>` flags for the Codex CLI.
    *
    * Bearer tokens (whether plain bearer, JWT, or OAuth) are resolved via the
-   * shared `resolveMCPAuthHeaders` (matching Claude) and injected via env
-   * vars referenced by `bearer_token_env_var` (never inlined in the URL).
+   * shared `resolveMCPAuthHeaders` (matching Claude) and returned in the
+   * `mcpEnv` map keyed by the env var name each server's `bearer_token_env_var`
+   * / `env_http_headers` references (never inlined in the URL or config argv).
+   * The caller hands that map to the Codex CLI child env via `buildCodexOptions`;
+   * it is never written to the executor's own `process.env`, so the tokens
+   * cannot be read from `/proc/<executor-pid>/environ` by a same-uid shell the
+   * agent spawns (F26).
    *
    * `forUserId` is required for per-user OAuth token injection at the
    * scoping layer — without it, OAuth-protected MCP servers won't pick up
@@ -740,7 +735,12 @@ export class CodexPromptService {
       forUserId?: UserID;
       requireMcpServers?: boolean;
     }
-  ): Promise<{ servers: CodexConfigObject; total: number; signInNotice?: string }> {
+  ): Promise<{
+    servers: CodexConfigObject;
+    total: number;
+    mcpEnv: Record<string, string>;
+    signInNotice?: string;
+  }> {
     const { forUserId, requireMcpServers = false } = context;
     codexDebug(`🔍 [Codex MCP] Fetching MCP servers for session ${shortId(sessionId)}...`);
     codexDebug(`   [Codex MCP] forUserId: ${forUserId || 'NOT SET'}`);
@@ -773,6 +773,9 @@ export class CodexPromptService {
     );
 
     const result: CodexConfigObject = {};
+    // Credential env vars (name -> value) handed to the Codex CLI child env
+    // only. Never written to the executor's `process.env` (F26).
+    const mcpEnv: Record<string, string> = {};
     const authDiagnostics = new McpAuthDiagnosticAccumulator();
     const signIn = new MCPSignInNoticeCollector();
     const claimedNames = new Set<string>();
@@ -782,7 +785,7 @@ export class CodexPromptService {
     if (mcpToken) {
       const daemonUrl = await getDaemonUrl();
       const agorBearerEnvVar = `AGOR_MCP_${shortId(sessionId)}_AGOR`;
-      process.env[agorBearerEnvVar] = mcpToken;
+      mcpEnv[agorBearerEnvVar] = mcpToken;
 
       claimedNames.add('agor');
       result.agor = {
@@ -871,16 +874,16 @@ export class CodexPromptService {
           // also what keeps secrets out of the SDK-generated `--config` argv.)
           // The env var name itself is arbitrary to Codex; we synthesize a
           // unique one per session + server + position so concurrent sessions
-          // and multi-header servers don't clobber each other in the shared
-          // process.env. The index (not the header name) keys the suffix
-          // because header names like `X-API-Key` aren't valid env-var
+          // and multi-header servers don't clobber each other within this
+          // call's `mcpEnv` map. The index (not the header name) keys the
+          // suffix because header names like `X-API-Key` aren't valid env-var
           // identifiers.
           const envHttpHeaders: Record<string, string> = {};
           for (const [index, [headerName, headerValue]] of Object.entries(
             customHeaders
           ).entries()) {
             const envVarName = `AGOR_MCP_${shortId(sessionId)}_${serverName.toUpperCase()}_HEADER_${index + 1}`;
-            process.env[envVarName] = headerValue;
+            mcpEnv[envVarName] = headerValue;
             envHttpHeaders[headerName] = envVarName;
           }
           serverConfig.env_http_headers = envHttpHeaders;
@@ -888,7 +891,7 @@ export class CodexPromptService {
         }
         if (bearerToken) {
           const envVarName = `AGOR_MCP_${shortId(sessionId)}_${serverName.toUpperCase()}`;
-          process.env[envVarName] = bearerToken;
+          mcpEnv[envVarName] = bearerToken;
           serverConfig.bearer_token_env_var = envVarName;
           codexDebug(`      auth: ${server.auth?.type ?? 'bearer'} token via ${envVarName}`);
         }
@@ -914,7 +917,7 @@ export class CodexPromptService {
     }
 
     const signInNotice = signIn.render();
-    return { servers: result, total, ...(signInNotice ? { signInNotice } : {}) };
+    return { servers: result, total, mcpEnv, ...(signInNotice ? { signInNotice } : {}) };
   }
 
   /**
@@ -1209,6 +1212,7 @@ export class CodexPromptService {
     const {
       servers: mcpServersConfig,
       total: mcpServerCount,
+      mcpEnv,
       signInNotice,
     } = await this.buildMcpServersConfig(sessionId, mcpToken, {
       forUserId,
@@ -1235,6 +1239,7 @@ export class CodexPromptService {
     // apiKey/baseUrl) actually changed — issue #133 protection.
     await this.ensureCodexClient(
       codexConfigPayload,
+      mcpEnv,
       session.permission_config?.codex?.includePlugins === true
     );
 
@@ -1923,14 +1928,6 @@ export class CodexPromptService {
       }
     }
     this.instructionsFilePaths.delete(sessionId);
-
-    // Clean up session-scoped MCP bearer token env vars
-    const envPrefix = `AGOR_MCP_${shortId(sessionId)}_`;
-    for (const key of Object.keys(process.env)) {
-      if (key.startsWith(envPrefix)) {
-        delete process.env[key];
-      }
-    }
 
     // Clean up stop flag
     this.stopRequested.delete(sessionId);

@@ -6,23 +6,19 @@ function isCodexConfigObject(value: unknown): value is CodexConfigObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Agor exports every MCP credential it hands Codex under this env var prefix. */
-const AGOR_MCP_ENV_PREFIX = 'AGOR_MCP_';
-
 /**
  * Blank every env var that carries an MCP credential in the shells Codex runs.
  *
  * Codex reads `bearer_token_env_var` and `env_http_headers` from its own
- * process env, which its shell tool would otherwise inherit. `set` names exact
- * variables and merges across config layers, so whatever exclude/filter form a
- * user, project or system layer uses stays in effect. Agor's own leftover
- * variables in the process env are blanked too.
+ * process env, which its shell tool would otherwise inherit. The names are
+ * derived from the server config Agor hands Codex — the only place these
+ * credentials live, since Agor never writes them to the executor's own
+ * `process.env`. `set` names exact variables and merges across config layers,
+ * so whatever exclude/filter form a user, project or system layer uses stays
+ * in effect.
  */
-function mcpCredentialShellPolicy(
-  config: CodexConfigObject | undefined,
-  env: NodeJS.ProcessEnv
-): CodexConfigObject {
-  const names = new Set(Object.keys(env).filter((name) => name.startsWith(AGOR_MCP_ENV_PREFIX)));
+function mcpCredentialShellPolicy(config: CodexConfigObject | undefined): CodexConfigObject {
+  const names = new Set<string>();
   const servers = config?.mcp_servers;
   for (const server of isCodexConfigObject(servers) ? Object.values(servers) : []) {
     if (!isCodexConfigObject(server)) continue;
@@ -64,8 +60,7 @@ function mcpCredentialShellPolicy(
  */
 export function applyAgorCodexLaunchPolicy(
   config: CodexConfigObject | undefined,
-  includePlugins = false,
-  env: NodeJS.ProcessEnv = process.env
+  includePlugins = false
 ): CodexConfigObject {
   const features = config?.features;
   if (features !== undefined && !isCodexConfigObject(features)) {
@@ -90,7 +85,7 @@ export function applyAgorCodexLaunchPolicy(
 
   return {
     ...config,
-    ...mcpCredentialShellPolicy(config, env),
+    ...mcpCredentialShellPolicy(config),
     features: {
       ...features,
       // Agor sessions/subsessions are the supported, observable orchestration boundary.
