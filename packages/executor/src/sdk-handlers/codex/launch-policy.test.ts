@@ -20,7 +20,7 @@ describe('applyAgorCodexLaunchPolicy', () => {
       },
     };
 
-    expect(applyAgorCodexLaunchPolicy(config, false, {})).toEqual({
+    expect(applyAgorCodexLaunchPolicy(config, false)).toEqual({
       features: {
         goals: false,
         memories: true,
@@ -45,7 +45,7 @@ describe('applyAgorCodexLaunchPolicy', () => {
   });
 
   it('creates the required per-process overrides when no other config exists', () => {
-    expect(applyAgorCodexLaunchPolicy(undefined, false, {})).toEqual({
+    expect(applyAgorCodexLaunchPolicy(undefined, false)).toEqual({
       features: { multi_agent: false, plugins: false },
       tools: { update_plan: { enabled: true } },
     });
@@ -59,7 +59,7 @@ describe('applyAgorCodexLaunchPolicy', () => {
       },
     };
 
-    expect(applyAgorCodexLaunchPolicy(config, false, {})).toEqual({
+    expect(applyAgorCodexLaunchPolicy(config, false)).toEqual({
       features: { multi_agent: false, plugins: false },
       tools: {
         web_search: true,
@@ -127,29 +127,32 @@ describe('MCP credential env vars', () => {
           local: { command: 'tool' },
         },
       },
-      false,
-      {}
+      false
     );
     expect(result.shell_environment_policy).toEqual({
       set: { AGOR_MCP_S1_AGOR: '', AGOR_MCP_S1_REMOTE: '', AGOR_MCP_S1_REMOTE_HEADER_1: '' },
     });
   });
 
-  it('keeps an existing policy and blanks Agor variables left over in the process env', () => {
+  it('keeps an existing shell policy while blanking the config-derived credential vars', () => {
     const result = applyAgorCodexLaunchPolicy(
-      { shell_environment_policy: { inherit: 'core', set: { CI: '1' } } },
-      false,
-      { AGOR_MCP_OLD_REMOVED: 'stale-bearer', PATH: '/bin' }
+      {
+        shell_environment_policy: { inherit: 'core', set: { CI: '1' } },
+        mcp_servers: {
+          agor: { url: 'http://localhost:3030/mcp', bearer_token_env_var: 'AGOR_MCP_S1_AGOR' },
+        },
+      },
+      false
     );
     expect(result.shell_environment_policy).toEqual({
       inherit: 'core',
-      set: { CI: '1', AGOR_MCP_OLD_REMOVED: '' },
+      set: { CI: '1', AGOR_MCP_S1_AGOR: '' },
     });
   });
 
   it('sets no shell policy when no MCP credential travels by env var', () => {
     expect(
-      applyAgorCodexLaunchPolicy({ mcp_servers: { local: { command: 'tool' } } }, false, {})
+      applyAgorCodexLaunchPolicy({ mcp_servers: { local: { command: 'tool' } } }, false)
     ).not.toHaveProperty('shell_environment_policy');
   });
 });
