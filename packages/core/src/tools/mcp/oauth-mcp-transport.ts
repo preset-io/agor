@@ -722,6 +722,68 @@ function dcrApplicationType(redirectUri: string): 'native' | 'web' {
     : 'web';
 }
 
+/** Drop the process-local DCR cache entry for one registration endpoint. */
+function forgetLocalDynamicClient(registrationEndpoint: string): void {
+  dynamicClientCache.delete(registrationEndpoint);
+}
+
+/**
+ * Hooks for recovering from an authorization server that has forgotten the
+ * client Agor registered with it (RFC 7591 registration store reset or expiry).
+ */
+export interface MCPOAuthUnknownClientRecovery {
+  /** Mark the durable registration unusable so the next resolve registers again. */
+  invalidateRegistration?: (registrationId: MCPOAuthClientRegistrationID) => Promise<void>;
+}
+
+const LINK_REGISTRATION_REL = /;\s*rel\s*=\s*"?[^",;]*registration[^",;]*"?/i;
+
+/**
+ * True when `/authorize` answers HTTP 400 for an unknown `client_id`.
+ *
+ * The browser, not Agor, normally receives that answer, so Agor asks once
+ * itself with a throwaway `state` and PKCE challenge: the real flow's secrets
+ * never leave with the probe. Two server-published signals count:
+ * - a `Link` header whose `rel` names a registration relation, and
+ * - a JSON body with `error=invalid_client`, or `error=invalid_request` carrying
+ *   a `registration_endpoint` (FastMCP-style servers).
+ * A redirect (a known client), any other status, a network failure or an
+ * unreadable body is "not proven unknown": the flow continues unchanged.
+ */
+async function authorizeReportsUnknownClient(
+  authorizationUrl: string,
+  options: { allowLocalhostHttp: boolean; assertCurrent?: () => void }
+): Promise<boolean> {
+  const probe = new URL(authorizationUrl);
+  probe.searchParams.set('state', crypto.randomBytes(16).toString('base64url'));
+  probe.searchParams.set('code_challenge', crypto.randomBytes(32).toString('base64url'));
+  let response: Response;
+  try {
+    response = await safeOutboundFetch(probe, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      redirect: 'error',
+      timeoutMs: 10_000,
+      maxResponseBytes: 64 * 1024,
+      allowLocalhostHttp: options.allowLocalhostHttp,
+      assertCurrent: options.assertCurrent,
+    });
+  } catch {
+    return false;
+  }
+  if (response.status !== 400) return false;
+  if (LINK_REGISTRATION_REL.test(response.headers.get('link') ?? '')) return true;
+  try {
+    const body = (await response.json()) as { error?: unknown; registration_endpoint?: unknown };
+    return (
+      body.error === 'invalid_client' ||
+      (body.error === 'invalid_request' && typeof body.registration_endpoint === 'string')
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Dynamic Client Registration (RFC 7591)
  *
@@ -2188,6 +2250,8 @@ async function startMCPOAuthFlowWithAS(opts: {
   reuseDynamicClientRegistration?: boolean;
   /** PostgreSQL daemons inject a fleet-wide encrypted registration authority. */
   resolveDynamicClientRegistration?: MCPOAuthDynamicClientRegistrationResolver;
+  /** Re-register once when the authorization server reports the client unknown. */
+  recoverUnknownClient?: MCPOAuthUnknownClientRecovery;
   resourceUri: string;
   issuer: string;
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
@@ -2250,48 +2314,81 @@ async function startMCPOAuthFlowWithAS(opts: {
   });
   console.log('[MCP OAuth] OAuth endpoints resolved');
 
-  const resolvedClient = await resolveOAuthClient({
-    clientId,
-    clientSecret: opts.clientSecret,
-    dcrMode,
-    authServerMetadata,
-    fallbackRegistrationEndpoint,
-    hasFullOverrides,
-    actualRedirectUri,
-    scope: scopeString,
-    cacheKey,
-    resourceUri,
-    issuer,
-    authorizationEndpoint,
-    tokenEndpoint,
-    compatibilityMode,
-    allowLocalhostHttp,
-    reuseDynamicClientRegistration: opts.reuseDynamicClientRegistration,
-    resolveDynamicClientRegistration: opts.resolveDynamicClientRegistration,
-    assertCurrent: opts.assertCurrent,
-  });
+  const resolveClient = () =>
+    resolveOAuthClient({
+      clientId,
+      clientSecret: opts.clientSecret,
+      dcrMode,
+      authServerMetadata,
+      fallbackRegistrationEndpoint,
+      hasFullOverrides,
+      actualRedirectUri,
+      scope: scopeString,
+      cacheKey,
+      resourceUri,
+      issuer,
+      authorizationEndpoint,
+      tokenEndpoint,
+      compatibilityMode,
+      allowLocalhostHttp,
+      reuseDynamicClientRegistration: opts.reuseDynamicClientRegistration,
+      resolveDynamicClientRegistration: opts.resolveDynamicClientRegistration,
+      assertCurrent: opts.assertCurrent,
+    });
+  let resolvedClient = await resolveClient();
 
   // CSRF state
   const state = crypto.randomBytes(32).toString('base64url');
 
-  // Before the URL exists, not after: a mismatch here is one Agor already
-  // knows about, and the provider's rejection of it is front-channel.
-  assertAuthorizeRedirectUriMatchesClient(resolvedClient, actualRedirectUri);
+  const buildAuthorizationUrl = (client: MCPOAuthResolvedClient): URL => {
+    // Before the URL exists, not after: a mismatch here is one Agor already
+    // knows about, and the provider's rejection of it is front-channel.
+    assertAuthorizeRedirectUriMatchesClient(client, actualRedirectUri);
 
-  // The only record of what Agor sent that survives a front-channel refusal.
-  logOAuthAuthorizeBuilt(resolvedClient, actualRedirectUri, authorizationEndpoint);
+    // The only record of what Agor sent that survives a front-channel refusal.
+    logOAuthAuthorizeBuilt(client, actualRedirectUri, authorizationEndpoint);
 
-  const authUrl = new URL(authorizationEndpoint);
-  authUrl.searchParams.set('response_type', 'code');
-  authUrl.searchParams.set('client_id', resolvedClient.clientId);
-  authUrl.searchParams.set('redirect_uri', actualRedirectUri);
-  authUrl.searchParams.set('code_challenge', pkce.challenge);
-  authUrl.searchParams.set('code_challenge_method', 'S256');
-  authUrl.searchParams.set('state', state);
-  authUrl.searchParams.set('resource', resourceUri);
-  applyProviderAuthorizationParameters(authUrl);
-  if (scopeString) {
-    authUrl.searchParams.set('scope', scopeString);
+    const url = new URL(authorizationEndpoint);
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('client_id', client.clientId);
+    url.searchParams.set('redirect_uri', actualRedirectUri);
+    url.searchParams.set('code_challenge', pkce.challenge);
+    url.searchParams.set('code_challenge_method', 'S256');
+    url.searchParams.set('state', state);
+    url.searchParams.set('resource', resourceUri);
+    applyProviderAuthorizationParameters(url);
+    if (scopeString) {
+      url.searchParams.set('scope', scopeString);
+    }
+    return url;
+  };
+
+  let authUrl = buildAuthorizationUrl(resolvedClient);
+
+  // A server that lost its registration store rejects every authorize for the
+  // cached client_id. Drop the cached registration, register again, and build
+  // the URL once more. One recovery per attempt: a server that rejects every
+  // registration must not loop, so the replacement is not probed.
+  if (
+    opts.recoverUnknownClient &&
+    resolvedClient.method === 'dynamic_registration' &&
+    (await authorizeReportsUnknownClient(authUrl.toString(), {
+      allowLocalhostHttp,
+      assertCurrent: opts.assertCurrent,
+    }))
+  ) {
+    console.log(
+      '[MCP OAuth] Authorization server does not recognize the cached client; re-registering'
+    );
+    if (resolvedClient.registrationEndpoint) {
+      forgetLocalDynamicClient(resolvedClient.registrationEndpoint);
+    }
+    if (resolvedClient.clientRegistrationId) {
+      await opts.recoverUnknownClient.invalidateRegistration?.(resolvedClient.clientRegistrationId);
+    }
+    opts.assertCurrent?.();
+    resolvedClient = await resolveClient();
+    authUrl = buildAuthorizationUrl(resolvedClient);
   }
 
   opts.assertCurrent?.();
@@ -2363,6 +2460,8 @@ export async function startMCPOAuthFlow(
     reuseDynamicClientRegistration?: boolean;
     /** Fleet-wide DCR lease/persistence boundary for multi-daemon callers. */
     resolveDynamicClientRegistration?: MCPOAuthDynamicClientRegistrationResolver;
+    /** Re-register once when `/authorize` reports the registered client unknown. */
+    recoverUnknownClient?: MCPOAuthUnknownClientRecovery;
     /** Exact protected resource identifier sent to authorization/token endpoints. */
     resourceUri?: string;
     compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
@@ -2431,6 +2530,7 @@ export async function startMCPOAuthFlow(
       scope: options.scope,
       reuseDynamicClientRegistration: options.reuseDynamicClientRegistration,
       resolveDynamicClientRegistration: options.resolveDynamicClientRegistration,
+      recoverUnknownClient: options.recoverUnknownClient,
       resourceUri,
       issuer: options.prefetchedAuthServerMetadata.issuer,
       compatibilityMode,
@@ -2537,6 +2637,7 @@ export async function startMCPOAuthFlow(
     resourceScopesSupported: resourceMetadata.scopes_supported,
     reuseDynamicClientRegistration: options?.reuseDynamicClientRegistration,
     resolveDynamicClientRegistration: options?.resolveDynamicClientRegistration,
+    recoverUnknownClient: options?.recoverUnknownClient,
     resourceUri,
     issuer: authServerUrl,
     compatibilityMode,

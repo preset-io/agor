@@ -3987,7 +3987,11 @@ describe('SQLite saved-row OAuth authority', () => {
     // had no `/authorize` handler at all.
     const authorizeResponse = await fetch(authorizationUrl, { redirect: 'manual' });
     expect(authorizeResponse.status).toBe(302);
-    expect(provider.authorizeVerdicts.map((verdict) => verdict.outcome)).toEqual(['redirect']);
+    // Two hits: Agor's own unknown-client probe at start, then this browser request.
+    expect(provider.authorizeVerdicts.map((verdict) => verdict.outcome)).toEqual([
+      'redirect',
+      'redirect',
+    ]);
 
     const callback = await harness.callback(authorizationUrl.searchParams.get('state')!);
     expect(callback.status).toBe(200);
@@ -4186,7 +4190,13 @@ describe('SQLite saved-row OAuth authority', () => {
       error: 'invalid_request',
       error_description: 'Mismatching redirect URI',
     });
-    expect(provider.authorizeVerdicts).toEqual([{ clientId, outcome: 'invalid_request' }]);
+    // Agor's start-time probe saw the same 400, but it carries no
+    // registration signal (a redirect mismatch, not an unknown client), so the
+    // client was kept: both hits name the one registered client.
+    expect(provider.authorizeVerdicts).toEqual([
+      { clientId, outcome: 'invalid_request' },
+      { clientId, outcome: 'invalid_request' },
+    ]);
 
     // Nothing came back to Agor: no callback, no token, and an attempt that
     // is still pending. The only durable proxy is its eventual expiry, which

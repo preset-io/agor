@@ -313,6 +313,23 @@ describe('refreshMCPToken', () => {
     expect(logged).not.toContain('auth.example.com');
   });
 
+  it('marks only invalid_client as a stale client registration', async () => {
+    const reject = async (error: string) => {
+      mockFetchOnce({ error }, { status: 401 });
+      return refreshMCPToken({
+        tokenEndpoint: 'https://auth.example.com/token',
+        refreshToken: 'rt',
+        clientId: 'cid',
+      }).catch((e) => e);
+    };
+    const invalidClient = await reject('invalid_client');
+    expect(invalidClient).toBeInstanceOf(InvalidGrantError);
+    expect(invalidClient.invalidClient).toBe(true);
+    const invalidGrant = await reject('invalid_grant');
+    expect(invalidGrant).toBeInstanceOf(InvalidGrantError);
+    expect(invalidGrant.invalidClient).toBe(false);
+  });
+
   it('throws generic Error for other OAuth errors', async () => {
     mockFetchOnce({ error: 'server_error' }, { status: 500 });
 
@@ -619,6 +636,41 @@ describe('refreshAndPersistToken', () => {
       mcpServerId: SERVER_ID,
     });
     expect(mockCompleteStandaloneRefresh).not.toHaveBeenCalled();
+  });
+
+  it('invokes onInvalidClient after deleting the grant on invalid_client, never on invalid_grant', async () => {
+    const run = async (error: string) => {
+      mockGetToken.mockResolvedValue({
+        user_id: USER_ID,
+        mcp_server_id: SERVER_ID,
+        oauth_access_token: 'old-a',
+        oauth_refresh_token: 'rt-revoked',
+        oauth_client_id: 'cid',
+      });
+      mockFindById.mockResolvedValue({
+        url: 'https://srv.example.com/mcp',
+        auth: { oauth_token_url: 'https://auth.example.com/token' },
+      });
+      mockFetchJson({ error }, 401);
+      mockDeleteGrantVersion.mockResolvedValue(true);
+      const onInvalidClient = vi.fn();
+      await expect(
+        refreshAndPersistToken({
+          db: { run: () => undefined } as any,
+          userId: USER_ID,
+          mcpServerId: SERVER_ID,
+          observedRefreshVersion: observedVersion(),
+          validateGrant: async () => true,
+          onInvalidClient,
+        })
+      ).rejects.toBeInstanceOf(InvalidGrantError);
+      return onInvalidClient;
+    };
+    const stale = await run('invalid_client');
+    expect(stale).toHaveBeenCalledWith({ userId: USER_ID, mcpServerId: SERVER_ID });
+    __resetRefreshMutexForTests();
+    const revoked = await run('invalid_grant');
+    expect(revoked).not.toHaveBeenCalled();
   });
 
   it('does not report or delete invalid_grant when the exact grant was replaced', async () => {
