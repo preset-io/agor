@@ -27,6 +27,7 @@ function makeUser() {
     email: 'user@example.com',
     credential_generation: 0,
     tokens_valid_after: new Date(0),
+    membership_refused_at: new Date(0),
     password: 'hashed-secret',
   };
 }
@@ -59,6 +60,7 @@ function verifyToken(token: string) {
 
 function expectRedactedUser(user: unknown): void {
   expect(user).not.toHaveProperty('tokens_valid_after');
+  expect(user).not.toHaveProperty('membership_refused_at');
   expect(user).not.toHaveProperty('password');
 }
 

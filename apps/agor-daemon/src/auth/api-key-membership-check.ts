@@ -31,7 +31,8 @@ interface TrackedMembership {
  * Rate-limits the issuer membership check for direct personal API key use.
  * This state is a per-replica throttle: a refusal deletes the user's keys durably,
  * so for keys a confirmation remembered here can't outlive it on another replica.
- * MCP session tokens have no such fence and rely on each replica's own check.
+ * MCP session tokens get the same durability from the refusal's `membership_refused_at`
+ * marker, which the MCP route checks against the token's task connection time.
  */
 export function createApiKeyMembershipCheck(options: {
   revalidate: LaunchSessionRevalidator;

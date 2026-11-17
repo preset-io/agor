@@ -2,7 +2,16 @@ import { execFile as execFileCallback } from 'node:child_process';
 import { request as httpRequest } from 'node:http';
 import { promisify } from 'node:util';
 import { resolveMultiTenancyConfig } from '@agor/core/config';
-import { getCurrentTenantId, SessionRepository } from '@agor/core/db';
+import {
+  eq,
+  getCurrentTenantId,
+  jsonSetString,
+  SessionRepository,
+  TaskRepository,
+  UsersRepository,
+  update,
+  users,
+} from '@agor/core/db';
 import type { DatadogTracer } from '@agor/core/tracing/datadog';
 import { Server as SdkServer } from '@modelcontextprotocol/server';
 import type { Request, Response } from 'express';
@@ -181,6 +190,13 @@ function buildRes() {
     },
   };
   return res;
+}
+
+/** Report every task as live, connected at `connectedAt`, so a signed token passes the task check. */
+function mockLiveTask(connectedAt = new Date(Date.now() - 60_000)) {
+  return vi
+    .spyOn(TaskRepository.prototype, 'liveExecutorConnectedAt')
+    .mockResolvedValue(connectedAt);
 }
 
 describe('POST /mcp token source', () => {
@@ -388,6 +404,7 @@ describe('POST /mcp token source', () => {
         sub: 'session-shared-looking',
         uid: 'user-shared-looking',
         tid: 'tenant-a',
+        tsk: 'task-shared-looking',
         aud: MCP_TOKEN_AUDIENCE,
         iss: MCP_TOKEN_ISSUER,
         iat: now,
@@ -771,12 +788,14 @@ describe('POST /mcp with personal API keys', () => {
         multiTenancy: resolveMultiTenancyConfig({}),
       });
       vi.spyOn(SessionRepository.prototype, 'exists').mockResolvedValue(true);
+      mockLiveTask();
       const now = Math.floor(Date.now() / 1000);
       const token = jwt.sign(
         {
           sub: 'session-for-deleted-user',
           uid: 'deleted-user',
           tid: 'default',
+          tsk: 'task-for-deleted-user',
           aud: MCP_TOKEN_AUDIENCE,
           iss: MCP_TOKEN_ISSUER,
           iat: now,
@@ -814,13 +833,15 @@ describe('POST /mcp with personal API keys', () => {
     async ({ outcome, status, userLookups }) => {
       initMcpTokens({ db: testSqliteDb(), multiTenancy: resolveMultiTenancyConfig({}) });
       vi.spyOn(SessionRepository.prototype, 'exists').mockResolvedValue(true);
-      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      mockLiveTask();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const now = Math.floor(Date.now() / 1000);
       const token = jwt.sign(
         {
           sub: 'session-for-member',
           uid: 'user-1',
           tid: 'default',
+          tsk: 'task-for-member',
           aud: MCP_TOKEN_AUDIENCE,
           iss: MCP_TOKEN_ISSUER,
           iat: now,
@@ -866,8 +887,215 @@ describe('POST /mcp with personal API keys', () => {
       );
       expect(check).toHaveBeenCalledWith({ tenantId: 'default', userId: 'user-1' });
       expect(getUser).toHaveBeenCalledTimes(userLookups);
+      const rejections = warn.mock.calls.filter(([line]) => String(line).startsWith('[mcp.auth]'));
+      expect(rejections).toEqual(
+        outcome === 'rejected' ? [[expect.stringContaining('reason=membership_refused ')]] : []
+      );
     }
   );
+
+  describe('session token membership fence', () => {
+    const connectedAt = new Date('2026-11-01T12:00:00.000Z');
+    const before = new Date(connectedAt.getTime() - 60_000);
+    const after = new Date(connectedAt.getTime() + 60_000);
+
+    function signTaskToken(claims: Record<string, unknown> = {}) {
+      const now = Math.floor(Date.now() / 1000);
+      return jwt.sign(
+        Object.fromEntries(
+          Object.entries({
+            sub: 'session-fenced',
+            uid: 'user-1',
+            tid: 'default',
+            tsk: 'task-fenced',
+            aud: MCP_TOKEN_AUDIENCE,
+            iss: MCP_TOKEN_ISSUER,
+            iat: now,
+            exp: now + 60,
+            jti: `fence-${Math.random()}`,
+            ...claims,
+          }).filter(([, value]) => value !== undefined)
+        ),
+        'mcp-server-test-secret',
+        { algorithm: 'HS256' }
+      );
+    }
+
+    async function postToolsList(
+      token: string,
+      getUser: (...args: never[]) => Promise<unknown>,
+      config: Parameters<typeof setupMCPRoutes>[3] = { multi_tenancy: undefined }
+    ) {
+      let status = 0;
+      await withMcpServer(
+        {
+          users: { get: getUser },
+          sessions: {
+            get: vi.fn(async (sessionId: string) => ({
+              session_id: sessionId,
+              agentic_tool: 'claude-code',
+              branch_id: 'branch-1',
+            })),
+          },
+        },
+        async (baseUrl) => {
+          const resp = await fetch(`${baseUrl}/mcp`, {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json, text/event-stream',
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 303, method: 'tools/list' }),
+          });
+          status = resp.status;
+          await resp.text();
+        },
+        config
+      );
+      return status;
+    }
+
+    function rejectionLines(warn: { mock: { calls: unknown[][] } }) {
+      return warn.mock.calls
+        .map(([line]) => String(line))
+        .filter((line) => line.startsWith('[mcp.auth]'));
+    }
+
+    it.each([
+      { name: 'removed after the task connected', marker: after, status: 401 },
+      { name: 'removed exactly when the task connected', marker: connectedAt, status: 401 },
+      { name: 're-admitted before the task connected', marker: before, status: 200 },
+      { name: 'never removed', marker: undefined, status: 200 },
+    ])('answers $status when the user was $name', async ({ marker, status }) => {
+      initMcpTokens({ db: testSqliteDb(), multiTenancy: resolveMultiTenancyConfig({}) });
+      vi.spyOn(SessionRepository.prototype, 'exists').mockResolvedValue(true);
+      mockLiveTask(connectedAt);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const getUser = vi.fn(async () => ({
+        user_id: 'user-1',
+        email: 'alice@example.com',
+        role: 'member',
+        ...(marker ? { membership_refused_at: marker } : {}),
+      }));
+
+      expect(await postToolsList(signTaskToken(), getUser)).toBe(status);
+      expect(rejectionLines(warn)).toEqual(
+        status === 401 ? [expect.stringContaining('reason=membership_fenced ')] : []
+      );
+    });
+
+    it('ignores a password change, which bumps only the browser-token markers', async () => {
+      initMcpTokens({ db: testSqliteDb(), multiTenancy: resolveMultiTenancyConfig({}) });
+      vi.spyOn(SessionRepository.prototype, 'exists').mockResolvedValue(true);
+      mockLiveTask(connectedAt);
+      const getUser = vi.fn(async () => ({
+        user_id: 'user-1',
+        email: 'alice@example.com',
+        role: 'member',
+        tokens_valid_after: after,
+        credential_generation: 7,
+      }));
+
+      expect(await postToolsList(signTaskToken(), getUser)).toBe(200);
+    });
+
+    it('rejects a taskless token before any session or task lookup', async () => {
+      initMcpTokens({ db: testSqliteDb(), multiTenancy: resolveMultiTenancyConfig({}) });
+      const exists = vi.spyOn(SessionRepository.prototype, 'exists').mockResolvedValue(true);
+      const live = mockLiveTask(connectedAt);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const getUser = vi.fn(async () => ({ user_id: 'user-1', email: 'a@x', role: 'member' }));
+
+      expect(await postToolsList(signTaskToken({ tsk: undefined }), getUser)).toBe(401);
+      expect(rejectionLines(warn)).toEqual([expect.stringContaining('reason=missing_task ')]);
+      expect(exists).not.toHaveBeenCalled();
+      expect(live).not.toHaveBeenCalled();
+      expect(getUser).not.toHaveBeenCalled();
+    });
+
+    it("reads the marker only from the token tenant's user row", async () => {
+      initMcpTokens({ db: testSqliteDb(), multiTenancy: resolveMultiTenancyConfig({}) });
+      vi.spyOn(SessionRepository.prototype, 'exists').mockResolvedValue(true);
+      mockLiveTask(connectedAt);
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      // The same user id is fenced in tenant-a only.
+      const rows: Record<string, Record<string, unknown>> = {
+        'tenant-a': { membership_refused_at: after },
+        'tenant-b': {},
+      };
+      const getUser = vi.fn(async (userId: string, params: { tenant: { tenant_id: string } }) => ({
+        user_id: userId,
+        email: 'alice@example.com',
+        role: 'member',
+        tenant_id: params.tenant.tenant_id,
+        ...rows[params.tenant.tenant_id],
+      }));
+      const config = {
+        multi_tenancy: { mode: 'required_from_auth' as const, trusted_header: 'x-agor-tenant-id' },
+      };
+
+      expect(await postToolsList(signTaskToken({ tid: 'tenant-b' }), getUser, config)).toBe(200);
+      expect(getUser.mock.calls.map(([, params]) => params.tenant.tenant_id)).toEqual(['tenant-b']);
+
+      expect(await postToolsList(signTaskToken({ tid: 'tenant-a' }), getUser, config)).toBe(401);
+      expect(getUser.mock.calls.map(([, params]) => params.tenant.tenant_id)).toEqual([
+        'tenant-b',
+        'tenant-a',
+      ]);
+    });
+  });
+
+  dbTest('fences a session token through the persisted removal marker', async ({ db }) => {
+    initMcpTokens({ db: testSqliteDb(), multiTenancy: resolveMultiTenancyConfig({}) });
+    vi.spyOn(SessionRepository.prototype, 'exists').mockResolvedValue(true);
+    const connectedAt = new Date(Date.now() - 60_000);
+    mockLiveTask(connectedAt);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const user = await new UsersRepository(db).create({ email: 'removed@example.com' });
+    await update(db, users)
+      .set({
+        data: jsonSetString(db, users.data, 'membership_refused_at', new Date().toISOString()),
+      })
+      .where(eq(users.user_id, user.user_id))
+      .run();
+    const now = Math.floor(Date.now() / 1000);
+    const token = jwt.sign(
+      {
+        sub: 'session-for-removed-user',
+        uid: user.user_id,
+        tid: 'default',
+        tsk: 'task-for-removed-user',
+        aud: MCP_TOKEN_AUDIENCE,
+        iss: MCP_TOKEN_ISSUER,
+        iat: now,
+        exp: now + 60,
+        jti: 'removed-user-session-token-test',
+      },
+      'mcp-server-test-secret',
+      { algorithm: 'HS256' }
+    );
+
+    await withMcpServer({ users: createUsersService(db) }, async (baseUrl) => {
+      const resp = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json, text/event-stream',
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 304, method: 'tools/list' }),
+      });
+
+      expect(resp.status).toBe(401);
+      expect((await resp.json()) as unknown).toMatchObject({
+        error: { message: 'Invalid or expired session token' },
+      });
+    });
+    expect(warn.mock.calls.map(([line]) => String(line))).toContainEqual(
+      expect.stringContaining('[mcp.auth] rejected reason=membership_fenced ')
+    );
+  });
 
   it('accepts a valid personal API key session context from X-Agor-Session-Id', async () => {
     await mockPersonalApiKeyUser();
@@ -1820,6 +2048,7 @@ describe('POST /mcp with personal API keys', () => {
       multiTenancy: resolveMultiTenancyConfig({}),
     });
     vi.spyOn(SessionRepository.prototype, 'exists').mockResolvedValue(true);
+    mockLiveTask();
 
     const now = Math.floor(Date.now() / 1000);
     const token = jwt.sign(
@@ -1827,6 +2056,7 @@ describe('POST /mcp with personal API keys', () => {
         sub: 'session-signed',
         uid: 'user-1',
         tid: 'default',
+        tsk: 'task-signed',
         aud: MCP_TOKEN_AUDIENCE,
         iss: MCP_TOKEN_ISSUER,
         iat: now,

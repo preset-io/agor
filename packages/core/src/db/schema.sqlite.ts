@@ -1074,8 +1074,9 @@ export const users = sqliteTable(
     // Monotonic local-credential generation copied into interactive JWTs.
     credential_generation: integer('credential_generation').notNull().default(0),
 
-    // Auth invalidation marker. Password changes set this timestamp so any
-    // previously issued browser access or refresh token is rejected.
+    // Auth invalidation marker. Password changes and membership refusals set
+    // this timestamp so any previously issued browser access or refresh token
+    // is rejected. `data.membership_refused_at` records refusals alone.
     tokens_valid_after: t.timestamp('tokens_valid_after'),
 
     // JSON blob for profile/preferences
@@ -1090,6 +1091,8 @@ export const users = sqliteTable(
         preferences?: Record<string, unknown>;
         // Stable external-auth identity mappings used by generic launch-code auth.
         external_identities?: UserExternalIdentity[];
+        // ISO time the issuer last refused membership; never cleared. Fences MCP tokens of earlier tasks.
+        membership_refused_at?: string;
         // Per-tool credentials and auth-adjacent config.
         //
         // Each entry is keyed by AgenticToolName and holds env-var-named fields

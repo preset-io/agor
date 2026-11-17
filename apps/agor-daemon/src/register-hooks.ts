@@ -122,6 +122,7 @@ import {
   isTaskScopedExecutorRequest,
   requireTaskScopedExecutorRuntimeToken,
 } from './auth/executor-runtime-scope.js';
+import { redactUserAuthMetadata } from './auth/user-redaction.js';
 import type {
   BoardsServiceImpl,
   MessagesServiceImpl,
@@ -898,14 +899,14 @@ export function protectFilesystemHomeWrite(context: HookContext, config: AgorCon
  * in ONLY when `requesterId === row.user_id` (`services/users.ts`). The
  * contract on `AGENTIC_TOOLS_PUBLIC_FIELDS` is explicit that it goes to the
  * field's owner and to nobody else — not even to an admin reading someone
- * else's profile — because a base URL can name an internal host.
+ * else's profile — because a base URL can name an internal host. Backend auth
+ * metadata (`redactUserAuthMetadata`) is stripped for every socket, owner included.
  */
 // biome-ignore lint/suspicious/noExplicitAny: hook results are untyped payloads
 function redactUserOwnerOnlyFields(user: any): any {
-  if (!user || typeof user !== 'object' || user.agentic_tools_public_values === undefined) {
-    return user;
-  }
-  const { agentic_tools_public_values: _ownerOnly, ...rest } = user;
+  if (!user || typeof user !== 'object') return user;
+  // Provider-less patches return backend auth metadata, which no socket may receive.
+  const { agentic_tools_public_values: _ownerOnly, ...rest } = redactUserAuthMetadata(user);
   return rest;
 }
 

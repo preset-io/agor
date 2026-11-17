@@ -23,6 +23,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 
 if (process.env.AGOR_HA_INTEGRATION !== '1') {
@@ -53,6 +54,7 @@ function mintMcpToken({ sessionId, userId, tenantId }) {
     sub: sessionId,
     uid: userId,
     tid: tenantId,
+    tsk: seedLiveTask({ tenantId, sessionId, userId }),
     aud: MCP_TOKEN_AUDIENCE,
     iss: MCP_TOKEN_ISSUER,
     iat: now,
@@ -62,6 +64,46 @@ function mintMcpToken({ sessionId, userId, tenantId }) {
   const data = `${b64url(header)}.${b64url(payload)}`;
   const sig = crypto.createHmac('sha256', JWT_SECRET).update(data).digest('base64url');
   return `${data}.${sig}`;
+}
+
+// Session MCP tokens must name a live task, as executor-minted ones do. Seed a
+// running, connected task row with the `docker exec postgres psql` pattern from
+// scripts/test-daemon-ha.mjs. The heartbeat stays NULL so the stale-heartbeat
+// sweep never reaps this executor-less fixture mid-run.
+const composeProject = process.env.COMPOSE_PROJECT_NAME ?? 'agor-ha-integration';
+const compose = ['compose', '-f', 'docker-compose.ha.yml', '-p', composeProject];
+function seedLiveTask({ tenantId, sessionId, userId }) {
+  for (const value of [tenantId, sessionId, userId]) {
+    assert.match(value, /^[A-Za-z0-9_-]+$/, 'live-task fixture ids must be plain identifiers');
+  }
+  const taskId = crypto.randomUUID();
+  const data = JSON.stringify({
+    full_prompt: 'ha live-task fixture',
+    message_range: { start_index: 0, end_index: 0, start_timestamp: new Date().toISOString() },
+    git_state: { ref_at_start: 'main', sha_at_start: '' },
+  });
+  const result = spawnSync(
+    'docker',
+    [
+      ...compose,
+      'exec',
+      '-T',
+      'postgres',
+      'psql',
+      '--set',
+      'ON_ERROR_STOP=1',
+      '--username',
+      'agor_bootstrap',
+      '--dbname',
+      'agor',
+      '--command',
+      `INSERT INTO tasks (tenant_id, task_id, session_id, created_at, started_at, executor_connected_at, status, created_by, data) VALUES ('${tenantId}', '${taskId}', '${sessionId}', now(), now(), now(), 'running', '${userId}', '${data}'::jsonb)`,
+    ],
+    { encoding: 'utf8', env: process.env }
+  );
+  assert.equal(result.status, 0, result.stderr || 'live-task fixture insert failed');
+  assert.match(result.stdout, /INSERT 0 1/);
+  return taskId;
 }
 
 async function loginPersona({ tenant, persona }, base = daemonA) {
