@@ -39,7 +39,7 @@ Release preparation covers merged changes from `v0.28.0` (`578bf8a6`) through `b
 
 ### Features
 
-- **GPT-6.2 Astra is the new Codex default** — adds `gpt-6.2-astra` and `gpt-6.2-sol` with their 1.05M context and pricing, and uses GPT-6.2 Astra for new Codex sessions with no configured model. Also adds `gpt-6.1-terra` (1.05M context), which replaces GPT-5.6 Terra as the suggested lower-cost model. GPT-6 Astra, GPT-6.1 Sol and the older models stay selectable. The pinned Codex SDK and bundled CLI move to 0.169.0, because 0.160.0 rejects the GPT-6.2 models under ChatGPT sign-in.
+- **GPT-6.2 Astra is the new Codex default** — adds `gpt-6.2-astra` and `gpt-6.2-sol` with their 1.05M context and pricing, and uses GPT-6.2 Astra for new Codex sessions with no configured model. Also adds `gpt-6.1-terra` (1.05M context), which replaces GPT-5.6 Terra as the suggested lower-cost model. GPT-6 Astra, GPT-6.1 Sol and the older models stay selectable. The pinned Codex SDK and bundled CLI move to 0.169.0, because 0.160.0 rejects the GPT-6.2 models under ChatGPT sign-in. ([#3266](https://github.com/preset-io/agor/pull/3266))
 
 ### Security
 
