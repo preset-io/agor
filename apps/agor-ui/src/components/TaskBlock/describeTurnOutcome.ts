@@ -26,6 +26,7 @@ export type TurnOutcomeCause =
   | 'restart'
   | 'stopped'
   | 'access_changed'
+  | 'suspended'
   | 'approval_timeout'
   | 'not_connected'
   | 'never_started'
@@ -229,6 +230,13 @@ export function describeTurnOutcome(
       type: 'warning',
       message: `Agor restarted during this run. ${work}`,
       action: 'resume',
+    };
+  }
+  if (cause === 'tenant_suspension') {
+    return {
+      cause: 'suspended',
+      type: 'warning',
+      message: `This workspace is suspended, so the agent was stopped. ${work}`,
     };
   }
   if (cause === 'user_stop' || status === TaskStatus.STOPPED) {

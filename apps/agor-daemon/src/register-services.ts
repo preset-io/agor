@@ -161,6 +161,7 @@ import {
   MCP_OAUTH_BROWSER_OPERATIONS,
   ROLES,
   TaskStatus,
+  TENANT_RESTRICTED_TASK_MESSAGE,
 } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import { runWithLogContext } from '@agor/core/utils/log-context';
@@ -169,6 +170,7 @@ import { getMcpOAuthReturnUrl } from '@agor/core/utils/url';
 import type express from 'express';
 import { getAgenticToolDaemonContribution } from './agentic-tool-daemon-contributions.js';
 import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
+import { isCurrentTenantRuntimeActive } from './auth/tenant-access.js';
 import {
   hasSecureLocalCredentialOverlay,
   isHostedOpenCode,
@@ -436,7 +438,12 @@ import {
   readSocketAuthorityId,
 } from './utils/socket-request-authority.js';
 import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
-import { classifyExecutorExit, executorExitTermination } from './utils/task-launch-state.js';
+import {
+  classifyExecutorExit,
+  type ExecutorExitDisposition,
+  executorExitTermination,
+  isLaunchRefusal,
+} from './utils/task-launch-state.js';
 import { withFreshTenantWrite } from './utils/tenant-db-scope.js';
 import type { OAuthWidgetParams } from './widgets/oauth/index.js';
 
@@ -1952,14 +1959,15 @@ export function createExecuteHandler(
 
         let templatedLauncherAbsenceVerified = false;
         let launchRefused = false;
+        let disposition: ExecutorExitDisposition = 'authoritative';
         if (spawnContext.mode === 'templated') {
-          const disposition = classifyExecutorExit({
+          disposition = classifyExecutorExit({
             mode: spawnContext.mode,
             code,
             nonzeroMayHaveDispatched:
               config.execution?.executor_command_nonzero_may_have_dispatched === true,
           });
-          launchRefused = disposition === 'refused';
+          launchRefused = isLaunchRefusal(disposition);
           if (disposition !== 'authoritative' && !launchRefused) {
             if (disposition === 'ambiguous') {
               try {
@@ -1985,8 +1993,34 @@ export function createExecuteHandler(
           templatedLauncherAbsenceVerified = true;
         }
 
+        if (disposition === 'restricted') {
+          // Before settling this task, whose settlement drains the queue into the same refusal.
+          try {
+            const stopped = await runInFreshTerminationTenantWriteDatabase(() =>
+              new TaskRepository(db).stopQueuedForTenantSuspension(
+                session.session_id,
+                TENANT_RESTRICTED_TASK_MESSAGE
+              )
+            );
+            for (const task of stopped) {
+              emitServiceEvent(app, {
+                path: 'tasks',
+                event: 'patched',
+                data: task,
+                params,
+                id: task.task_id,
+              });
+            }
+          } catch (error) {
+            console.warn(
+              `${logPrefix} Failed to stop queued prompts after restricted launch:`,
+              error
+            );
+          }
+        }
+
         try {
-          const { cause, errorMessage } = executorExitTermination(code, launchRefused);
+          const { cause, errorMessage } = executorExitTermination(code, disposition);
           const termination = await requestExecutorTermination({
             app,
             taskId,
@@ -1998,7 +2032,13 @@ export function createExecuteHandler(
             // launch path that can prove no remote executor was created.
             absenceVerified: templatedLauncherAbsenceVerified,
             sdkFailure: {
-              reason: cause,
+              // A restricted refusal stops as a suspension; its diagnosis keeps the absence proof.
+              reason:
+                disposition === 'restricted'
+                  ? 'launch_restricted'
+                  : launchRefused
+                    ? 'launch_refused'
+                    : 'heartbeat_lost',
               detected_at: new Date().toISOString(),
               tool: session.agentic_tool,
               termination: 'requested',
@@ -3706,6 +3746,12 @@ export async function registerMCPServices(
     try {
       if (pendingFlow.context.relay && !pendingFlow.relayDelivered)
         throw new Forbidden('Hosted OAuth requires the authenticated Cloud callback');
+      const flowTenantId = record?.tenantId ?? pendingFlow.tenantId;
+      // Entry check: a restricted tenant's callback neither exchanges the code nor saves a grant.
+      const tenantActive = flowTenantId
+        ? await runWithTenantContext(flowTenantId, () => isCurrentTenantRuntimeActive(db))
+        : await isCurrentTenantRuntimeActive(db);
+      if (!tenantActive) throw new Error('Tenant access is restricted');
       await assertFlowInitiatorStillEntitled(
         record?.userId ?? pendingFlow.userId,
         record?.tenantId ?? pendingFlow.tenantId,

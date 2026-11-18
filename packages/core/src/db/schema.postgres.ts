@@ -1671,6 +1671,24 @@ export const boardGroupGrants = pgTable(
   })
 );
 
+// Controller-owned runtime intent with no CRUD service; release keeps the revision watermark.
+export const tenantRestrictions = pgTable(
+  'tenant_restrictions',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    controller_id: text('controller_id').notNull(),
+    placement_id: text('placement_id').notNull(),
+    operation_id: text('operation_id').notNull(),
+    revision: bigint('revision', { mode: 'number' }).notNull(),
+    phase: text('phase').notNull(),
+    protocol_version: integer('protocol_version').notNull().default(1),
+    updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.tenant_id, table.controller_id] }),
+  })
+);
+
 /**
  * App Variables - daemon-owned application settings and secrets.
  *

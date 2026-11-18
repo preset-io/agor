@@ -25,6 +25,19 @@ describe('daemon tenant service token binding', () => {
     expect(decoded.tenant_id).toBe('tenant-a');
   });
 
+  it('carries the tenant credential generation only when one is supplied', () => {
+    const app = { settings: { authentication: { secret: 'test-secret' } } };
+    const epoch = 'c'.repeat(64);
+    const bound = jwt.decode(generateDaemonServiceToken(app, undefined, epoch)) as Record<
+      string,
+      unknown
+    >;
+    expect(bound.tenant_credential_epoch).toBe(epoch);
+    expect(jwt.decode(generateDaemonServiceToken(app))).not.toHaveProperty(
+      'tenant_credential_epoch'
+    );
+  });
+
   it('omits the tenant claim outside tenant context when it is not required', () => {
     expect(serviceTokenScopeForCurrentTenant()).toEqual({});
   });

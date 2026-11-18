@@ -64,7 +64,7 @@ ownership. Neither replaces `Task.status`.
 | `stopping`            | Termination is durably claimed; containment is not yet settled.        | Daemon termination coordinator                                    |
 | `completed`           | The SDK turn completed successfully.                                   | Terminal                                                          |
 | `failed`              | The turn or supervised containment failed.                             | Terminal                                                          |
-| `stopped`             | A user-requested stop settled, or restart recovery released an orphan. | Terminal                                                          |
+| `stopped`             | A user or suspension stop settled, or restart released an orphan task. | Terminal                                                          |
 | `timed_out`           | A permission/input wait expired.                                       | Terminal                                                          |
 
 The important transitions are:
@@ -87,6 +87,11 @@ QUEUED -----> DISPATCHING <----- CREATED
                                |
                        STOPPED or FAILED
 ```
+
+A tenant suspension also moves pending prompts straight to `STOPPED` with cause
+`tenant_suspension`: closing the tenant stops its `created` and `queued` tasks,
+and a launch refused for suspension (exit `76`, below) stops its session's
+`queued` tasks. Neither ever ran, so neither passes through `STOPPING`.
 
 Claude completion requires an SDK result, not merely iterator exhaustion or a
 persisted assistant-message ID. A result with `is_error: true` is a failure even
@@ -182,6 +187,18 @@ an explicit mapping-review point.
   the refusal settles it `stopped` with verified absence. Only that verified
   path persists `launch_refused`, so the reconciler resumes a stranded
   `launch_refused` request after a daemon restart with the same absence proof.
+- With `AGOR_EXECUTOR_LAUNCH_RESTRICTED_EXIT=76`, a templated launcher exit `76`
+  means admission was refused because the tenant is suspended or reactivating,
+  before the runtime applied the restriction, and nothing was created. It is
+  contained exactly like `75`, but the prompt requests cause `tenant_suspension`
+  with an `sdk_failure.reason` of `launch_restricted`, so the task settles
+  `stopped`. The reconciler resumes that pair with the same absence proof; a
+  `tenant_suspension` request without the diagnosis keeps the safeguard. When
+  the runtime's own suspension Stop claimed first, the diagnosis is not stored,
+  so a restart before settlement resumes without that proof, as for a Stop that
+  preceded a `75` refusal. Before requesting that termination, the prompt
+  `onExit` stops the session's `queued` prompts with cause `tenant_suspension`,
+  since each would be refused the same way.
 - Connected active tasks heartbeat every 10 seconds by default. A scoped
   executor continues heartbeat and pulse telemetry while `stopping` until its
   provider cleanup returns and it reports quiescence.
@@ -193,7 +210,11 @@ an explicit mapping-review point.
   below the immutable launch floor denies the write. Higher access does not
   change existing mounts.
 - An explicit denial claims the normal fenced `stopping` path with cause
-  `authorization_revoked`. Authority-store/query errors throw and do not stamp
+  `authorization_revoked`. A closed tenant or a stale restriction generation
+  claims `tenant_suspension` instead; only a durable denial may replace that
+  cause, decided under the claim's row lock. The restriction reconciler's
+  claim also re-reads closure under the execution fence, so it never stops a
+  reopened tenant's task. Authority-store/query errors throw and do not stamp
   liveness. The existing stale-heartbeat threshold supplies the bounded
   fail-closed backstop; there is no authority cache, Redis dependency, second
   watchdog, or uncertainty-specific timer.
@@ -207,7 +228,8 @@ an explicit mapping-review point.
   Tasks or tenants. PostgreSQL uses database time; startup offset, saturated
   drain jitter, and idle backoff reduce contention but never confer correctness.
 - Candidate writes assert the tenant write gate in the same fresh tenant
-  transaction as the mutation.
+  transaction as the mutation. Candidate and session reloads use single-call
+  termination reads, so recovery continues while the tenant is restricted.
 - Every daemon may discover the same routing refs. A Task-specific opaque
   coordination token and expiring lease unconditionally fence normal
   containment settlement. Guarded-unverified state clears the token and
@@ -385,6 +407,11 @@ admission/UI projection:
 - terminal settlement writes the task terminal state, then projects the
   session back to its appropriate resting state in the same transaction;
   queue processing and other side effects run after commit;
+- a Task settling while its tenant is restricted (or whose restriction read
+  or session read cannot verify admission) keeps that atomic projection, so
+  the session still leaves `running`; completion automation does not run and
+  is not replayed after reactivation (see
+  [tenant-restrictions.md](tenant-restrictions.md));
 - reconciliation repairs a failed/not-ready session when no non-queued task
   still owns that busy state;
 - the browser confirms executing-to-resting Session events with caller-scoped

@@ -804,6 +804,7 @@ describe('createClient', () => {
         'connectExecutor',
         'reportTerminationComplete',
         'reportExecutorInterruption',
+        'getTerminationState',
         'reportRuntimeTelemetry',
         'reportSdkHealthFailure',
         'beginOpenCodeCheckpoint',

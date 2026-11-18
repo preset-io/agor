@@ -20,7 +20,12 @@ import {
   UserApiKeysRepository,
   users,
 } from '@agor/core/db';
-import type { Params, User, UserID } from '@agor/core/types';
+import {
+  type Params,
+  TENANT_RESTRICTED_ERROR_CODE,
+  type User,
+  type UserID,
+} from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { authenticatedHealthInstance } from '../health/instance.js';
@@ -33,6 +38,7 @@ import {
   createLaunchSessionRevalidator,
 } from './launch-auth.js';
 import { createRefreshTokenService } from './refresh-token-service.js';
+import { applyTestRestriction, releaseTestRestriction } from './tenant-restriction.test-support.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -61,6 +67,7 @@ function signClaims(input: {
   subject: string;
   email: string;
   tenantId: string;
+  restriction?: { controllerId: string; revision: number };
   displayName?: string;
 }): string {
   return jwt.sign(
@@ -70,6 +77,7 @@ function signClaims(input: {
       role: 'member',
       tenant_id: input.tenantId,
       instance_id: 'instance-1',
+      ...(input.restriction ? { tenant_restriction: input.restriction } : {}),
       ...(input.displayName ? { workspace_display_name: input.displayName } : {}),
     },
     ASSERTION_SECRET,
@@ -133,7 +141,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       };
     }
 
-    function service(db: TenantScopeAwareDatabase, launchConfig = config()) {
+    function service(
+      db: TenantScopeAwareDatabase,
+      {
+        controllerId,
+        launchConfig = config(),
+      }: { controllerId?: string; launchConfig?: AgorConfig } = {}
+    ) {
+      if (controllerId) launchConfig.external_launch!.restriction_controller_id = controllerId;
       const { settings } = resolveExternalLaunchSettings(launchConfig);
       return createLaunchAuthService({
         db,
@@ -146,6 +161,113 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         usersService: usersService(db),
       });
     }
+
+    it('rejects a restricted launch before user or default-board projection and leaves the neighbor usable', async () => {
+      const tenantId = `launch-restricted-${generateId()}`;
+      const neighborId = `launch-neighbor-${generateId()}`;
+      const assertions = new Map(
+        [tenantId, neighborId].map((id) => [
+          id,
+          signClaims({ subject: id, email: `${id}@example.invalid`, tenantId: id }),
+        ])
+      );
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (_url: string, init?: RequestInit) => {
+          const body = JSON.parse(String(init?.body)) as { launch_code: string };
+          return Response.json({ assertion: assertions.get(body.launch_code) });
+        })
+      );
+      await applyTestRestriction(dbB, tenantId, 1, 'restrict', { controllerId: 'launch-test' });
+      await expect(service(dbA).create({ launchCode: tenantId })).rejects.toThrow(
+        'Invalid one-time launch assertion'
+      );
+      await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+        expect(await select(scoped).from(users).all()).toHaveLength(0);
+        expect(await select(scoped).from(boards).all()).toHaveLength(0);
+      });
+      await expect(service(dbA).create({ launchCode: neighborId })).resolves.toMatchObject({
+        user: { email: `${neighborId}@example.invalid` },
+      });
+    });
+
+    it('rejects delayed pre-suspension assertions after activation before projection, but accepts a fresh exact generation', async () => {
+      const tenantId = `launch-epoch-${generateId()}`;
+      const identity = { subject: tenantId, email: `${tenantId}@example.invalid`, tenantId };
+      let assertion = signClaims(identity);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => Response.json({ assertion }))
+      );
+      await applyTestRestriction(dbB, tenantId, 1, 'restrict', { controllerId: 'launch-test' });
+      await releaseTestRestriction(dbB, tenantId, 2, { controllerId: 'launch-test' });
+      for (const restriction of [
+        undefined,
+        { controllerId: 'launch-test', revision: 0 },
+        { controllerId: 'other', revision: 2 },
+      ]) {
+        assertion = signClaims({ ...identity, restriction });
+        await expect(
+          service(dbA, { controllerId: 'launch-test' }).create({ launchCode: 'delayed' })
+        ).rejects.toMatchObject({ code: 401 });
+      }
+      await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+        expect(await select(scoped).from(users).all()).toHaveLength(0);
+        expect(await select(scoped).from(boards).all()).toHaveLength(0);
+      });
+      assertion = signClaims({
+        ...identity,
+        restriction: { controllerId: 'launch-test', revision: 2 },
+      });
+      await expect(
+        service(dbA).create({ launchCode: 'missing-provider-binding' })
+      ).rejects.toMatchObject({ code: 401 });
+      const fresh = await service(dbA, { controllerId: 'launch-test' }).create({
+        launchCode: 'fresh',
+      });
+      expect(jwt.verify(fresh.accessToken, RUNTIME_SECRET)).toMatchObject({
+        tenant_id: tenantId,
+        tenant_credential_epoch: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+    });
+
+    it('accepts a launch at the watermark a re-home seeded on a fresh destination runtime', async () => {
+      // A re-homed Workspace arrives with empty restriction history; the seed restates the Team's revision.
+      const tenantId = `launch-seeded-${generateId()}`;
+      const identity = { subject: tenantId, email: `${tenantId}@example.invalid`, tenantId };
+      let assertion = signClaims(identity);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => Response.json({ assertion }))
+      );
+      // Before the seed the destination holds nothing, so the positive claim is refused.
+      assertion = signClaims({
+        ...identity,
+        restriction: { controllerId: 'launch-test', revision: 5 },
+      });
+      await expect(
+        service(dbA, { controllerId: 'launch-test' }).create({ launchCode: 'unseeded' })
+      ).rejects.toMatchObject({ code: 401 });
+      await applyTestRestriction(dbB, tenantId, 5, 'seed_active', { controllerId: 'launch-test' });
+      const launched = await service(dbA, { controllerId: 'launch-test' }).create({
+        launchCode: 'seeded',
+      });
+      expect(jwt.verify(launched.accessToken, RUNTIME_SECRET)).toMatchObject({
+        tenant_id: tenantId,
+      });
+      // The seeded row is an exact watermark, not a blanket opening.
+      for (const restriction of [
+        undefined,
+        { controllerId: 'launch-test', revision: 0 },
+        { controllerId: 'launch-test', revision: 4 },
+        { controllerId: 'other', revision: 5 },
+      ]) {
+        assertion = signClaims({ ...identity, restriction });
+        await expect(
+          service(dbA, { controllerId: 'launch-test' }).create({ launchCode: 'stale' })
+        ).rejects.toMatchObject({ code: 401 });
+      }
+    });
 
     it('keeps first-user projection and immutable default-board ownership in one fence', async () => {
       const tenantId = `launch-owner-${generateId()}`;
@@ -251,9 +373,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         })
       );
       await Promise.all([
-        service(dbA, launchConfig).create({ launchCode: 'a' }),
-        service(dbB, launchConfig).create({ launchCode: 'b' }),
-        service(dbA, launchConfig).create({ launchCode: 'c' }),
+        service(dbA, { launchConfig }).create({ launchCode: 'a' }),
+        service(dbB, { launchConfig }).create({ launchCode: 'b' }),
+        service(dbA, { launchConfig }).create({ launchCode: 'c' }),
       ]);
 
       const healthLabel = async (tenantId: string, db: TenantScopeAwareDatabase) =>
@@ -401,6 +523,150 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         ).length;
       await expect(keyCount(tenantB, inB.user.user_id)).resolves.toBe(0);
       await expect(keyCount(tenantA, inA.user.user_id)).resolves.toBe(1);
+    });
+
+    describe('refresh revalidation on a tenant with restriction history', () => {
+      const controllerId = 'launch-test';
+      const revalidationConfig = (): AgorConfig => ({
+        ...config(),
+        identity: {
+          user_lifecycle: 'external',
+          role_authority: 'claims',
+          local_auth: 'disabled',
+          external: { provider: 'external_launch', provisioning: 'jit' },
+        },
+        external_launch: {
+          ...config().external_launch,
+          session_revalidation_url: 'https://issuer.example.test/revalidate',
+          allow_admin_roles: true,
+          restriction_controller_id: controllerId,
+        },
+      });
+
+      // Cloud stamps the Team's real revision on launch but always revision 0 on revalidation.
+      function issuer(tenantId: string, launchRevision: number) {
+        const state = { role: 'admin' };
+        vi.stubGlobal(
+          'fetch',
+          vi.fn(async (url: string) => {
+            const revalidating = url.endsWith('/revalidate');
+            return Response.json({
+              assertion: jwt.sign(
+                {
+                  ...(revalidating ? { purpose: 'session_revalidation' } : {}),
+                  sub: tenantId,
+                  email: `${tenantId}@example.invalid`,
+                  role: state.role,
+                  tenant_id: tenantId,
+                  instance_id: 'instance-1',
+                  tenant_restriction: {
+                    controllerId,
+                    revision: revalidating ? 0 : launchRevision,
+                  },
+                },
+                ASSERTION_SECRET,
+                {
+                  algorithm: 'HS256',
+                  expiresIn: '5m',
+                  issuer: 'https://issuer.example.test',
+                  audience: 'runtime:test',
+                }
+              ),
+            });
+          })
+        );
+        return state;
+      }
+
+      // `withEpochFence` mirrors production; without it, the refusal must come from revalidation itself.
+      function services(db: TenantScopeAwareDatabase, { withEpochFence = true } = {}) {
+        const launchConfig = revalidationConfig();
+        const { settings } = resolveExternalLaunchSettings(launchConfig);
+        const serializeProjection = createLaunchProjectionSerializer();
+        const shared = {
+          jwtSecret: RUNTIME_SECRET,
+          accessTokenTtl: '15m',
+          refreshTokenTtl: 2_592_000,
+          sessionMaxLifetimeSeconds: 2_592_000,
+          usersService: usersService(db),
+        };
+        return {
+          launch: createLaunchAuthService({
+            ...shared,
+            db,
+            config: launchConfig,
+            provider: settings,
+            serializeProjection,
+          }),
+          refresh: createRefreshTokenService({
+            ...shared,
+            ...(withEpochFence ? { db } : {}),
+            revalidateLaunchSession: createLaunchSessionRevalidator({
+              db,
+              config: launchConfig,
+              provider: settings,
+              serializeProjection,
+            }),
+          }),
+        };
+      }
+
+      it('reprojects a demotion from a revision-0 revalidation assertion after reactivation', async () => {
+        const tenantId = `revalidate-history-${generateId()}`;
+        await applyTestRestriction(dbB, tenantId, 1, 'restrict', { controllerId });
+        await releaseTestRestriction(dbB, tenantId, 2, { controllerId });
+        const state = issuer(tenantId, 2);
+        const { launch, refresh } = services(dbA);
+        const launched = await launch.create({ launchCode: 'reactivated' });
+        expect(launched.user.role).toBe('admin');
+
+        state.role = 'member';
+        const refreshed = await refresh.create({ refreshToken: launched.refreshToken });
+        expect(refreshed.user.role).toBe('member');
+        expect(jwt.verify(refreshed.accessToken, RUNTIME_SECRET)).toMatchObject({
+          tenant_id: tenantId,
+          tenant_credential_epoch: expect.stringMatching(/^[a-f0-9]{64}$/),
+        });
+      });
+
+      it('still refuses revalidation once the tenant is closed again', async () => {
+        const tenantId = `revalidate-closed-${generateId()}`;
+        await applyTestRestriction(dbB, tenantId, 1, 'restrict', { controllerId });
+        await releaseTestRestriction(dbB, tenantId, 2, { controllerId });
+        const state = issuer(tenantId, 2);
+        const { launch, refresh } = services(dbA, { withEpochFence: false });
+        const launched = await launch.create({ launchCode: 'before-close' });
+
+        await applyTestRestriction(dbB, tenantId, 3, 'restrict', { controllerId });
+        state.role = 'member';
+        await expect(refresh.create({ refreshToken: launched.refreshToken })).rejects.toThrow(
+          /Invalid or expired refresh token/
+        );
+        await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+          const row = await select(scoped)
+            .from(users)
+            .where(eq(users.user_id, launched.user.user_id))
+            .one();
+          expect(row?.role).toBe('admin');
+        });
+      });
+
+      it('refuses an unchanged-role refresh once the tenant is closed', async () => {
+        const tenantId = `revalidate-unchanged-${generateId()}`;
+        await applyTestRestriction(dbB, tenantId, 1, 'restrict', { controllerId });
+        await releaseTestRestriction(dbB, tenantId, 2, { controllerId });
+        issuer(tenantId, 2);
+        const { launch, refresh } = services(dbA);
+        const launched = await launch.create({ launchCode: 'unchanged-role' });
+
+        await applyTestRestriction(dbB, tenantId, 3, 'restrict', { controllerId });
+        await expect(refresh.create({ refreshToken: launched.refreshToken })).rejects.toMatchObject(
+          {
+            message: 'Invalid or expired refresh token',
+            data: { code: TENANT_RESTRICTED_ERROR_CODE },
+          }
+        );
+      });
     });
 
     it('keeps an API key refusal when the request transaction rolls back, in that tenant only', async () => {

@@ -7,6 +7,7 @@ import {
   type EnvironmentCommandAction,
   type EnvironmentCommandReport,
   EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+  EXECUTOR_LAUNCH_RESTRICTED_MESSAGE,
   environmentStartConfirmation,
   hasActiveEnvironmentCommand,
   type UserID,
@@ -21,6 +22,7 @@ import {
   update,
 } from '../database-wrapper';
 import { branches } from '../schema';
+import { assertTenantExecutionAdmission, TenantRestrictedError } from '../tenant-restriction';
 import { EntityNotFoundError, RepositoryError } from './base';
 
 type Environment = BranchEnvironmentInstance;
@@ -46,15 +48,20 @@ export class EnvironmentCommandRepository {
 
   private async mutate<T>(
     id: BranchID,
+    requireExecutionAdmission: boolean,
     work: (
       environment: Environment,
       now: Date,
-      row: typeof branches.$inferSelect
+      row: typeof branches.$inferSelect,
+      resumeAfter?: number
     ) => { value: T; environment?: Environment }
   ): Promise<T> {
     return runDatabaseTransaction(
       this.db,
       async (tx) => {
+        const resumeAfter = requireExecutionAdmission
+          ? (await assertTenantExecutionAdmission(tx)).resumeAfter
+          : undefined;
         await lockRowForUpdate(tx, this.db, branches, eq(branches.branch_id, id));
         const row = await select(tx).from(branches).where(eq(branches.branch_id, id)).one();
         if (!row) throw new EntityNotFoundError('Branch', id);
@@ -66,7 +73,12 @@ export class EnvironmentCommandRepository {
           : undefined;
         const now = nowRow ? new Date(nowRow.now) : new Date();
         const data = row.data as { environment_instance?: Environment };
-        const result = work(data.environment_instance ?? { status: 'stopped' }, now, row);
+        const result = work(
+          data.environment_instance ?? { status: 'stopped' },
+          now,
+          row,
+          resumeAfter
+        );
         if (result.environment) {
           await update(tx, branches)
             .set({
@@ -94,7 +106,7 @@ export class EnvironmentCommandRepository {
     commandBudgetMs?: number;
     confirmationOf?: string;
   }): Promise<Environment> {
-    return this.mutate(input.branch.branch_id, (previous, now, row) => {
+    return this.mutate(input.branch.branch_id, input.action !== 'stop', (previous, now, row) => {
       assertBranchActivityAllowed(row, { requireRecoveryReady: true });
       if (row.archived || (row.filesystem_status && row.filesystem_status !== 'ready')) {
         throw new RepositoryError('Environment commands require a ready, non-archived branch');
@@ -184,7 +196,8 @@ export class EnvironmentCommandRepository {
     report: EnvironmentCommandReport,
     options?: { expectedRequester?: UserID }
   ): Promise<Environment> {
-    return this.mutate(report.branch_id, (environment, now, row) => {
+    const admit = report.kind === 'claim' && report.action !== 'stop';
+    return this.mutate(report.branch_id, admit, (environment, now, row, resumeAfter) => {
       const attempt = environment.command_attempt;
       if (
         row.archived ||
@@ -208,6 +221,9 @@ export class EnvironmentCommandRepository {
       }
       const next: Environment = { ...environment, command_attempt: { ...attempt } };
       if (report.kind === 'claim') {
+        if (resumeAfter !== undefined && !(Date.parse(attempt.requested_at) > resumeAfter)) {
+          throw new TenantRestrictedError();
+        }
         if (attempt.claimed_at)
           throw new EnvironmentCommandConflictError('Environment command already claimed');
         next.command_attempt!.claimed_at = now.toISOString();
@@ -268,7 +284,7 @@ export class EnvironmentCommandRepository {
 
   /** Discovery and admission call this independently; no initiating result waiter. */
   async expire(branchId: BranchID): Promise<boolean> {
-    return this.mutate(branchId, (environment, now) => {
+    return this.mutate(branchId, false, (environment, now) => {
       const next = expireEnvironmentCommand(environment, now);
       return {
         value: next !== environment,
@@ -278,15 +294,15 @@ export class EnvironmentCommandRepository {
   }
 
   /**
-   * `launch_refused`: an opted-in launcher refused admission before creating
-   * anything, so the unclaimed attempt failed rather than ended unknown.
+   * `launch_refused` / `launch_restricted`: an opted-in launcher refused admission
+   * before creating anything, so the unclaimed attempt failed rather than ended unknown.
    */
   async dispatchFailed(
     branchId: BranchID,
     attemptId: string,
-    cause: 'unknown' | 'launch_refused' = 'unknown'
+    cause: 'unknown' | 'launch_refused' | 'launch_restricted' = 'unknown'
   ): Promise<void> {
-    return this.mutate(branchId, (environment, now) => {
+    return this.mutate(branchId, false, (environment, now) => {
       const attempt = environment.command_attempt;
       // A lost launcher response is not evidence against a claimed runner.
       if (!attempt || attempt.id !== attemptId || attempt.claimed_at || attempt.finished_at)
@@ -296,12 +312,19 @@ export class EnvironmentCommandRepository {
         environment:
           cause === 'launch_refused'
             ? settleEnvironmentCommand(environment, 'failed', EXECUTOR_LAUNCH_REFUSED_MESSAGE, now)
-            : settleEnvironmentCommand(
-                environment,
-                'unknown',
-                'Launch handoff failed or timed out. Remote outcome is unknown; output may be missing. No automatic retry.',
-                now
-              ),
+            : cause === 'launch_restricted'
+              ? settleEnvironmentCommand(
+                  environment,
+                  'failed',
+                  EXECUTOR_LAUNCH_RESTRICTED_MESSAGE,
+                  now
+                )
+              : settleEnvironmentCommand(
+                  environment,
+                  'unknown',
+                  'Launch handoff failed or timed out. Remote outcome is unknown; output may be missing. No automatic retry.',
+                  now
+                ),
       };
     });
   }

@@ -9,7 +9,11 @@ import type { User, UserID } from '@agor-live/client';
 import { createRestClient } from '@agor-live/client';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
-import { isDefiniteAuthFailure, isTransientConnectionError } from '../utils/authErrors';
+import {
+  isDefiniteAuthFailure,
+  isTenantRestrictedError,
+  isTransientConnectionError,
+} from '../utils/authErrors';
 import {
   autoRefreshDelayMs,
   autoRefreshRetryDelayMs,
@@ -43,6 +47,7 @@ import {
   SupersededAuthenticationError,
   storeTokens,
 } from '../utils/tokenRefresh';
+import { tenantRestrictionProbeDelay } from './useAgorClient';
 import type { AuthorityOperation } from './useAuthorityOperationGuard';
 
 interface AuthState {
@@ -103,6 +108,8 @@ export type AuthorityCycleLoginResult =
   | { status: 'obsolete' };
 
 interface UseAuthReturn extends AuthState {
+  /** The daemon answered with the closed-workspace code; the stored credential is deliberately retained. */
+  tenantRestricted: boolean;
   /** Monotonic owner for caller-scoped async work. Routine token refresh does not advance it. */
   authenticationGeneration: number;
   isAuthenticationGenerationCurrent: (generation: number) => boolean;
@@ -164,6 +171,17 @@ export function useAuth(): UseAuthReturn {
   // `exp` of the access token the last auto-refresh started from.
   const lastRefreshedExpMsRef = useRef<number | null>(null);
   authStateRef.current = state;
+  // Separate from AuthState: it describes the workspace, not the credential, and survives unauthenticated writes.
+  const [tenantRestricted, setTenantRestricted] = useState(false);
+  const restrictionProbeAttemptRef = useRef(0);
+  const noteAuthFailure = useCallback((error: unknown) => {
+    if (isTenantRestrictedError(error)) {
+      setTenantRestricted(true);
+      return;
+    }
+    // A plain credential rejection (a reopened workspace's moved generation) hands over to sign-in; other failures change nothing.
+    if (isDefiniteAuthFailure(error)) setTenantRestricted(false);
+  }, []);
   const previousDraftAuthorityRef = useRef<{ userId: string; role: string } | null>(null);
   // Only the latest local-login attempt may install credentials or own the
   // global loading bit. Other auth establishments explicitly supersede it.
@@ -204,6 +222,9 @@ export function useAuth(): UseAuthReturn {
 
   const noteAuthenticatedUser = useCallback(
     (user: User) => {
+      // Only an accepted credential clears the suspended state.
+      setTenantRestricted(false);
+      restrictionProbeAttemptRef.current = 0;
       const previous = activeAuthorityRef.current;
       if (!previous || previous.userId !== user.user_id || previous.role !== user.role) {
         advanceAuthenticationGeneration();
@@ -300,6 +321,7 @@ export function useAuth(): UseAuthReturn {
           } catch (accessTokenError) {
             if (isStale()) return true;
             // Access token expired or invalid, try refresh token
+            noteAuthFailure(accessTokenError);
             if (!isDefiniteAuthFailure(accessTokenError)) throw accessTokenError;
           }
         }
@@ -332,6 +354,7 @@ export function useAuth(): UseAuthReturn {
               return authenticateWithStoredTokens(client, supersededRetries + 1);
             }
             // Refresh token also expired or invalid
+            noteAuthFailure(refreshError);
             if (
               !isDefiniteAuthFailure(refreshError) &&
               !(refreshError instanceof RefreshUnrecoverableError)
@@ -424,6 +447,7 @@ export function useAuth(): UseAuthReturn {
         if (error instanceof SupersededAuthenticationError) return;
         if (isStale()) return;
         // Connection or authentication error - retry if daemon just restarted
+        noteAuthFailure(error);
         const isConnectionError = isTransientConnectionError(error);
 
         if (isConnectionError && retryCount < MAX_RETRIES) {
@@ -650,12 +674,23 @@ export function useAuth(): UseAuthReturn {
     const hasTokens = getStoredAccessToken() || getStoredRefreshToken();
     if (!hasTokens) return;
 
+    if (tenantRestricted) {
+      // Probe a closed workspace on the socket's widening schedule; each attempt's loading flip re-runs this effect.
+      const probe = setTimeout(
+        () => {
+          reAuthenticate();
+        },
+        tenantRestrictionProbeDelay(restrictionProbeAttemptRef.current++)
+      );
+      return () => clearTimeout(probe);
+    }
+
     const pollInterval = setInterval(() => {
       reAuthenticate();
     }, 3000); // Poll every 3 seconds
 
     return () => clearInterval(pollInterval);
-  }, [state.authenticated, state.loading, reAuthenticate]);
+  }, [state.authenticated, state.loading, tenantRestricted, reAuthenticate]);
 
   // Auto-refresh the access token before it expires.
   //
@@ -708,7 +743,18 @@ export function useAuth(): UseAuthReturn {
         if (error instanceof RefreshUnrecoverableError) return;
 
         console.error('Failed to auto-refresh token:', error);
-        if (isTransientConnectionError(error)) {
+        if (isTenantRestrictedError(error)) {
+          // The credential is fine: keep both tokens for the probe to re-authenticate when the workspace reopens.
+          noteAuthFailure(error);
+          noteUnauthenticated();
+          setState({
+            user: null,
+            accessToken: null,
+            authenticated: false,
+            loading: false,
+            error: null,
+          });
+        } else if (isTransientConnectionError(error)) {
           setState((prev) => ({
             ...prev,
             error: 'Connection lost - waiting for daemon...',
@@ -739,6 +785,7 @@ export function useAuth(): UseAuthReturn {
     state.authenticated,
     state.accessToken,
     refreshScheduleNonce,
+    noteAuthFailure,
     noteUnauthenticated,
     reconcileAfterSupersededRefresh,
   ]);
@@ -954,6 +1001,7 @@ export function useAuth(): UseAuthReturn {
         return finishObsolete();
       }
       localLoginAttemptRef.current = null;
+      noteAuthFailure(error);
       console.error('❌ Login failed:', error);
       const userFacingMessage = loginErrorMessage(error);
       const rawMessage = error instanceof Error ? error.message : 'Login failed';
@@ -995,6 +1043,7 @@ export function useAuth(): UseAuthReturn {
     } catch (error) {
       if (localLoginAttemptRef.current !== attempt) return false;
       localLoginAttemptRef.current = null;
+      noteAuthFailure(error);
       console.error('❌ Login failed:', error);
       setState((prev) => ({
         ...prev,
@@ -1095,6 +1144,7 @@ export function useAuth(): UseAuthReturn {
 
   return {
     ...state,
+    tenantRestricted,
     authenticationGeneration,
     isAuthenticationGenerationCurrent,
     isAuthenticationOwnerCurrent,

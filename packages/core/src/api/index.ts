@@ -568,6 +568,10 @@ export interface TasksService extends AgorService<Task> {
     data: import('../types/task').ExecutorInterruptionInput,
     params?: Params
   ): Promise<Task>;
+  getTerminationState(
+    data: { task_id: string },
+    params?: Params
+  ): Promise<import('../types/task').ExecutorTerminationState>;
   /** Report that a requested cooperative stop has fully quiesced SDK work. */
   reportTerminationComplete(
     data: import('../types/task').ExecutorTerminationCompleteInput,
@@ -1423,6 +1427,7 @@ function extendTasksService(client: AgorClient): void {
       'connectExecutor',
       'reportTerminationComplete',
       'reportExecutorInterruption',
+      'getTerminationState',
       'reportRuntimeTelemetry',
       'reportSdkHealthFailure',
       'beginOpenCodeCheckpoint',

@@ -1,5 +1,14 @@
+import type { ResolvedMultiTenancyConfig } from '@agor/core/config';
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { NotAuthenticated, Unavailable } from '@agor/core/feathers';
-import type { Params, User, UserID } from '@agor/core/types';
+import {
+  type Params,
+  TENANT_RESTRICTED_ERROR_CODE,
+  type TenantContext,
+  type TenantID,
+  type User,
+  type UserID,
+} from '@agor/core/types';
 import jwt, { type SignOptions } from 'jsonwebtoken';
 import type { LaunchSessionRevalidator } from './launch-auth.js';
 import {
@@ -7,6 +16,7 @@ import {
   RUNTIME_JWT_AUDIENCE,
   RUNTIME_JWT_ISSUER,
   readRuntimeTenantClaim,
+  resolveSignedRuntimeTenant,
   runtimeTenantClaims,
 } from './runtime-tokens.js';
 import {
@@ -14,6 +24,11 @@ import {
   type BrowserSessionClaims,
   continueBrowserSession,
 } from './session-lifetime.js';
+import { isTenantRestrictedRejection } from './tenant-access.js';
+import {
+  assertTenantCredentialEpoch,
+  tenantCredentialEpochClaims,
+} from './tenant-credential-epoch.js';
 import {
   assertUserTokenNotInvalidated,
   authCredentialGenerationClaim,
@@ -23,11 +38,14 @@ import {
 import { redactUserAuthMetadata } from './user-redaction.js';
 
 interface RefreshTokenServiceOptions {
+  db?: TenantScopeAwareDatabase;
   jwtSecret: string;
   accessTokenTtl: SignOptions['expiresIn'];
   refreshTokenTtl: number;
   /** Absolute lifetime of a launched session in seconds; refresh never extends one past it. */
   sessionMaxLifetimeSeconds: number;
+  /** Resolves the tenant of a refresh token that carries no tenant claim. */
+  multiTenancy?: ResolvedMultiTenancyConfig;
   tenantClaim?: string;
   usersService: {
     get(id: UserID, params?: Params): Promise<User>;
@@ -53,14 +71,21 @@ export function createRefreshTokenService(options: RefreshTokenServiceOptions) {
 
         const nowMs = now();
         let session = continueBrowserSession(decoded, options.sessionMaxLifetimeSeconds, nowMs);
-        const tenantId = readRuntimeTenantClaim(decoded, options.tenantClaim);
+        const claimed = readRuntimeTenantClaim(decoded, options.tenantClaim);
+        // A token without the claim still belongs to the configured tenant, so it still meets the epoch fence.
+        const tenant: TenantContext | undefined = claimed
+          ? { tenant_id: claimed as TenantID, source: 'auth_claim' }
+          : resolveSignedRuntimeTenant(options.multiTenancy, decoded);
+        const tenantId = tenant?.tenant_id;
+        const epoch =
+          options.db && tenantId
+            ? await assertTenantCredentialEpoch(options.db, tenantId, decoded)
+            : undefined;
         const userParams = (): Params =>
-          tenantId
-            ? ({
-                tenant: { tenant_id: tenantId, source: 'auth_claim' },
-                authentication: { payload: decoded },
-              } as Params)
-            : ({ authentication: { payload: decoded } } as Params);
+          ({
+            ...(tenant ? { tenant } : {}),
+            authentication: { payload: decoded },
+          }) as Params;
         let user = await options.usersService.get(decoded.sub as UserID, userParams());
         assertUserTokenNotInvalidated(user, decoded);
 
@@ -98,6 +123,7 @@ export function createRefreshTokenService(options: RefreshTokenServiceOptions) {
           options.accessTokenTtl,
           options.refreshTokenTtl,
           {
+            ...tenantCredentialEpochClaims(epoch),
             ...authCredentialGenerationClaim(user),
             ...authTokenIssuedAtClaim(nowMs, user),
             ...runtimeTenantClaims(
@@ -116,6 +142,13 @@ export function createRefreshTokenService(options: RefreshTokenServiceOptions) {
           user: redactUserAuthMetadata(user),
         };
       } catch (error) {
+        // Only the closed-tenant code survives (its holder is entitled to it); everything else stays "invalid or expired".
+        if (isTenantRestrictedRejection(error)) {
+          throw new NotAuthenticated('Invalid or expired refresh token', {
+            code: TENANT_RESTRICTED_ERROR_CODE,
+          });
+        }
+        // An unverifiable restriction read keeps its codeless 503, so the browser retries instead of signing out.
         // A check that couldn't run is not a rejected credential: the client keeps it and retries.
         if (error instanceof Unavailable) throw error;
         throw new NotAuthenticated('Invalid or expired refresh token');

@@ -1,5 +1,5 @@
 import { analyticsLogger } from '@agor/core/analytics';
-import { runWithTenantContext } from '@agor/core/db';
+import { runWithTenantContext, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
 import { PRODUCT_ANALYTICS_EVENTS } from '@agor/core/types';
 import type { SignOptions } from 'jsonwebtoken';
@@ -9,6 +9,11 @@ import {
   readLaunchSubject,
   startBrowserSession,
 } from './session-lifetime.js';
+import {
+  assertTenantCredentialEpoch,
+  readTenantCredentialEpoch,
+  tenantCredentialEpochClaims,
+} from './tenant-credential-epoch.js';
 import {
   authCredentialGenerationClaim,
   authTokenIssuedAtClaim,
@@ -23,6 +28,7 @@ import { redactUserAuthMetadata } from './user-redaction.js';
 const MACHINE_TOKEN_TYPES = new Set(['executor-session', 'service']);
 
 export interface IssueBrowserTokensHookOptions {
+  db?: TenantScopeAwareDatabase;
   jwtSecret: string;
   accessTokenTtl: SignOptions['expiresIn'];
   refreshTokenTtl: number;
@@ -108,12 +114,23 @@ export function createIssueBrowserTokensHook(options: IssueBrowserTokensHookOpti
     const session = reauthenticating
       ? continueBrowserSession(presented, sessionMaxLifetimeSeconds, nowMs)
       : startBrowserSession(sessionMaxLifetimeSeconds, { nowMs });
+    const epoch =
+      options.db && tenantId
+        ? reauthenticating
+          ? await assertTenantCredentialEpoch(
+              options.db,
+              tenantId,
+              context.result.authentication?.payload
+            )
+          : await readTenantCredentialEpoch(options.db, tenantId)
+        : undefined;
     const tokens = issueRuntimeTokenPair(
       context.result.user,
       jwtSecret,
       accessTokenTtl,
       refreshTokenTtl,
       {
+        ...tenantCredentialEpochClaims(epoch),
         ...authCredentialGenerationClaim(context.result.user),
         ...authTokenIssuedAtClaim(nowMs, context.result.user),
         ...runtimeTenantClaims(tenantId, tenantClaim),

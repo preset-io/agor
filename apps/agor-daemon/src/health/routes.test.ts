@@ -10,7 +10,11 @@ import type { Server } from 'node:http';
 import type { Database } from '@agor/core/db';
 import express from 'express';
 import { afterEach, describe, expect, it } from 'vitest';
-import { type ReadinessDependency, registerHealthProbeRoutes } from './routes';
+import {
+  type ReadinessDependency,
+  type ReadinessReport,
+  registerHealthProbeRoutes,
+} from './routes';
 
 /** SQLite-shaped fake whose probe query resolves (DB reachable). */
 const healthyDb = { run: () => Promise.resolve({ rows: [] }) } as unknown as Database;
@@ -21,9 +25,13 @@ const brokenDb = {
 
 let server: Server | undefined;
 
-async function startWith(db: Database, dependencies: ReadinessDependency[] = []): Promise<string> {
+async function startWith(
+  db: Database,
+  dependencies: ReadinessDependency[] = [],
+  report: ReadinessReport = {}
+): Promise<string> {
   const app = express();
-  registerHealthProbeRoutes(app, db, dependencies);
+  registerHealthProbeRoutes(app, db, dependencies, report);
   await new Promise<void>((resolve) => {
     server = app.listen(0, resolve);
   });
@@ -58,6 +66,15 @@ describe('GET /readyz', () => {
     expect(body.status).toBe('ok');
     expect(body.db.ok).toBe(true);
     expect(body.db.latencyMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('reports the restriction controller only on a ready response', async () => {
+    const report = { tenant_restriction: { controller_id: 'agor-cloud-team-suspension-v1' } };
+    const ready = await fetch(`${await startWith(healthyDb, [], report)}/readyz`);
+    expect(await ready.json()).toMatchObject(report);
+    await new Promise<void>((resolve) => server?.close(() => resolve()));
+    const degraded = await fetch(`${await startWith(brokenDb, [], report)}/readyz`);
+    expect(await degraded.json()).not.toHaveProperty('tenant_restriction');
   });
 
   it('returns 503 with a degraded body when the DB is unreachable', async () => {

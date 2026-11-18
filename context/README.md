@@ -16,6 +16,7 @@ issue or PR; git history keeps deleted docs.
 | [`branches.md`](concepts/branches.md)                                       | Branch-centric boards (read before touching boards).                      |
 | [`id-management.md`](concepts/id-management.md)                             | UUIDv7, branded ID types, short-ID resolution.                            |
 | [`multitenancy.md`](concepts/multitenancy.md)                               | Tenant triggers, resource classification, code owners, proof.             |
+| [`tenant-restrictions.md`](concepts/tenant-restrictions.md)                 | Restriction intent, runtime admission, and non-containment limits.        |
 | [`security.md`](concepts/security.md)                                       | CSP, CORS, and daemon-wide git config hardening.                          |
 | [`daemon-filesystem-boundary.md`](concepts/daemon-filesystem-boundary.md)   | Daemon-host filesystem capability guard.                                  |
 | [`task-queueing.md`](concepts/task-queueing.md)                             | Task lifecycle and queue-on-busy semantics.                               |

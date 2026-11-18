@@ -6,6 +6,7 @@ import {
   GatewayInboundEventRepository,
   gatewayChannels,
   runWithSystemDatabaseScope,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   select,
   TeamsConversationAddressRepository,
@@ -30,6 +31,7 @@ import { authorizeJWT, buildJwksUri } from '@microsoft/agents-hosting';
 import type { Request, Response } from 'express';
 import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
+import { isCurrentTenantRuntimeActive } from '../auth/tenant-access.js';
 import { TeamsReactionLimiter } from '../utils/teams-reaction-limits.js';
 
 const MAX_ACTIVITY_BYTES = 1_024 * 1_024;
@@ -482,6 +484,24 @@ export function registerTeamsGatewayIngressRoute(input: {
         : null;
       if (reaction && !reactionAdmission) {
         console.log('[gateway.teams.ingress] event=reaction_ignored reason=rate_limited');
+        res.status(200).json({ ok: true });
+        return;
+      }
+
+      // A closed tenant stores nothing; an unverifiable read asks Teams to retry.
+      let tenantActive: boolean;
+      try {
+        tenantActive = await runWithTenantContext(agorTenantId, () =>
+          isCurrentTenantRuntimeActive(input.db)
+        );
+      } catch {
+        reactionAdmission?.release();
+        res.status(503).json({ error: 'Teams activity was not durably admitted' });
+        return;
+      }
+      if (!tenantActive) {
+        reactionAdmission?.release();
+        console.log('[gateway.teams.ingress] event=not_admitted reason=tenant_restricted');
         res.status(200).json({ ok: true });
         return;
       }

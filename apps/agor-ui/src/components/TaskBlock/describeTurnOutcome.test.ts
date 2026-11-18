@@ -497,6 +497,38 @@ describe('describeTurnOutcome v3', () => {
       expect(describe3({ ...fields, status: TaskStatus.TIMED_OUT })).toEqual(refused);
     });
 
+    it.each([
+      ['tenant_suspension', 'suspended'],
+      ['user_stop', 'stopped'],
+    ])(
+      'reads a launch refused for a suspension as a stop, not a limit (cause %s)',
+      (winning, outcome) => {
+        expect(
+          describe3({
+            ...refusedTask,
+            status: TaskStatus.STOPPED,
+            ...cause(winning),
+            sdk_failure: sdkFailure({ reason: 'launch_restricted' }),
+          })?.cause
+        ).toBe(outcome);
+      }
+    );
+
+    it('explains a queued prompt stopped by a suspension', () => {
+      expect(
+        describe3({
+          ...refusedTask,
+          status: TaskStatus.STOPPED,
+          ...cause('tenant_suspension'),
+          recorded_tool_count: 0,
+        })
+      ).toEqual({
+        cause: 'suspended',
+        type: 'warning',
+        message: 'This workspace is suspended, so the agent was stopped. No files changed.',
+      });
+    });
+
     it('keeps never_started for a launch that was not refused', () => {
       expect(
         describe3({ ...refusedTask, ...cause('heartbeat_lost'), sdk_failure: sdkFailure() })?.cause

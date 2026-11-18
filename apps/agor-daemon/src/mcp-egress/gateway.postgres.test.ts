@@ -1,9 +1,11 @@
 /** Active-active provider-observation proof. Requires two PostgreSQL pools. */
 import http from 'node:http';
 import {
+  applyTenantRestrictionIntent,
   BranchRepository,
   createDatabase,
   createTenantScopedDatabaseProxy,
+  executeRaw,
   generateId,
   initializeDatabase,
   MCPServerRepository,
@@ -13,6 +15,7 @@ import {
   SessionMCPServerRepository,
   SessionRepository,
   setMCPEgressGatewayMode,
+  sql,
   TaskRepository,
   type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
@@ -26,6 +29,7 @@ import { MCPEgressGateway, mcpEgressMaterialHash, mcpOAuthGrantIdentity } from '
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
+const FINAL_CHECK_MUTATIONS = ['server', 'restriction', 'reactivation', 'unverifiable'] as const;
 
 describe.skipIf(!postgresUrl || !usesPostgresSchema)(
   'MCP egress final admission (PostgreSQL HA)',
@@ -260,7 +264,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       }
     });
 
-    it('observes daemon-B commit before daemon-A final check and sends zero provider requests', async () => {
+    it.each(FINAL_CHECK_MUTATIONS)('sends nothing after a daemon-B %s commit', async (mutation) => {
       const tenantId = `mcp-egress-ha-${generateId()}` as TenantID;
       let providerRequests = 0;
       const url = await provider((_request, response) => {
@@ -308,15 +312,54 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         body: new TextEncoder().encode('{"jsonrpc":"2.0","id":1,"method":"initialize"}'),
       });
       await dnsObserved;
-      await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
-        new MCPServerRepository(scoped).update(seeded.mcpServer.mcp_server_id, {
-          description: 'committed by daemon B',
-          expected_config_version: seeded.mcpServer.config_version,
-        })
-      );
+      if (mutation !== 'server') {
+        await applyTenantRestrictionIntent(dbB, tenantId, {
+          version: 1,
+          controllerId: 'egress-test',
+          placementId: 'placement-one',
+          operationId: 'suspend-one',
+          revision: 1,
+          action: 'restrict',
+        });
+        if (mutation === 'unverifiable') {
+          // A corrupt row makes the restriction read fail: transient, never reported as restricted.
+          await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+            executeRaw(
+              scoped,
+              sql`UPDATE public.tenant_restrictions SET phase = 'unknown' WHERE tenant_id = ${tenantId}`
+            )
+          );
+        }
+        if (mutation === 'reactivation') {
+          for (const action of ['prepare_release', 'activate'] as const) {
+            await applyTenantRestrictionIntent(dbB, tenantId, {
+              version: 1,
+              controllerId: 'egress-test',
+              placementId: 'placement-one',
+              operationId: 'reactivate-one',
+              revision: 2,
+              action,
+            });
+          }
+        }
+      } else {
+        await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+          new MCPServerRepository(scoped).update(seeded.mcpServer.mcp_server_id, {
+            description: 'committed by daemon B',
+            expected_config_version: seeded.mcpServer.config_version,
+          })
+        );
+      }
       releaseDns();
 
-      await expect(pending).rejects.toMatchObject({ code: 'tool_permission_changed' });
+      await expect(pending).rejects.toMatchObject({
+        code:
+          mutation === 'server'
+            ? 'tool_permission_changed'
+            : mutation === 'unverifiable'
+              ? 'egress_unavailable'
+              : 'tenant_restricted',
+      });
       expect(providerRequests).toBe(0);
 
       const wrongTenantCapability = issueMCPEgressCapability(

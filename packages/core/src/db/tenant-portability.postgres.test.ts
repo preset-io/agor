@@ -840,6 +840,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
       'mcp_oauth_pending_flows',
       'teams_conversation_addresses',
       'teams_message_deliveries',
+      'tenant_restrictions',
       'user_mcp_oauth_tokens',
       'user_provider_oauth_grants',
     ]);

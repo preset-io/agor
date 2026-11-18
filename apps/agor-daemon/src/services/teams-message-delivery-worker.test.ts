@@ -13,8 +13,14 @@ import type {
   ThreadSessionMap,
 } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import { isCurrentTenantRuntimeActive } from '../auth/tenant-access.js';
 import type { TeamsSendConnector } from '../utils/teams-connector-cache.js';
+import { TENANT_HOLD_DELAY_MS } from './gateway-delivery-loop.js';
 import { planTeamsChunks, TeamsMessageDeliveryWorker } from './teams-message-delivery-worker.js';
+
+vi.mock('../auth/tenant-access.js', () => ({
+  isCurrentTenantRuntimeActive: vi.fn(async () => true),
+}));
 
 const DELIVERY_ID = '018f5f63-0fd1-7c2e-9e7d-8fb27d4a7e1a' as TeamsMessageDeliveryID;
 const NOW = new Date('2026-10-07T12:00:00.000Z');
@@ -83,6 +89,17 @@ class FakeDeliveryRepository {
 
   async findDueRefs() {
     return [];
+  }
+
+  async deferDue(_id: string, delayMs: number) {
+    this.calls.push(`defer:${delayMs}`);
+    this.row = {
+      ...this.row,
+      next_attempt_at: new Date(
+        new Date(this.row.next_attempt_at).getTime() + delayMs
+      ).toISOString(),
+    };
+    return true;
   }
 
   async claim(_id: string, token: string) {
@@ -320,6 +337,38 @@ describe('TeamsMessageDeliveryWorker chunking', () => {
       'receipt:2',
     ]);
     expect(setup.repository.row.status).toBe('completed');
+  });
+
+  it('holds a closed tenant’s delivery without claiming or posting it', async () => {
+    const setup = harness();
+    vi.mocked(isCurrentTenantRuntimeActive).mockResolvedValueOnce(false);
+    await setup.worker.checkOnce();
+    expect(setup.sent).toEqual([]);
+    // Deferred off discovery without spending an attempt, so it cannot hold the page.
+    expect(setup.repository.row).toMatchObject({
+      status: 'pending',
+      attempt_count: 0,
+      next_attempt_at: new Date(NOW.getTime() + TENANT_HOLD_DELAY_MS).toISOString(),
+    });
+  });
+
+  it('logs a held delivery whose deferral fails instead of aborting the scan', async () => {
+    const setup = harness();
+    vi.mocked(isCurrentTenantRuntimeActive).mockResolvedValueOnce(false);
+    setup.repository.deferDue = vi.fn(async () => {
+      throw new Error('tenant write gate active');
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await expect(setup.worker.checkOnce()).resolves.toEqual(expect.any(Number));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('event=tenant_hold_defer_failed'));
+    // The row stays due, so the next scan repeats the failure without another line.
+    vi.mocked(isCurrentTenantRuntimeActive).mockResolvedValueOnce(false);
+    await setup.worker.checkOnce();
+    expect(
+      warn.mock.calls.filter(([line]) => String(line).includes('tenant_hold_defer_failed'))
+    ).toHaveLength(1);
+    warn.mockRestore();
+    expect(setup.sent).toEqual([]);
   });
 
   it('delivers replies in a seeded thread and with proactive sends off', async () => {

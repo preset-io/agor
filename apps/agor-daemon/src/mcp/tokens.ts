@@ -13,6 +13,7 @@
  * - `exp`  — unix seconds, enforced by `jsonwebtoken.verify`
  * - `jti`  — per-issuance UUID (useful for log correlation)
  * - `tsk`  — the executor's task; the sessions hook mints only these, older tokens may lack it
+ * - tenant credential generation — only once the tenant has restriction history
  *
  * No denylist or generation counter. Tokens are minted lazily and cached
  * briefly per `(tenant,session,user,task)` so high-frequency `session.get`
@@ -53,6 +54,12 @@ import {
   type UserID,
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
+import {
+  assertTenantCredentialEpochValue,
+  readTenantCredentialEpoch,
+  type TenantRestrictionReader,
+  tenantCredentialEpochClaims,
+} from '../auth/tenant-credential-epoch.js';
 
 const DEBUG_MCP_TOKENS =
   process.env.AGOR_DEBUG_MCP_TOKENS === '1' || process.env.DEBUG?.includes('mcp-tokens');
@@ -88,6 +95,8 @@ export interface McpTokenContext {
   tenantId: TenantID;
   jti: string;
   taskId?: TaskID;
+  /** Verified claims; the route compares its credential generation with current restriction state. */
+  credential: { payload: unknown };
 }
 
 export interface McpTokenInitOptions {
@@ -220,7 +229,9 @@ export async function generateSessionToken(
   app: Application,
   sessionId: SessionID,
   userId: UserID,
-  taskId?: TaskID
+  taskId?: TaskID,
+  readRestriction?: TenantRestrictionReader,
+  credential?: { payload: unknown }
 ): Promise<string> {
   const s = requireState();
   const jwtSecret = app.settings.authentication?.secret;
@@ -239,7 +250,11 @@ export async function generateSessionToken(
     s.lastCachePruneAtMs = nowMs;
   }
 
-  const cacheKey = `${tenantId}:${sessionId}:${userId}:${taskId ?? ''}`;
+  // Bind the generation current at issuance; a closed tenant or failed read mints nothing.
+  const epoch = await readTenantCredentialEpoch(s.db, tenantId, readRestriction);
+  // A caller's JWT must still match: a generation that moved mid-request mints nothing.
+  if (credential) assertTenantCredentialEpochValue(epoch, credential.payload);
+  const cacheKey = `${tenantId}:${sessionId}:${userId}:${taskId ?? ''}:${epoch ?? ''}`;
   const cached = s.tokenCache.get(cacheKey);
   // Keep a buffer so callers never receive a token that is about to expire.
   const refreshBufferMs = Math.min(5 * 60 * 1000, Math.max(30 * 1000, s.expirationMs * 0.1));
@@ -264,6 +279,7 @@ export async function generateSessionToken(
   const jti = generateId();
 
   const payload: McpTokenPayload = {
+    ...tenantCredentialEpochClaims(epoch),
     sub: sessionId,
     uid: userId,
     tid: tenantId,
@@ -390,6 +406,7 @@ export function verifySessionTokenDetailed(app: Application, token: string): Mcp
       tenantId: tenantId.trim() as TenantID,
       jti: payload.jti,
       ...(payload.tsk ? { taskId: payload.tsk } : {}),
+      credential: { payload },
     },
   };
 }

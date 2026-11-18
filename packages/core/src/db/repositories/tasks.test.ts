@@ -1998,6 +1998,40 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
     }
   );
 
+  dbTest(
+    'lets only a durable revocation replace a suspension cause under the claim lock',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+      );
+      await taskRepo.connectExecutor(task.task_id);
+      await taskRepo.claimTermination({
+        taskId: task.task_id,
+        cause: 'tenant_suspension',
+        errorMessage: 'Tenant access is restricted.',
+      });
+      // A caller acting on a stale snapshot cannot turn the suspension into a revocation.
+      const stale = await taskRepo.claimTermination({
+        taskId: task.task_id,
+        cause: 'authorization_revoked',
+        errorMessage: 'Revoked',
+      });
+      expect(stale.task.termination_request?.cause).toBe('tenant_suspension');
+      const durable = await taskRepo.claimTermination({
+        taskId: task.task_id,
+        cause: 'authorization_revoked',
+        errorMessage: 'Revoked',
+        durableRevocation: true,
+      });
+      expect(durable).toMatchObject({
+        outcome: 'claimed',
+        task: { termination_request: { cause: 'authorization_revoked' } },
+      });
+    }
+  );
+
   dbTest('rejects late telemetry after executor quiescence', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
@@ -4102,6 +4136,38 @@ describe('TaskRepository.createPending', () => {
 // ============================================================================
 // FindQueued
 // ============================================================================
+
+describe('TaskRepository.stopQueuedForTenantSuspension', () => {
+  dbTest("stops only this session's queued prompts, as a suspension", async ({ db }) => {
+    const repo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const otherSessionId = await createSessionWithDeps(db);
+    const input = createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED });
+    const active = await repo.createPending({ ...input, dispatchIfIdle: dispatchFields() });
+    const queued = [await repo.createPending(input), await repo.createPending(input)];
+    const other = await repo.createPending(
+      createPendingInput({ session_id: otherSessionId, status: TaskStatus.QUEUED })
+    );
+
+    const stopped = await repo.stopQueuedForTenantSuspension(sessionId, 'suspended');
+
+    expect(stopped.map((task) => task.task_id).sort()).toEqual(
+      queued.map((task) => task.task_id).sort()
+    );
+    for (const task of queued) {
+      expect(await repo.findById(task.task_id)).toMatchObject({
+        status: TaskStatus.STOPPED,
+        queue_position: undefined,
+        completed_at: expect.any(String),
+        recorded_tool_count: 0,
+        termination_request: { cause: 'tenant_suspension', error_message: 'suspended' },
+      });
+    }
+    expect(await repo.getNextQueued(sessionId)).toBeNull();
+    expect((await repo.findById(active.task_id))?.status).toBe(TaskStatus.DISPATCHING);
+    expect((await repo.findById(other.task_id))?.status).toBe(TaskStatus.QUEUED);
+  });
+});
 
 describe('TaskRepository.findQueued', () => {
   dbTest('should return queued tasks ordered by queue_position', async ({ db }) => {
