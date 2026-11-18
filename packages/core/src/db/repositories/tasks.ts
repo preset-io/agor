@@ -709,6 +709,18 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     }
   }
 
+  /** True when the session's latest settled task is a tenant-restricted launch refusal at or after `since`. */
+  async latestSettledIsLaunchRestricted(sessionId: string, since: Date): Promise<boolean> {
+    const row = await select(this.db, { completed_at: tasks.completed_at, data: tasks.data })
+      .from(tasks)
+      .where(and(eq(tasks.session_id, sessionId), isNotNull(tasks.completed_at)))
+      .orderBy(desc(tasks.completed_at), desc(tasks.task_id))
+      .limit(1)
+      .one();
+    if (!row?.completed_at || row.data?.sdk_failure?.reason !== 'launch_restricted') return false;
+    return new Date(row.completed_at).getTime() >= since.getTime();
+  }
+
   /**
    * Find task by ID (supports short ID)
    */

@@ -141,6 +141,7 @@ import {
   isCanonicalFullUuid,
   isTaskPendingDispatch,
   isUserApiKeySource,
+  LAUNCH_RESTRICTED_QUEUE_HOLD_MS,
   MCP_MEMBER_POLICIES,
   MCP_MEMBER_POLICY_CHANGED_EVENT,
   MessageRole,
@@ -3912,6 +3913,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const session = await reconcileSessionPromptStateIfStuck(queuedSession, taskRepo, taskParams);
 
     if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
+      return;
+    }
+    // Cloud refused the last launch for suspension; the next one would be refused too until the restriction lands.
+    if (
+      await taskRepo.latestSettledIsLaunchRestricted(
+        sessionId,
+        new Date(Date.now() - LAUNCH_RESTRICTED_QUEUE_HOLD_MS)
+      )
+    ) {
+      console.log(
+        `[task-queue] event=held_after_launch_restricted session_id=${JSON.stringify(sessionId)}`
+      );
       return;
     }
 

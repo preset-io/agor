@@ -85,6 +85,12 @@ export const EXECUTOR_LAUNCH_REFUSED_EXIT_CODE = 75;
  */
 export const EXECUTOR_LAUNCH_RESTRICTED_EXIT_CODE = 76;
 
+/**
+ * How long a session's queue waits after a restricted launch refusal. The restriction normally lands
+ * within seconds and stops the queued prompts; the bound keeps a queue from sticking if it never does.
+ */
+export const LAUNCH_RESTRICTED_QUEUE_HOLD_MS = 10 * 60_000;
+
 export interface SdkFailure {
   reason: SdkFailureReason;
   detected_at: string;

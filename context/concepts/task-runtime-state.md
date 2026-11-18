@@ -191,7 +191,10 @@ an explicit mapping-review point.
   `tenant_suspension` request without the diagnosis keeps the safeguard. When
   the runtime's own suspension Stop claimed first, the diagnosis is not stored,
   so a restart before settlement resumes without that proof, as for a Stop that
-  preceded a `75` refusal.
+  preceded a `75` refusal. While the session's latest settled task is such a
+  refusal, its queue does not dispatch for up to 10 minutes
+  (`LAUNCH_RESTRICTED_QUEUE_HOLD_MS`): the next launch would be refused too, and
+  the restriction normally lands first and stops the queued prompts.
 - Connected active tasks heartbeat every 10 seconds by default. A scoped
   executor continues heartbeat and pulse telemetry while `stopping` until its
   provider cleanup returns and it reports quiescence.
