@@ -150,9 +150,11 @@ settle. No role, provider-less call, report-path name or customer flag is a gene
 
 Transitions and task enqueue/dispatch take a tenant execution advisory lock before
 branch/session/task locks: shared for admissions, exclusive for transitions. A closing transition
-atomically sets a server-owned `tenant_restriction_hold` on pending prompts, which metadata edits
-and activation preserve. Dispatch skips held prompts, inspection still shows them, they never block
-a new prompt to the session, and resubmission creates a new task.
+settles every pending (`created`/`queued`) prompt `stopped` in the same transaction, with
+`termination_request.cause: tenant_suspension`, so none dispatches after closure or reactivation.
+The prompt text stays on the stopped task; sending it again creates a new task. The transition runs
+in the CLI Job with no realtime channel, and the closed tenant's sockets are retired, so clients
+read the stopped tasks when they reconnect.
 
 The retained row's update time is a conservative event cutoff: after activation only later
 schedule/gateway occurrences run. Gateway times use the provider clock plus a 5-second skew grace,

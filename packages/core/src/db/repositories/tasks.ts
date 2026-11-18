@@ -625,7 +625,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         sdk_failure: task.sdk_failure,
         termination_request: storedTerminationRequest,
         sdk_watchdog_mode: task.sdk_watchdog_mode,
-        tenant_restriction_hold: task.tenant_restriction_hold,
       },
     };
   }
@@ -2297,18 +2296,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           await assertNoOpenOpenCodeCheckpoint(txDb, fullId);
         }
 
-        if (
-          current.tenant_restriction_hold &&
-          updates.status !== undefined &&
-          ![TaskStatus.QUEUED, TaskStatus.CREATED, TaskStatus.STOPPED, TaskStatus.FAILED].includes(
-            updates.status as never
-          )
-        ) {
-          throw new RepositoryError('Held prompt requires explicit resubmission');
-        }
         const merged = {
           ...deepMerge(current, withTerminalTiming(current, updates)),
-          tenant_restriction_hold: current.tenant_restriction_hold,
           recorded_tool_count:
             updates.status !== undefined &&
             isTerminalTaskStatus(updates.status) &&
@@ -3084,14 +3073,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           ) {
             // Include CREATED handoffs as well as executor-owned states.
             // Queue emptiness alone cannot authorize another executor.
-            // A restriction-held prompt can never dispatch, so it does not keep later prompts queued.
             const unfinished = await select(txDb, { task_id: tasks.task_id })
               .from(tasks)
               .where(
                 and(
                   eq(tasks.session_id, input.session_id),
-                  inArray(tasks.status, [...NONTERMINAL_TASK_STATUSES]),
-                  this.runnablePromptPredicate()
+                  inArray(tasks.status, [...NONTERMINAL_TASK_STATUSES])
                 )
               )
               .limit(1)
@@ -3189,7 +3176,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       id,
       async (txDb, currentRow, sessionRow, fullId) => {
         const current = this.rowToTask(currentRow);
-        if (current.tenant_restriction_hold) return { outcome: 'condition_changed', task: current };
         if (current.status !== expectedStatus) {
           return {
             outcome:
@@ -3208,13 +3194,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         // same Session lock that serializes enqueue position assignment.
         const queuedHead = await select(txDb, { task_id: tasks.task_id })
           .from(tasks)
-          .where(
-            and(
-              eq(tasks.session_id, current.session_id),
-              eq(tasks.status, TaskStatus.QUEUED),
-              this.runnablePromptPredicate()
-            )
-          )
+          .where(and(eq(tasks.session_id, current.session_id), eq(tasks.status, TaskStatus.QUEUED)))
           .orderBy(asc(tasks.queue_position), asc(tasks.created_at), asc(tasks.task_id))
           .limit(1)
           .one();
@@ -3332,13 +3312,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       }
       const queuedHead = await select(txDb, { task_id: tasks.task_id })
         .from(tasks)
-        .where(
-          and(
-            eq(tasks.session_id, current.session_id),
-            eq(tasks.status, TaskStatus.QUEUED),
-            this.runnablePromptPredicate()
-          )
-        )
+        .where(and(eq(tasks.session_id, current.session_id), eq(tasks.status, TaskStatus.QUEUED)))
         .orderBy(asc(tasks.queue_position), asc(tasks.created_at), asc(tasks.task_id))
         .limit(1)
         .one();
@@ -3404,25 +3378,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     }
   }
 
-  /** Exclude prompts held by a tenant restriction from runnable queue selection. */
-  private runnablePromptPredicate(): SQL {
-    return isSQLiteDatabase(this.db)
-      ? sql`json_extract(${tasks.data}, '$.tenant_restriction_hold') IS NULL`
-      : sql`${tasks.data}->'tenant_restriction_hold' IS NULL`;
-  }
-
   /** Return the next runnable QUEUED task by queue position, or null if none. */
   async getNextQueued(sessionId: string): Promise<Task | null> {
     try {
       const row = await select(this.db)
         .from(tasks)
-        .where(
-          and(
-            eq(tasks.session_id, sessionId),
-            eq(tasks.status, TaskStatus.QUEUED),
-            this.runnablePromptPredicate()
-          )
-        )
+        .where(and(eq(tasks.session_id, sessionId), eq(tasks.status, TaskStatus.QUEUED)))
         .orderBy(asc(tasks.queue_position), asc(tasks.created_at), asc(tasks.task_id))
         .limit(1)
         .one();
@@ -3471,9 +3432,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     };
     const grouped = select(this.db, columns)
       .from(tasks)
-      .where(
-        and(eq(tasks.status, TaskStatus.QUEUED), this.runnablePromptPredicate(), afterCondition)
-      )
+      .where(and(eq(tasks.status, TaskStatus.QUEUED), afterCondition))
       .groupBy(
         ...(postgresTenantColumn ? [postgresTenantColumn, tasks.session_id] : [tasks.session_id])
       );

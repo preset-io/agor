@@ -578,22 +578,32 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
   });
 
   it.each([TaskStatus.QUEUED, TaskStatus.CREATED] as const)(
-    'directly admits a new prompt past a restriction-held %s prompt after reactivation',
+    'stops a pending %s prompt when the tenant closes and never dispatches it after reactivation',
     async (status) => {
-      const seed = await seedTenant(db, `held-${status}`);
-      const held = await runWithTenantDatabaseScope(db, seed.tenantId, (scoped) =>
+      const seed = await seedTenant(db, `pending-${status}`);
+      const pending = await runWithTenantDatabaseScope(db, seed.tenantId, (scoped) =>
         new TaskRepository(scoped).create(
           taskInput(seed, status, status === TaskStatus.QUEUED ? { queue_position: 1 } : {})
         )
       );
       await applyRestriction(seed.tenantId, 1, 'restrict');
+      await runWithTenantDatabaseScope(db, seed.tenantId, async (scoped) => {
+        expect(await new TaskRepository(scoped).findById(pending.task_id)).toMatchObject({
+          status: TaskStatus.STOPPED,
+          queue_position: undefined,
+          completed_at: expect.any(String),
+          error_message: 'Tenant access is restricted.',
+          termination_request: {
+            cause: 'tenant_suspension',
+            requested_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+          },
+        });
+      });
       await applyRestriction(seed.tenantId, 2, 'prepare_release');
       await applyRestriction(seed.tenantId, 2, 'activate');
       await runWithTenantDatabaseScope(db, seed.tenantId, async (scoped) => {
         const tasks = new TaskRepository(scoped);
-        expect((await tasks.findById(held.task_id))?.tenant_restriction_hold?.reason).toBe(
-          'tenant_restricted'
-        );
+        expect(await tasks.getNextQueued(seed.sessionId)).toBeNull();
         const next = await tasks.createPending({
           session_id: seed.sessionId,
           created_by: seed.userId,
@@ -611,10 +621,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
           },
         });
         expect(next.status).toBe(TaskStatus.DISPATCHING);
-        expect(await tasks.findById(held.task_id)).toMatchObject({
-          status,
-          tenant_restriction_hold: { reason: 'tenant_restricted' },
-        });
+        expect((await tasks.findById(pending.task_id))?.status).toBe(TaskStatus.STOPPED);
       });
     }
   );

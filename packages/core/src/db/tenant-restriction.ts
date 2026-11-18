@@ -1,5 +1,6 @@
 // Restriction intent, not enforcement proof; the only writer is the unauthenticated in-Cell `agor tenant restriction apply` Job.
 import { sql } from 'drizzle-orm';
+import { TENANT_RESTRICTED_TASK_MESSAGE } from '../types/task';
 import {
   isTenantRestrictionClosed,
   type TenantRestrictionCommand,
@@ -174,14 +175,19 @@ export async function applyTenantRestrictionIntent(
     `
     );
     if (isTenantRestrictionClosed(record)) {
-      // Hold pending prompts atomically; reactivation never clears the hold, only explicit resubmission.
+      // Settle pending prompts terminal in this transaction, so none can dispatch after closure or reactivation.
       await executeRaw(
         scoped,
         sql`
-        UPDATE public.tasks SET data = jsonb_set(data, '{tenant_restriction_hold}',
-          jsonb_build_object('reason', 'tenant_restricted', 'held_at', clock_timestamp()))
+        UPDATE public.tasks SET status = 'stopped', queue_position = NULL,
+          completed_at = clock_timestamp(),
+          data = data || jsonb_build_object(
+            'error_message', ${TENANT_RESTRICTED_TASK_MESSAGE}::text,
+            'termination_request', jsonb_build_object(
+              'cause', 'tenant_suspension',
+              'requested_at', to_char(clock_timestamp() AT TIME ZONE 'UTC',
+                'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')))
         WHERE tenant_id = ${tenantId} AND status IN ('created', 'queued')
-          AND NOT (data ? 'tenant_restriction_hold')
       `
       );
     }

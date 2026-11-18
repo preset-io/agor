@@ -128,6 +128,9 @@ export interface ExecutorInterruptionInput {
   signal: 'SIGTERM' | 'SIGINT';
 }
 
+/** Fixed copy on tasks stopped because their tenant is suspended or reactivating. */
+export const TENANT_RESTRICTED_TASK_MESSAGE = 'Tenant access is restricted.';
+
 /** Fixed server/executor copy for runtime authorization withdrawal. */
 export const AUTHORIZATION_REVOKED_TERMINATION_MESSAGE =
   'Authorization to continue this task was revoked.';
@@ -539,9 +542,6 @@ export interface Task {
    * Undefined for non-queued tasks.
    */
   queue_position?: number;
-
-  /** Server-owned durable prompt hold; only explicit resubmission creates runnable work. */
-  tenant_restriction_hold?: { reason: 'tenant_restricted'; held_at: string };
 
   /**
    * Structured metadata for the task. Fields here are load-bearing for

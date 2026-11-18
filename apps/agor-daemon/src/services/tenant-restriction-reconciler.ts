@@ -8,7 +8,11 @@ import {
   type TaskRuntimeDiscoveryCursor,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import type { AuthenticatedParams, TenantID } from '@agor/core/types';
+import {
+  type AuthenticatedParams,
+  TENANT_RESTRICTED_TASK_MESSAGE,
+  type TenantID,
+} from '@agor/core/types';
 import {
   isCurrentTenantRuntimeActive,
   TENANT_RESTRICTION_OBSERVATION_MS,
@@ -170,7 +174,7 @@ export class TenantRestrictionReconciler {
               app: this.app,
               taskId: ref.task_id,
               cause: 'tenant_suspension',
-              errorMessage: 'Tenant access is restricted.',
+              errorMessage: TENANT_RESTRICTED_TASK_MESSAGE,
               // The memoized read may be a tick old; the claim re-reads closure under the fence.
               requireTenantClosed: true,
               params,

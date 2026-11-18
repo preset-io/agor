@@ -763,9 +763,10 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         const tasks = new TaskRepository(scoped);
         for (const outcome of outcomes) {
           if (outcome.status === 'fulfilled') {
-            expect(
-              (await tasks.findById(outcome.value.task_id))?.tenant_restriction_hold?.reason
-            ).toBe('tenant_restricted');
+            expect(await tasks.findById(outcome.value.task_id)).toMatchObject({
+              status: TaskStatus.STOPPED,
+              termination_request: { cause: 'tenant_suspension' },
+            });
           }
         }
         expect(await tasks.getNextQueued(seeded.session.session_id)).toBeNull();
@@ -799,9 +800,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       expect(observed.sdk_failure?.watchdog_action).toBe('would_fire');
       await runWithTenantDatabaseScope(raw, tenantId, async (scoped) => {
         const tasks = new TaskRepository(scoped);
-        expect((await tasks.findById(seeded.queued.task_id))?.tenant_restriction_hold?.reason).toBe(
-          'tenant_restricted'
-        );
+        expect((await tasks.findById(seeded.queued.task_id))?.status).toBe(TaskStatus.STOPPED);
         expect(await tasks.getNextQueued(seeded.session.session_id)).toBeNull();
         await expect(
           tasks.createPending({
@@ -851,18 +850,14 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       await release(tenantId, 2);
       await runWithTenantDatabaseScope(raw, tenantId, async (scoped) => {
         const tasks = new TaskRepository(scoped);
-        await tasks.update(seeded.queued.task_id, {
-          metadata: { source: 'test' },
-          tenant_restriction_hold: undefined,
+        // Reactivation never revives the stopped prompt; its text stays readable for a resend.
+        const stopped = await tasks.findById(seeded.queued.task_id);
+        expect(stopped).toMatchObject({
+          status: TaskStatus.STOPPED,
+          full_prompt: 'preserve this queued prompt',
+          termination_request: { cause: 'tenant_suspension' },
         });
-        const held = await tasks.findById(seeded.queued.task_id);
-        expect(held?.full_prompt).toBe('preserve this queued prompt');
-        expect(
-          (await tasks.findQueued(seeded.session.session_id)).some(
-            (task) => task.task_id === seeded.queued.task_id
-          )
-        ).toBe(true);
-        expect(held?.tenant_restriction_hold?.reason).toBe('tenant_restricted');
+        expect(await tasks.findQueued(seeded.session.session_id)).toHaveLength(0);
         expect(await tasks.getNextQueued(seeded.session.session_id)).toBeNull();
         expect(
           (
@@ -871,9 +866,6 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             })
           ).outcome
         ).toBe('condition_changed');
-        await expect(
-          tasks.update(seeded.queued.task_id, { status: TaskStatus.RUNNING })
-        ).rejects.toThrow('Held prompt');
         const fresh = await tasks.createPending({
           session_id: seeded.session.session_id,
           created_by: seeded.user.user_id,
@@ -883,9 +875,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         expect((await tasks.getNextQueued(seeded.session.session_id))?.task_id).toBe(fresh.task_id);
         // prepare_release itself is a legal closing transition from active.
         await releaseTestRestriction(scoped, tenantId, 3);
-        expect((await tasks.findById(fresh.task_id))?.tenant_restriction_hold?.reason).toBe(
-          'tenant_restricted'
-        );
+        expect((await tasks.findById(fresh.task_id))?.status).toBe(TaskStatus.STOPPED);
         expect(await tasks.getNextQueued(seeded.session.session_id)).toBeNull();
         const legacyId = generateId();
         await new SessionRepository(scoped).create({
