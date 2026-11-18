@@ -690,7 +690,7 @@ describe('attachment lifecycle', () => {
 
   it("user authorization eviction retires only that user's terminals in that tenant", async () => {
     const app = makeApp();
-    const service = new TerminalsService(app as never, {} as never);
+    const service = new TerminalsService(app as never, mocks.tenantDb as never);
     const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
 
     service.closeUser('tenant-b', 'user-1');

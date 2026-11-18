@@ -8,9 +8,9 @@
  */
 
 import {
+  getCurrentTenantId,
   runWithoutTenantContext,
   runWithoutTenantDatabaseScope,
-  getCurrentTenantId,
   runWithSystemDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,

@@ -36,7 +36,6 @@ import {
   type User,
   type UserID,
 } from '@agor/core/types';
-import { toUserDirectoryEntry } from '../auth/user-redaction.js';
 import { getAuthenticatedConnectionCredentialPayload } from '../auth/authenticated-connection-authority.js';
 import {
   createTenantReadCache,
@@ -47,6 +46,7 @@ import {
   assertTenantCredentialEpochValue,
   readTenantCredentialEpoch,
 } from '../auth/tenant-credential-epoch.js';
+import { toUserDirectoryEntry } from '../auth/user-redaction.js';
 import {
   executorTaskRoomName,
   isExecutorTaskRoomName,

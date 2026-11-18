@@ -638,6 +638,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             seeded.branch.branch_id,
             undefined,
             undefined,
+            undefined,
             issuance
           )
         );

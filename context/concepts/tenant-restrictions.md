@@ -45,7 +45,7 @@ absent --seed_active(r)--> active [re-home watermark restatement only]
 
 ## Persistence and portability
 
-Migration `0120_tenant_restrictions` adds the PostgreSQL table with FORCE RLS and no broad
+Migration `0121_tenant_restrictions` adds the PostgreSQL table with FORCE RLS and no broad
 cross-tenant operator policy; SQLite has no table. The table is in the tenant erasure manifest but
 excluded from portable archives: placement/controller authority belongs to the deployment. A
 destination must receive its own authoritative restriction (for a positive revision, `seed_active`)
@@ -66,7 +66,7 @@ Older binaries ignore this state, so rollback to one is unsafe once serving adap
   outlives one tick (1 s). Nested internal service calls read afresh: a nested call may be the write
   that must observe a new state.
 - The socket monitor reads each tenant separately: the ids-only discovery capability of migration
-  `0121` lacks the vector a generation check needs, and a batched full-state read would need a
+  `0122` lacks the vector a generation check needs, and a batched full-state read would need a
   cross-tenant policy this table deliberately lacks.
 - Slack card delivery and OAuth callbacks check admission on entry only; dispatched provider calls
   are not undone. The Slack repair sweep re-checks per page and never re-posts cards or notices
@@ -163,7 +163,7 @@ non-Stop admission and claims take the fence too, so a pre-cutoff command never 
 reactivation.
 
 `services/tenant-restriction-reconciler.ts` lists closed tenant ids under the read-only
-`tenant_restriction_discovery` capability (migration 0121; ids from `agor_restricted_tenant_ids()`
+`tenant_restriction_discovery` capability (migration 0122; ids from `agor_restricted_tenant_ids()`
 only, never rows), then pages those tenants' live tasks. Each tenant's scoped read decides before
 the Stop coordinator runs, and the Stop claim re-reads closure under the fence. An empty discovery
 is not proof a tenant is open. Coordinator recovery keeps running while a tenant is restricted.

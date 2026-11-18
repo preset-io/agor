@@ -7,6 +7,10 @@ const hasTerminationReadAuthority = vi.hoisted(() => vi.fn(() => false));
 vi.mock('../mcp/tokens.js', () => ({ generateSessionToken }));
 vi.mock('../auth/termination-read-authority.js', () => ({ hasTerminationReadAuthority }));
 
+import {
+  EXECUTOR_SESSION_TOKEN_PURPOSE,
+  EXECUTOR_SESSION_TOKEN_TYPE,
+} from '../auth/executor-session-token.js';
 import { readAdmittedTenantRestriction } from '../auth/tenant-access.js';
 import {
   createSessionMcpTokenHook,
@@ -19,12 +23,21 @@ const hook = createSessionMcpTokenHook({
   app: { settings: { authentication: { secret: 'secret' } } } as never,
   config: {},
 });
+// Only a task executor reading its own session is offered a token.
+const executorPayload = (extra: Record<string, unknown> = {}) => ({
+  type: EXECUTOR_SESSION_TOKEN_TYPE,
+  purpose: EXECUTOR_SESSION_TOKEN_PURPOSE,
+  session_id: 'session-1',
+  task_id: 'task-1',
+  ...extra,
+});
+const executorParams = (provider: string | null = 'socketio', payload = executorPayload()) => ({
+  user: { user_id: 'user-1', role: 'member' },
+  provider: provider ?? undefined,
+  authentication: { strategy: 'jwt', payload },
+});
 const run = (method = 'get', provider: string | null = 'socketio') =>
-  hook({
-    method,
-    params: { user: { user_id: 'user-1', role: 'member' }, provider: provider ?? undefined },
-    result: session,
-  } as never);
+  hook({ method, params: executorParams(provider), result: session } as never);
 const readFailure = () => new Unavailable('Tenant credential cannot be verified');
 
 describe('sessions MCP-token hook restriction reads', () => {
@@ -36,27 +49,25 @@ describe('sessions MCP-token hook restriction reads', () => {
       expect.anything(),
       'session-1',
       'user-1',
+      'task-1',
       readAdmittedTenantRestriction,
-      undefined
+      { payload: executorPayload() }
     );
   });
 
-  it('checks a JWT caller against the generation it was admitted with', async () => {
+  it('checks the executor credential against the generation it was admitted with', async () => {
     generateSessionToken.mockResolvedValueOnce('token');
-    const payload = { tenant_credential_epoch: 'a'.repeat(64) };
+    const payload = executorPayload({ tenant_credential_epoch: 'a'.repeat(64) });
     await hook({
       method: 'get',
-      params: {
-        user: { user_id: 'user-1', role: 'member' },
-        provider: 'socketio',
-        authentication: { strategy: 'jwt', payload },
-      },
+      params: executorParams('socketio', payload),
       result: session,
     } as never);
     expect(generateSessionToken).toHaveBeenLastCalledWith(
       expect.anything(),
       'session-1',
       'user-1',
+      'task-1',
       readAdmittedTenantRestriction,
       { payload }
     );
@@ -75,11 +86,12 @@ describe('sessions MCP-token hook restriction reads', () => {
     await expect(run()).rejects.toBeInstanceOf(Unavailable);
   });
 
-  it('returns an internal session read without a token when the restriction read fails', async () => {
-    generateSessionToken.mockRejectedValueOnce(readFailure());
+  it('returns an internal session read without a token or a restriction read', async () => {
+    generateSessionToken.mockClear();
     const context = await run('get', null);
     expect(context.result).toBe(session);
     expect(context.result).not.toHaveProperty('mcp_token');
+    expect(generateSessionToken).not.toHaveBeenCalled();
   });
 
   it('returns a committed create without a token when the restriction read fails', async () => {

@@ -15,16 +15,16 @@ import {
   readRuntimeTenantClaim,
   runtimeTenantClaims,
 } from './runtime-tokens.js';
-import { isTenantRestrictedRejection } from './tenant-access.js';
-import {
-  assertTenantCredentialEpoch,
-  tenantCredentialEpochClaims,
-} from './tenant-credential-epoch.js';
 import {
   AUTH_REVALIDATED_AT_MS_CLAIM,
   type BrowserSessionClaims,
   continueBrowserSession,
 } from './session-lifetime.js';
+import { isTenantRestrictedRejection } from './tenant-access.js';
+import {
+  assertTenantCredentialEpoch,
+  tenantCredentialEpochClaims,
+} from './tenant-credential-epoch.js';
 import {
   assertUserTokenNotInvalidated,
   authCredentialGenerationClaim,
