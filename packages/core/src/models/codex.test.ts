@@ -12,21 +12,32 @@ import {
 
 describe('Codex model registry', () => {
   it('keeps current defaults on supported Codex models', () => {
-    expect(DEFAULT_CODEX_MODEL).toBe('gpt-6-astra');
-    expect(CODEX_MINI_MODEL).toBe('gpt-5.6-terra');
+    expect(DEFAULT_CODEX_MODEL).toBe('gpt-6.2-astra');
+    expect(CODEX_MINI_MODEL).toBe('gpt-6.1-terra');
   });
 
   it('surfaces supported and provider-dependent models newest-first', () => {
     const selectableIds = Object.keys(CODEX_MODEL_METADATA);
 
-    expect(selectableIds.slice(0, 5)).toEqual([
+    expect(selectableIds.slice(0, 8)).toEqual([
+      'gpt-6.2-astra',
+      'gpt-6.2-sol',
       'gpt-6-astra',
       'gpt-6.1-sol',
       'gpt-6-sol',
       'gpt-6-luna',
+      'gpt-6.1-terra',
       'gpt-5.6-terra',
     ]);
-    for (const model of ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna'] as const) {
+    for (const model of [
+      'gpt-6.2-astra',
+      'gpt-6.2-sol',
+      'gpt-6-astra',
+      'gpt-6.1-sol',
+      'gpt-6-sol',
+      'gpt-6-luna',
+      'gpt-6.1-terra',
+    ] as const) {
       expect(CODEX_MODEL_METADATA[model].availability).toBe('provider-dependent');
     }
     expect(selectableIds).toContain('gpt-5.5');
@@ -40,7 +51,7 @@ describe('Codex model registry', () => {
     expect(CODEX_MODEL_REGISTRY['gpt-5-codex']).toMatchObject({
       selectable: false,
       availability: 'unsupported',
-      replacement: 'gpt-6-astra',
+      replacement: 'gpt-6.2-astra',
     });
   });
 
@@ -58,6 +69,15 @@ describe('Codex model registry', () => {
     expect(getCodexModelLifecycle('gpt-6-luna-2026-09-04')).toBe(
       CODEX_MODEL_REGISTRY['gpt-6-luna']
     );
+    expect(getCodexModelLifecycle('gpt-6.2-astra-2026-11-17')).toBe(
+      CODEX_MODEL_REGISTRY['gpt-6.2-astra']
+    );
+    expect(getCodexModelLifecycle('gpt-6.2-sol-2026-11-17')).toBe(
+      CODEX_MODEL_REGISTRY['gpt-6.2-sol']
+    );
+    expect(getCodexModelLifecycle('gpt-6.1-terra-2026-11-17')).toBe(
+      CODEX_MODEL_REGISTRY['gpt-6.1-terra']
+    );
     expect(getCodexModelLifecycle('gpt-6.1-sol-2026-09-29')).toBe(
       CODEX_MODEL_REGISTRY['gpt-6.1-sol']
     );
@@ -74,14 +94,17 @@ describe('Codex model registry', () => {
     const message = formatUnsupportedAgorCodexModelMessage('gpt-5-codex');
 
     expect(message).toContain('gpt-5-codex');
-    expect(message).toContain('gpt-6-astra');
+    expect(message).toContain('gpt-6.2-astra');
     expect(message).toContain('user defaults');
     expect(message).toContain('omit modelConfig');
   });
 
   it('accepts curated aliases and rejects unknown alias selections actionably', () => {
     expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-6-astra' })).toBeUndefined();
+    expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-6.2-astra' })).toBeUndefined();
+    expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-6.2-sol' })).toBeUndefined();
     expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-6.1-sol' })).toBeUndefined();
+    expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-6.1-terra' })).toBeUndefined();
     expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-6-sol' })).toBeUndefined();
     expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-6-luna' })).toBeUndefined();
     expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-5.6-terra' })).toBeUndefined();

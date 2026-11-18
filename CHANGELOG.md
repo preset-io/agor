@@ -33,6 +33,38 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ## Unreleased
 
+## 0.29.0 (2026-11-17)
+
+Release preparation covers merged changes from `v0.28.0` (`578bf8a6`) through `b0d846ad`, plus the Codex model and runtime update in this release: [compare merged changes](https://github.com/preset-io/agor/compare/v0.28.0...b0d846ad4d79f184acf0145c9a035a2cdfe038e5). This entry does not imply publication or deployment.
+
+### Features
+
+- **GPT-6.2 Astra is the new Codex default** — adds `gpt-6.2-astra` and `gpt-6.2-sol` with their 1.05M context and pricing, and uses GPT-6.2 Astra for new Codex sessions with no configured model. Also adds `gpt-6.1-terra` (1.05M context), which replaces GPT-5.6 Terra as the suggested lower-cost model. GPT-6 Astra, GPT-6.1 Sol and the older models stay selectable. The pinned Codex SDK and bundled CLI move to 0.169.0, because 0.160.0 rejects the GPT-6.2 models under ChatGPT sign-in. ([#3266](https://github.com/preset-io/agor/pull/3266))
+
+### Security
+
+- **Session MCP tokens are bound to their task** — a session's MCP token works only while its task's executor is running, is no longer stored on session rows or sent in realtime events, and is kept out of the commands Claude Code, Codex and OpenCode run. ([#3246](https://github.com/preset-io/agor/pull/3246), [#3264](https://github.com/preset-io/agor/pull/3264))
+- **Outbound requests to private addresses are refused** — on deployments that enforce public egress, model-provider base URLs, managed-environment webhooks and health checks are validated and pinned to public addresses. Trusted local installs can still point at local endpoints. ([#3261](https://github.com/preset-io/agor/pull/3261), [#3257](https://github.com/preset-io/agor/pull/3257))
+- **Board CSS stays inside the board** — custom board CSS that could apply outside the canvas is not applied, board animations can't replace app animations, and object style fields are validated. ([#3243](https://github.com/preset-io/agor/pull/3243))
+- **Other users' profiles show only directory fields** — reading another user returns their name, email and avatar; role, settings, and credential and environment details stay with the owner and admins. ([#3244](https://github.com/preset-io/agor/pull/3244))
+
+### Fixes
+
+- **Background timers keep tenants apart** — Slack repair timers and the gateway delivery loop no longer run under the tenant that scheduled them, so one workspace can't stall another's delivery. ([#3260](https://github.com/preset-io/agor/pull/3260), [#3262](https://github.com/preset-io/agor/pull/3262))
+- **Malformed requests return 400** — invalid bodies on API key, auth check and repository requests get a coded `400` or `409` instead of a `500`, and unexpected throws are counted as `500` in metrics. ([#3256](https://github.com/preset-io/agor/pull/3256), [#3263](https://github.com/preset-io/agor/pull/3263))
+
+### Breaking
+
+- **Fields removed from reads** — `GET /sessions/:id` returns `mcp_token` only to the task executor reading its own session, and `POST /sessions` never returns it; use personal API keys from external clients. Reading another user returns only the directory entry. ([#3246](https://github.com/preset-io/agor/pull/3246), [#3244](https://github.com/preset-io/agor/pull/3244))
+
+### Chores
+
+- **Dependency updates** — Vite 8.3.3 for development builds. ([#3143](https://github.com/preset-io/agor/pull/3143))
+
+### Upgrade
+
+This release pins Codex SDK and CLI 0.169.0 and has no database migrations. After publication and verification of all eight npm packages, packaged installations should install `agor-live@0.29.0` and run `agor install --sync` and `agor doctor` before restarting, according to [PUBLISH.md](PUBLISH.md). Agor Cloud rollout is a separate operator action, not a consequence of npm publication.
+
 ## 0.28.0 (2026-11-10)
 
 Release preparation covers merged changes from `v0.27.0` (`e653dfc8`) through `b1d39be5`, plus the Claude Fable 5.2 model and runtime update in this release: [compare merged changes](https://github.com/preset-io/agor/compare/v0.27.0...b1d39be5cdfdc82738b1c0e923360c3476e4e166). This entry does not imply publication or deployment.
