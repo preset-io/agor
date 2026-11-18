@@ -4137,6 +4137,38 @@ describe('TaskRepository.createPending', () => {
 // FindQueued
 // ============================================================================
 
+describe('TaskRepository.stopQueuedForTenantSuspension', () => {
+  dbTest("stops only this session's queued prompts, as a suspension", async ({ db }) => {
+    const repo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const otherSessionId = await createSessionWithDeps(db);
+    const input = createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED });
+    const active = await repo.createPending({ ...input, dispatchIfIdle: dispatchFields() });
+    const queued = [await repo.createPending(input), await repo.createPending(input)];
+    const other = await repo.createPending(
+      createPendingInput({ session_id: otherSessionId, status: TaskStatus.QUEUED })
+    );
+
+    const stopped = await repo.stopQueuedForTenantSuspension(sessionId, 'suspended');
+
+    expect(stopped.map((task) => task.task_id).sort()).toEqual(
+      queued.map((task) => task.task_id).sort()
+    );
+    for (const task of queued) {
+      expect(await repo.findById(task.task_id)).toMatchObject({
+        status: TaskStatus.STOPPED,
+        queue_position: undefined,
+        completed_at: expect.any(String),
+        recorded_tool_count: 0,
+        termination_request: { cause: 'tenant_suspension', error_message: 'suspended' },
+      });
+    }
+    expect(await repo.getNextQueued(sessionId)).toBeNull();
+    expect((await repo.findById(active.task_id))?.status).toBe(TaskStatus.DISPATCHING);
+    expect((await repo.findById(other.task_id))?.status).toBe(TaskStatus.QUEUED);
+  });
+});
+
 describe('TaskRepository.findQueued', () => {
   dbTest('should return queued tasks ordered by queue_position', async ({ db }) => {
     const taskRepo = new TaskRepository(db);

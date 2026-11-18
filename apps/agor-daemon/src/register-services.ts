@@ -161,6 +161,7 @@ import {
   MCP_OAUTH_BROWSER_OPERATIONS,
   ROLES,
   TaskStatus,
+  TENANT_RESTRICTED_TASK_MESSAGE,
 } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import { runWithLogContext } from '@agor/core/utils/log-context';
@@ -1989,6 +1990,32 @@ export function createExecuteHandler(
             return;
           }
           templatedLauncherAbsenceVerified = true;
+        }
+
+        if (disposition === 'restricted') {
+          // Before settling this task, whose settlement drains the queue into the same refusal.
+          try {
+            const stopped = await runInFreshTerminationTenantWriteDatabase(() =>
+              new TaskRepository(db).stopQueuedForTenantSuspension(
+                session.session_id,
+                TENANT_RESTRICTED_TASK_MESSAGE
+              )
+            );
+            for (const task of stopped) {
+              emitServiceEvent(app, {
+                path: 'tasks',
+                event: 'patched',
+                data: task,
+                params,
+                id: task.task_id,
+              });
+            }
+          } catch (error) {
+            console.warn(
+              `${logPrefix} Failed to stop queued prompts after restricted launch:`,
+              error
+            );
+          }
         }
 
         try {

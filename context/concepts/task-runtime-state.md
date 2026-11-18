@@ -64,7 +64,7 @@ ownership. Neither replaces `Task.status`.
 | `stopping`            | Termination is durably claimed; containment is not yet settled.        | Daemon termination coordinator                                    |
 | `completed`           | The SDK turn completed successfully.                                   | Terminal                                                          |
 | `failed`              | The turn or supervised containment failed.                             | Terminal                                                          |
-| `stopped`             | A user-requested stop settled, or restart recovery released an orphan. | Terminal                                                          |
+| `stopped`             | A user or suspension stop settled, or restart released an orphan task. | Terminal                                                          |
 | `timed_out`           | A permission/input wait expired.                                       | Terminal                                                          |
 
 The important transitions are:
@@ -87,6 +87,11 @@ QUEUED -----> DISPATCHING <----- CREATED
                                |
                        STOPPED or FAILED
 ```
+
+A tenant suspension also moves pending prompts straight to `STOPPED` with cause
+`tenant_suspension`: closing the tenant stops its `created` and `queued` tasks,
+and a launch refused for suspension (exit `76`, below) stops its session's
+`queued` tasks. Neither ever ran, so neither passes through `STOPPING`.
 
 Claude completion requires an SDK result, not merely iterator exhaustion or a
 persisted assistant-message ID. A result with `is_error: true` is a failure even
@@ -191,10 +196,9 @@ an explicit mapping-review point.
   `tenant_suspension` request without the diagnosis keeps the safeguard. When
   the runtime's own suspension Stop claimed first, the diagnosis is not stored,
   so a restart before settlement resumes without that proof, as for a Stop that
-  preceded a `75` refusal. While the session's latest settled task is such a
-  refusal, its queue does not dispatch for up to 10 minutes
-  (`LAUNCH_RESTRICTED_QUEUE_HOLD_MS`): the next launch would be refused too, and
-  the restriction normally lands first and stops the queued prompts.
+  preceded a `75` refusal. Before requesting that termination, the prompt
+  `onExit` stops the session's `queued` prompts with cause `tenant_suspension`,
+  since each would be refused the same way.
 - Connected active tasks heartbeat every 10 seconds by default. A scoped
   executor continues heartbeat and pulse telemetry while `stopping` until its
   provider cleanup returns and it reports quiescence.

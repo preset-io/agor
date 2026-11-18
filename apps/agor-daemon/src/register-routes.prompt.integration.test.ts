@@ -59,10 +59,7 @@ afterEach(() => {
 });
 
 async function fixture(
-  options: {
-    requireAuth?: (context: HookContext) => Promise<HookContext>;
-    stopAtRoute?: string;
-  } = {}
+  options: { requireAuth?: (context: HookContext) => Promise<HookContext> } = {}
 ) {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
   cleanup.push(() => (rawDb as unknown as { $client: { close(): void } }).$client.close());
@@ -123,11 +120,7 @@ async function fixture(
     events.push('launch');
   });
   const triggerQueueProcessing = vi.fn();
-  let queueProcessor: ((sessionId: string, params?: unknown) => Promise<void>) | undefined;
   const sessionsService = {
-    setQueueProcessor: (processor: typeof queueProcessor) => {
-      queueProcessor = processor;
-    },
     get: (id: string) => sessionsRepository.findById(id),
     patch: (id: string, data: SessionUpdate) => sessionsRepository.update(id, data),
     materializeAgenticToolPreset: async (value: Session) => value,
@@ -155,7 +148,7 @@ async function fixture(
   const stopRegistration = new Error('prompt route registered');
   const use = app.use.bind(app);
   const useSpy = vi.spyOn(app, 'use').mockImplementation((...args) => {
-    if (args[0] === (options.stopAtRoute ?? '/tasks/:id/run')) throw stopRegistration;
+    if (args[0] === '/tasks/:id/run') throw stopRegistration;
     return use(...args);
   });
   try {
@@ -203,10 +196,6 @@ async function fixture(
     events,
     executeTask,
     triggerQueueProcessing,
-    processQueue: (sessionId: string) =>
-      queueProcessor!(sessionId, {
-        tenant: { tenant_id: DEFAULT_STATIC_TENANT_ID, source: 'explicit' },
-      }),
     claim,
     launchObservations,
     prompt,
@@ -760,48 +749,5 @@ describe('scheduled initial Task admission', () => {
     await expect(f.prompt({ prompt: 'Follow up' }, { user: creator })).resolves.toMatchObject({
       created_by: creator.user_id,
     });
-  });
-});
-
-describe('queue drain after a restricted launch refusal', () => {
-  it('keeps the next prompt queued while the latest settled task is a recent launch_restricted refusal', async () => {
-    const f = await fixture({ stopAtRoute: '/sessions/:id/permission-decision' });
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    const refusedAt = new Date().toISOString();
-    const { queued } = await f.scoped(async () => {
-      await f.taskRepo.create({
-        session_id: f.session.session_id,
-        created_by: f.actor.user_id,
-        full_prompt: 'refused for suspension',
-        status: TaskStatus.STOPPED,
-        completed_at: refusedAt,
-        sdk_failure: {
-          reason: 'launch_restricted',
-          detected_at: refusedAt,
-          tool: 'codex',
-          termination: 'verified',
-        },
-      });
-      const queued = await f.taskRepo.create({
-        session_id: f.session.session_id,
-        created_by: f.actor.user_id,
-        full_prompt: 'next in line',
-        status: TaskStatus.QUEUED,
-        queue_position: 1,
-      });
-      return { queued };
-    });
-
-    await f.processQueue(f.session.session_id);
-    expect(f.claim).not.toHaveBeenCalled();
-    expect(f.executeTask).not.toHaveBeenCalled();
-    expect((await f.scoped(() => f.taskRepo.findById(queued.task_id)))?.status).toBe(
-      TaskStatus.QUEUED
-    );
-
-    // Once the hold window has passed, the queue drains normally.
-    vi.spyOn(Date, 'now').mockReturnValue(Date.parse(refusedAt) + 11 * 60_000);
-    await f.processQueue(f.session.session_id);
-    await vi.waitFor(() => expect(f.executeTask).toHaveBeenCalledOnce());
   });
 });

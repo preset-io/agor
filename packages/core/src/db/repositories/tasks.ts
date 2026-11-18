@@ -709,18 +709,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     }
   }
 
-  /** True when the session's latest settled task is a tenant-restricted launch refusal at or after `since`. */
-  async latestSettledIsLaunchRestricted(sessionId: string, since: Date): Promise<boolean> {
-    const row = await select(this.db, { completed_at: tasks.completed_at, data: tasks.data })
-      .from(tasks)
-      .where(and(eq(tasks.session_id, sessionId), isNotNull(tasks.completed_at)))
-      .orderBy(desc(tasks.completed_at), desc(tasks.task_id))
-      .limit(1)
-      .one();
-    if (!row?.completed_at || row.data?.sdk_failure?.reason !== 'launch_restricted') return false;
-    return new Date(row.completed_at).getTime() >= since.getTime();
-  }
-
   /**
    * Find task by ID (supports short ID)
    */
@@ -2852,6 +2840,57 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     if (result.outcome === 'conflict') {
       throw new RepositoryError('Only queued tasks can be deleted; reread the queue');
     }
+  }
+
+  /**
+   * Stop a session's queued prompts after Cloud refused its launch for a suspension the runtime has
+   * not applied yet, so none dispatches into the same refusal. Same shape as the tenant-wide stop.
+   */
+  async stopQueuedForTenantSuspension(sessionId: SessionID, errorMessage: string): Promise<Task[]> {
+    return this.runTaskMutation(() =>
+      runDatabaseTransaction(
+        this.db,
+        async (txDb) => {
+          await lockRowForUpdate(txDb, this.db, sessions, eq(sessions.session_id, sessionId));
+          const predicate = and(
+            eq(tasks.session_id, sessionId),
+            eq(tasks.status, TaskStatus.QUEUED)
+          )!;
+          await lockRowForUpdate(txDb, this.db, tasks, predicate);
+          const rows: TaskRow[] = await select(txDb).from(tasks).where(predicate).all();
+          const stopped: Task[] = [];
+          for (const row of rows) {
+            const current = this.rowToTask(row);
+            const at = (await this.mutationNow(txDb, current.task_id)).toISOString();
+            const task: Task = {
+              ...current,
+              status: TaskStatus.STOPPED,
+              queue_position: undefined,
+              completed_at: at,
+              recorded_tool_count: 0,
+              termination_request: {
+                cause: 'tenant_suspension',
+                requested_at: at,
+                error_message: errorMessage,
+              },
+            };
+            const insertData = this.taskToInsert(task);
+            await update(txDb, tasks)
+              .set({
+                status: insertData.status,
+                queue_position: null,
+                completed_at: insertData.completed_at,
+                data: insertData.data,
+              })
+              .where(and(predicate, eq(tasks.task_id, current.task_id)))
+              .run();
+            stopped.push(task);
+          }
+          return stopped;
+        },
+        { sqliteImmediate: true, sqliteBusyRetries: 9 }
+      )
+    );
   }
 
   /**

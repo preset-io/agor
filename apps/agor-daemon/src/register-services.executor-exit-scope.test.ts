@@ -33,6 +33,11 @@ describe('executor exit termination tenant scope', () => {
     expect(onExit).toMatch(/cause,\s+errorMessage,/);
     expect(onExit).toContain('absenceVerified: templatedLauncherAbsenceVerified');
     expect(onExit).toMatch(/disposition === 'restricted'\s+\? 'launch_restricted'/);
+    // A restricted refusal stops the session's queue before its settlement drains it.
+    expect(onExit.indexOf('stopQueuedForTenantSuspension(')).toBeGreaterThan(-1);
+    expect(onExit.indexOf('stopQueuedForTenantSuspension(')).toBeLessThan(
+      onExit.indexOf('await requestExecutorTermination(')
+    );
     // A refusal drops only the status fence, so it settles a Stop that came
     // first; a connected executor still wins the race.
     expect(onExit).toMatch(
