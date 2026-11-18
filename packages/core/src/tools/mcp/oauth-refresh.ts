@@ -333,12 +333,13 @@ export interface RefreshAndPersistDeps {
   onInvalidGrant?: (info: { userId: UserID | null; mcpServerId: MCPServerID }) => void;
   /**
    * Called when the refresh was rejected with `invalid_client`, after the grant
-   * is deleted. The daemon drops the server's cached dynamic registration here
+   * is deleted. The daemon drops only the rejected client's dynamic registration here
    * so the reconnect registers a new client instead of reusing the stale one.
    */
   onInvalidClient?: (info: {
     userId: UserID | null;
     mcpServerId: MCPServerID;
+    clientId: string;
   }) => void | Promise<void>;
   /** Internal test/development seam; daemon PostgreSQL callers leave this false. */
   allowLocalhostHttpDevelopment?: boolean;
@@ -433,10 +434,14 @@ async function standaloneWork<T>(
   );
 }
 
-async function notifyInvalidClient(deps: RefreshAndPersistDeps, error: unknown): Promise<void> {
+async function notifyInvalidClient(
+  deps: RefreshAndPersistDeps,
+  error: unknown,
+  clientId: string
+): Promise<void> {
   if (!(error instanceof InvalidGrantError) || !error.invalidClient) return;
   try {
-    await deps.onInvalidClient?.({ userId: deps.userId, mcpServerId: deps.mcpServerId });
+    await deps.onInvalidClient?.({ userId: deps.userId, mcpServerId: deps.mcpServerId, clientId });
   } catch {
     console.error('[MCP OAuth Refresh] callback_failed category=invalid_client_notification');
   }
@@ -609,7 +614,7 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
         );
         if (deleted) {
           notifyInvalidGrant(deps);
-          await notifyInvalidClient(deps, error);
+          await notifyInvalidClient(deps, error, row.oauth_client_id!);
         } else await observeCommittedRefresh(deps, fence);
         return;
       }
@@ -758,7 +763,7 @@ async function refreshStandalone(
       );
       if (deleted) {
         notifyInvalidGrant(deps);
-        await notifyInvalidClient(deps, error);
+        await notifyInvalidClient(deps, error, clientId);
       } else throw new GrantConfigurationChangedError();
     }
     if (!(error instanceof InvalidGrantError)) {

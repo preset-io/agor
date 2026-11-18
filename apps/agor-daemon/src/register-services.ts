@@ -2124,13 +2124,17 @@ export async function registerMCPServices(
    * A refresh rejected with `invalid_client` means the server forgot the client
    * Agor registered, so the cached registration must not be reused by the
    * reconnect. Registrations are one per server, whichever OAuth mode owns the
-   * grant. Best effort: the grant is already gone and the user has to reconnect
-   * either way.
+   * grant. A newer client must survive a stale grant's rejection. Best effort:
+   * the grant is already gone and the user has to reconnect either way.
    */
   const invalidateRegistrationOnInvalidClient = (tenantId: string | undefined) =>
     durableOAuthClientRegistrations && tenantId
-      ? async (info: { mcpServerId: MCPServerID }) => {
-          await durableOAuthClientRegistrations.invalidateForServer(tenantId, info.mcpServerId);
+      ? async (info: { mcpServerId: MCPServerID; clientId: string }) => {
+          await durableOAuthClientRegistrations.invalidateRejectedClient(
+            tenantId,
+            info.mcpServerId,
+            info.clientId
+          );
         }
       : undefined;
   const lockOAuthGrantConfiguration =

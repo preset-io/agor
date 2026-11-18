@@ -667,7 +667,11 @@ describe('refreshAndPersistToken', () => {
       return onInvalidClient;
     };
     const stale = await run('invalid_client');
-    expect(stale).toHaveBeenCalledWith({ userId: USER_ID, mcpServerId: SERVER_ID });
+    expect(stale).toHaveBeenCalledWith({
+      userId: USER_ID,
+      mcpServerId: SERVER_ID,
+      clientId: 'cid',
+    });
     __resetRefreshMutexForTests();
     const revoked = await run('invalid_grant');
     expect(revoked).not.toHaveBeenCalled();
