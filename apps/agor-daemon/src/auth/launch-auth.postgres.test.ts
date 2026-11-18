@@ -20,7 +20,12 @@ import {
   UserApiKeysRepository,
   users,
 } from '@agor/core/db';
-import type { Params, User, UserID } from '@agor/core/types';
+import {
+  type Params,
+  TENANT_RESTRICTED_ERROR_CODE,
+  type User,
+  type UserID,
+} from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { authenticatedHealthInstance } from '../health/instance.js';
@@ -644,6 +649,23 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             .one();
           expect(row?.role).toBe('admin');
         });
+      });
+
+      it('refuses an unchanged-role refresh once the tenant is closed', async () => {
+        const tenantId = `revalidate-unchanged-${generateId()}`;
+        await applyTestRestriction(dbB, tenantId, 1, 'restrict', { controllerId });
+        await releaseTestRestriction(dbB, tenantId, 2, { controllerId });
+        issuer(tenantId, 2);
+        const { launch, refresh } = services(dbA);
+        const launched = await launch.create({ launchCode: 'unchanged-role' });
+
+        await applyTestRestriction(dbB, tenantId, 3, 'restrict', { controllerId });
+        await expect(refresh.create({ refreshToken: launched.refreshToken })).rejects.toMatchObject(
+          {
+            message: 'Invalid or expired refresh token',
+            data: { code: TENANT_RESTRICTED_ERROR_CODE },
+          }
+        );
       });
     });
 

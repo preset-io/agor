@@ -1499,6 +1499,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       accessTokenTtl: ACCESS_TOKEN_TTL,
       refreshTokenTtl: REFRESH_TOKEN_TTL_SECONDS,
       sessionMaxLifetimeSeconds: SESSION_MAX_LIFETIME_SECONDS,
+      multiTenancy,
       tenantClaim: tenantTokenClaim,
       usersService,
       revalidateLaunchSession,

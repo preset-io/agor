@@ -105,3 +105,24 @@ describe('credential generation read outage', () => {
     );
   });
 });
+
+describe('refresh token without a tenant claim', () => {
+  it('meets the epoch fence for the static tenant', async () => {
+    read.mockResolvedValue({ records: [], closed: true });
+    const refresh = createRefreshTokenService({
+      db,
+      jwtSecret: SECRET,
+      accessTokenTtl: '5m',
+      refreshTokenTtl: '5m',
+      multiTenancy: { mode: 'static', static_tenant_id: TENANT as never },
+      usersService: { get: vi.fn(async () => user as never) },
+    });
+    const token = issueRuntimeToken({ sub: USER, type: 'refresh' }, SECRET, '5m');
+
+    await expect(refresh.create({ refreshToken: token })).rejects.toMatchObject({
+      code: 401,
+      data: { code: 'tenant_restricted' },
+    });
+    expect(read).toHaveBeenCalledWith(db, TENANT);
+  });
+});
