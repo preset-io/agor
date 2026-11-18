@@ -182,9 +182,10 @@ export async function applyTenantRestrictionIntent(
         UPDATE public.tasks SET status = 'stopped', queue_position = NULL,
           completed_at = clock_timestamp(),
           data = data || jsonb_build_object(
-            'error_message', ${TENANT_RESTRICTED_TASK_MESSAGE}::text,
+            'recorded_tool_count', 0,
             'termination_request', jsonb_build_object(
               'cause', 'tenant_suspension',
+              'error_message', ${TENANT_RESTRICTED_TASK_MESSAGE}::text,
               'requested_at', to_char(clock_timestamp() AT TIME ZONE 'UTC',
                 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')))
         WHERE tenant_id = ${tenantId} AND status IN ('created', 'queued')

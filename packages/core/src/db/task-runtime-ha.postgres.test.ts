@@ -592,9 +592,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
           status: TaskStatus.STOPPED,
           queue_position: undefined,
           completed_at: expect.any(String),
-          error_message: 'Tenant access is restricted.',
+          recorded_tool_count: 0,
           termination_request: {
             cause: 'tenant_suspension',
+            error_message: 'Tenant access is restricted.',
             requested_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
           },
         });
