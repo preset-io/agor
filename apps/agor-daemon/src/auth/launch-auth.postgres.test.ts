@@ -520,6 +520,133 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await expect(keyCount(tenantA, inA.user.user_id)).resolves.toBe(1);
     });
 
+    describe('refresh revalidation on a tenant with restriction history', () => {
+      const controllerId = 'launch-test';
+      const revalidationConfig = (): AgorConfig => ({
+        ...config(),
+        identity: {
+          user_lifecycle: 'external',
+          role_authority: 'claims',
+          local_auth: 'disabled',
+          external: { provider: 'external_launch', provisioning: 'jit' },
+        },
+        external_launch: {
+          ...config().external_launch,
+          session_revalidation_url: 'https://issuer.example.test/revalidate',
+          allow_admin_roles: true,
+          restriction_controller_id: controllerId,
+        },
+      });
+
+      // Cloud stamps the Team's real revision on launch but always revision 0 on revalidation.
+      function issuer(tenantId: string, launchRevision: number) {
+        const state = { role: 'admin' };
+        vi.stubGlobal(
+          'fetch',
+          vi.fn(async (url: string) => {
+            const revalidating = url.endsWith('/revalidate');
+            return Response.json({
+              assertion: jwt.sign(
+                {
+                  ...(revalidating ? { purpose: 'session_revalidation' } : {}),
+                  sub: tenantId,
+                  email: `${tenantId}@example.invalid`,
+                  role: state.role,
+                  tenant_id: tenantId,
+                  instance_id: 'instance-1',
+                  tenant_restriction: {
+                    controllerId,
+                    revision: revalidating ? 0 : launchRevision,
+                  },
+                },
+                ASSERTION_SECRET,
+                {
+                  algorithm: 'HS256',
+                  expiresIn: '5m',
+                  issuer: 'https://issuer.example.test',
+                  audience: 'runtime:test',
+                }
+              ),
+            });
+          })
+        );
+        return state;
+      }
+
+      // `withEpochFence` mirrors production; without it, the refusal must come from revalidation itself.
+      function services(db: TenantScopeAwareDatabase, { withEpochFence = true } = {}) {
+        const launchConfig = revalidationConfig();
+        const { settings } = resolveExternalLaunchSettings(launchConfig);
+        const serializeProjection = createLaunchProjectionSerializer();
+        const shared = {
+          jwtSecret: RUNTIME_SECRET,
+          accessTokenTtl: '15m',
+          refreshTokenTtl: 2_592_000,
+          sessionMaxLifetimeSeconds: 2_592_000,
+          usersService: usersService(db),
+        };
+        return {
+          launch: createLaunchAuthService({
+            ...shared,
+            db,
+            config: launchConfig,
+            provider: settings,
+            serializeProjection,
+          }),
+          refresh: createRefreshTokenService({
+            ...shared,
+            ...(withEpochFence ? { db } : {}),
+            revalidateLaunchSession: createLaunchSessionRevalidator({
+              db,
+              config: launchConfig,
+              provider: settings,
+              serializeProjection,
+            }),
+          }),
+        };
+      }
+
+      it('reprojects a demotion from a revision-0 revalidation assertion after reactivation', async () => {
+        const tenantId = `revalidate-history-${generateId()}`;
+        await applyTestRestriction(dbB, tenantId, 1, 'restrict', { controllerId });
+        await releaseTestRestriction(dbB, tenantId, 2, { controllerId });
+        const state = issuer(tenantId, 2);
+        const { launch, refresh } = services(dbA);
+        const launched = await launch.create({ launchCode: 'reactivated' });
+        expect(launched.user.role).toBe('admin');
+
+        state.role = 'member';
+        const refreshed = await refresh.create({ refreshToken: launched.refreshToken });
+        expect(refreshed.user.role).toBe('member');
+        expect(jwt.verify(refreshed.accessToken, RUNTIME_SECRET)).toMatchObject({
+          tenant_id: tenantId,
+          tenant_credential_epoch: expect.stringMatching(/^[a-f0-9]{64}$/),
+        });
+      });
+
+      it('still refuses revalidation once the tenant is closed again', async () => {
+        const tenantId = `revalidate-closed-${generateId()}`;
+        await applyTestRestriction(dbB, tenantId, 1, 'restrict', { controllerId });
+        await releaseTestRestriction(dbB, tenantId, 2, { controllerId });
+        const state = issuer(tenantId, 2);
+        const { launch, refresh } = services(dbA, { withEpochFence: false });
+        const launched = await launch.create({ launchCode: 'before-close' });
+
+        await applyTestRestriction(dbB, tenantId, 3, 'restrict', { controllerId });
+        state.role = 'member';
+        await expect(refresh.create({ refreshToken: launched.refreshToken })).rejects.toThrow(
+          /Invalid or expired refresh token/
+        );
+        await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+          const row = await select(scoped)
+            .from(users)
+            .where(eq(users.user_id, launched.user.user_id))
+            .one();
+          expect(row?.role).toBe('admin');
+        });
+      });
+    });
+
     it('keeps an API key refusal when the request transaction rolls back, in that tenant only', async () => {
       const tenantA = `api-key-a-${generateId()}`;
       const tenantB = `api-key-b-${generateId()}`;

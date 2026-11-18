@@ -457,8 +457,8 @@ async function projectLaunchUser(
     const tenantId = resolveTenantContext(resolveMultiTenancyConfig(options.config), {
       authPayload: claims,
     }).tenant_id;
-    // Revalidation assertions are fetched by the daemon itself; refresh already checked the credential epoch.
-    if (mode === 'launch' || claims.tenant_restriction !== undefined) {
+    // Revalidate skips the revision: Cloud stamps revision 0 there, and refresh is fenced by the credential epoch, which prepare_release bumps.
+    if (mode === 'launch') {
       assertTenantLaunchRevision(
         restriction,
         claims.tenant_restriction,
