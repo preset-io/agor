@@ -30,7 +30,7 @@ import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { setTestBranchUserRole } from '../../../../packages/core/src/db/test-helpers.js';
 import { createClaudeAuthLogoutService } from './claude-auth-logout.js';
-import { ClaudeBackendOAuth } from './claude-backend-oauth.js';
+import { CLAUDE_RECONNECT_REQUIRED_MESSAGE, ClaudeBackendOAuth } from './claude-backend-oauth.js';
 import { createClaudeUserCredentialPatchCoordinator } from './claude-credential-mutation.js';
 import { createClaudeOAuthService } from './claude-oauth.js';
 import { ClaudeOAuthAttemptAuthority } from './claude-oauth-attempt-authority.js';
@@ -317,37 +317,206 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           throw new Error(refreshSentinel);
         },
         'ambiguous',
+        'source=network http_status=none body=none provider_error=none',
       ],
       [
         'mixed response',
         () => response({ error: 'invalid_grant', access_token: 'mixed' }, 400),
         'ambiguous',
+        'source=provider http_status=400 body=json provider_error=invalid_grant',
       ],
-      ['invalid grant', () => response({ error: 'invalid_grant' }, 400), 'reauth_required'],
+      [
+        'invalid grant',
+        () => response({ error: 'invalid_grant', error_description: refreshSentinel }, 400),
+        'reauth_required',
+        'source=provider http_status=400 body=json provider_error=invalid_grant',
+      ],
       [
         'empty replacement',
         () => response({ access_token: 'new', refresh_token: '', expires_in: 7200 }),
         'ambiguous',
+        'source=provider http_status=200 body=json provider_error=none',
       ],
-      ['uncertain 5xx', () => response({ error: 'server_error' }, 503), 'ambiguous'],
-    ] as const)('never replays %s and sanitizes failure', async (_label, reply, state) => {
+      [
+        'uncertain 5xx',
+        () => response({ error: 'server_error' }, 503),
+        'ambiguous',
+        'source=provider http_status=503 body=json provider_error=other',
+      ],
+      [
+        'HTML block page',
+        () => new Response(`<html>${refreshSentinel}</html>`, { status: 403 }),
+        'ambiguous',
+        'source=provider http_status=403 body=non_json provider_error=none',
+      ],
+    ] as const)(
+      'never replays %s, logs only closed fields, and asks for a reconnect',
+      async (_label, reply, state, logged) => {
+        const subject = await seed();
+        await save(subject);
+        const request = vi.fn(async (_url, options) => {
+          await options.assertCurrent();
+          return reply();
+        });
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+          const backend = new ClaudeBackendOAuth(dbA, () => ready, { request, masterSecret });
+          await expect(
+            backend.resolve(subject.tenantId, subject.userId, async () => {}, 'task-under-test')
+          ).rejects.toMatchObject({
+            message: CLAUDE_RECONNECT_REQUIRED_MESSAGE,
+            data: { code: 'claude_reconnect_required' },
+          });
+          await expect(
+            backend.resolve(subject.tenantId, subject.userId, async () => {})
+          ).rejects.toThrow(CLAUDE_RECONNECT_REQUIRED_MESSAGE);
+          expect(request).toHaveBeenCalledTimes(1);
+          const row = await backend.get(subject.tenantId, subject.userId);
+          expect(row?.state).toBe(state);
+          expect(row?.sealed_refresh_token).toBeNull();
+          const lines = warn.mock.calls
+            .map((call) => String(call[0]))
+            .filter((line) => line.startsWith('[claude_oauth.refresh]'));
+          expect(lines).toEqual([
+            `[claude_oauth.refresh] event=failed task_id=task-under-test outcome=${state === 'reauth_required' ? 'invalid' : 'ambiguous'} grant_state=${state} ${logged}`,
+          ]);
+          expect(JSON.stringify(warn.mock.calls)).not.toContain(refreshSentinel);
+        } finally {
+          warn.mockRestore();
+        }
+      }
+    );
+
+    it('still logs a rejected refresh when reading the grant back fails', async () => {
       const subject = await seed();
       await save(subject);
+      let failReads = false;
       const request = vi.fn(async (_url, options) => {
         await options.assertCurrent();
-        return reply();
+        failReads = true;
+        return response({ error: 'invalid_grant', error_description: refreshSentinel }, 400);
       });
       const backend = new ClaudeBackendOAuth(dbA, () => ready, { request, masterSecret });
-      await expect(
-        backend.resolve(subject.tenantId, subject.userId, async () => {})
-      ).rejects.toThrow('could not be refreshed safely');
-      await expect(
-        backend.resolve(subject.tenantId, subject.userId, async () => {})
-      ).rejects.toThrow();
-      expect(request).toHaveBeenCalledTimes(1);
-      const row = await backend.get(subject.tenantId, subject.userId);
-      expect(row?.state).toBe(state);
-      expect(row?.sealed_refresh_token).toBeNull();
+      const get = backend.get.bind(backend);
+      vi.spyOn(backend, 'get').mockImplementation(async (...args) => {
+        if (failReads) throw new Error('synthetic read failure');
+        return get(...args);
+      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await expect(
+          backend.resolve(subject.tenantId, subject.userId, async () => {}, 'task-under-test')
+        ).rejects.toThrow('could not be refreshed safely');
+        expect(
+          warn.mock.calls
+            .map((call) => String(call[0]))
+            .filter((line) => line.startsWith('[claude_oauth.refresh]'))
+        ).toEqual([
+          '[claude_oauth.refresh] event=failed task_id=task-under-test outcome=invalid grant_state=unchanged source=provider http_status=400 body=json provider_error=invalid_grant',
+        ]);
+        expect(JSON.stringify(warn.mock.calls)).not.toContain(refreshSentinel);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it.each([
+      [
+        'switches to an API key',
+        'api_key',
+        'Claude credential selection changed. Start a new task.',
+      ],
+      ['signs out of Claude', 'managed_oauth', CLAUDE_RECONNECT_REQUIRED_MESSAGE],
+    ] as const)(
+      'gives the right instruction when the user %s during a refresh',
+      async (_label, source, message) => {
+        const subject = await seed();
+        await save(subject);
+        let release!: () => void;
+        const blocked = new Promise<void>((r) => {
+          release = r;
+        });
+        let dispatch!: () => void;
+        const dispatched = new Promise<void>((r) => {
+          dispatch = r;
+        });
+        const request = vi.fn(async (_url, options) => {
+          await options.assertCurrent();
+          dispatch();
+          await blocked;
+          return response({ error: 'invalid_grant' }, 400);
+        });
+        const backend = new ClaudeBackendOAuth(dbA, () => ready, { request, masterSecret });
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+          const resolving = backend.resolve(subject.tenantId, subject.userId, async () => {});
+          const rejection = expect(resolving).rejects.toThrow(message);
+          await dispatched;
+          // Mirrors the credential coordinator: a source change or sign-out retires the grant.
+          await unit(dbB, subject.tenantId, async (db) => {
+            await executeRaw(
+              db,
+              sql`UPDATE users SET data = data || ${JSON.stringify({ agentic_credential_sources: { 'claude-code': source } })}::jsonb WHERE user_id = ${subject.userId}`
+            );
+            const generation = await new ClaudeOAuthAttemptRepository(db).allocateAttemptGeneration(
+              subject.tenantId,
+              subject.userId
+            );
+            await new UserProviderOAuthGrantRepository(db).retire(
+              subject.tenantId,
+              subject.userId,
+              generation
+            );
+          });
+          release();
+          await rejection;
+          expect((await backend.get(subject.tenantId, subject.userId))?.state).toBe('disconnected');
+        } finally {
+          warn.mockRestore();
+        }
+      }
+    );
+
+    it('reports a reconnect only for the selected backend login that cannot refresh', async () => {
+      const backend = new ClaudeBackendOAuth(dbA, () => ready, { masterSecret });
+      const broken = await seed();
+      await save(broken);
+      await unit(dbA, broken.tenantId, (db) =>
+        executeRaw(
+          db,
+          sql`UPDATE user_provider_oauth_grants SET state = 'reauth_required', failure_code = 'reauth_required', sealed_access_token = NULL, sealed_refresh_token = NULL WHERE user_id = ${broken.userId}`
+        )
+      );
+      const healthyExpired = await seed();
+      await save(healthyExpired, -60_000);
+      const switchedAway = await seed();
+      await save(switchedAway);
+      await unit(dbA, switchedAway.tenantId, (db) =>
+        executeRaw(
+          db,
+          sql`UPDATE user_provider_oauth_grants SET state = 'reauth_required' WHERE user_id = ${switchedAway.userId}`
+        )
+      );
+      await unit(dbA, switchedAway.tenantId, (db) =>
+        executeRaw(
+          db,
+          sql`UPDATE users SET data = data || ${JSON.stringify({ agentic_credential_sources: { 'claude-code': 'api_key' } })}::jsonb WHERE user_id = ${switchedAway.userId}`
+        )
+      );
+      expect(await backend.reconnectRequired(broken.tenantId, broken.userId)).toBe(true);
+      expect(await backend.reconnectRequired(healthyExpired.tenantId, healthyExpired.userId)).toBe(
+        false
+      );
+      expect(await backend.reconnectRequired(switchedAway.tenantId, switchedAway.userId)).toBe(
+        false
+      );
+      expect(await backend.reconnectRequired(healthyExpired.tenantId, broken.userId)).toBe(false);
+      const unavailable = new ClaudeBackendOAuth(
+        dbA,
+        () => ({ available: false, storage: 'backend', reason: 'operator_disabled' }),
+        { masterSecret }
+      );
+      expect(await unavailable.reconnectRequired(broken.tenantId, broken.userId)).toBe(false);
     });
 
     it('preserves an omitted refresh token, stops after a short lifetime, and backs off explicit rejection', async () => {
@@ -378,7 +547,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         if (mode === 'rejected') {
           await expect(
             backend.resolve(subject.tenantId, subject.userId, async () => {})
-          ).rejects.toThrow();
+          ).rejects.toThrow('could not be refreshed safely');
           expect(row.refresh_success_generation).toBe(0);
         }
         expect(request).toHaveBeenCalledTimes(1);

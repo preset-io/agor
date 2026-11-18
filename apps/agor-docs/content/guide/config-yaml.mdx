@@ -113,7 +113,8 @@ version-controlled deployment configuration. Enable it only in a separately
 authorized rollout; do not rely on an older image's default-off behavior.
 
 Refresh claims are database-fenced across replicas. An uncertain exchange is not
-retried with the possibly consumed refresh token; reconnect in Settings. The
+retried with the possibly consumed refresh token; reconnect in Settings. Each
+failed refresh logs one `[claude_oauth.refresh]` line. The
 backend status poll reports saved/usable state without refreshing or spawning an
 auth helper, and does not claim successful provider validation. A tenant write
 freeze refuses new refresh claims and dispatch. If a freeze begins after
