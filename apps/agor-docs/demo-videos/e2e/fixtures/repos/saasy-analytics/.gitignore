@@ -1,0 +1,4 @@
+warehouse/
+target/
+dbt_packages/
+logs/
