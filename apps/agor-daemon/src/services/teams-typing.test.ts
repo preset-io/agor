@@ -69,7 +69,10 @@ describe('TeamsTypingIndicators', () => {
     const stopped = setup();
     stopped.typing.start(target);
     await vi.advanceTimersByTimeAsync(0);
-    stopped.typing.stop('tenant-a', 'session-1');
+    // A stop addressed to another Task leaves this one typing.
+    stopped.typing.stop('tenant-a', 'session-1', 'task-0');
+    expect(stopped.typing.activeCount).toBe(1);
+    stopped.typing.stop('tenant-a', 'session-1', 'task-1');
     await vi.advanceTimersByTimeAsync(TEAMS_TYPING_REFRESH_MS * 3);
     expect(stopped.send).toHaveBeenCalledOnce();
 

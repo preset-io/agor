@@ -6040,6 +6040,33 @@ describe('GatewayService Slack streaming', () => {
     });
     expect(service.wasTaskStreamedToSlack?.('task-1')).toBe(true);
   });
+
+  it('closes the ending task stream when the mapping never recorded that task', async () => {
+    const stopStream = vi.fn(async () => undefined);
+    const { service } = makeGatewayHarness({
+      existingMapping: makeMapping({
+        thread_id: 'D123-100.000000',
+        metadata: { slack_active_thread_id: 'D123-100.000000' },
+      }),
+      connector: {
+        startStream: vi.fn(async () => '104.000000'),
+        appendStream: vi.fn(async () => undefined),
+        stopStream,
+      },
+    });
+
+    await runWithTenantContext('tenant-channel', async () => {
+      await service.handleMessageStreamingEvent('streaming:chunk', {
+        session_id: 'sess-1',
+        message_id: 'msg-1',
+        task_id: 'task-1',
+        chunk: 'hello dm',
+      });
+      await service.updateProgress({ session_id: 'sess-1', task_id: 'task-1', state: 'done' });
+    });
+
+    expect(stopStream).toHaveBeenCalledWith({ threadId: 'D123-100.000000', ts: '104.000000' });
+  });
 });
 
 describe('GatewayService outbound emit session branch binding', () => {
@@ -7063,8 +7090,8 @@ describe('GatewayService Teams notices', () => {
         channelId: teamsChannel.id,
         threadId: '19:c|root-1',
       });
-      await service.updateProgress({ session_id: 'sess-1', state: 'done' });
-      expect(stop).toHaveBeenCalledWith('tenant-channel', 'sess-1');
+      await service.updateProgress({ session_id: 'sess-1', state: 'done', task_id: 'task-1' });
+      expect(stop).toHaveBeenCalledWith('tenant-channel', 'sess-1', 'task-1');
     });
     await service.stopListeners();
     expect(stopAll).toHaveBeenCalledOnce();

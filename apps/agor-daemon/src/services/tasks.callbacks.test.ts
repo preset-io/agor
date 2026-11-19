@@ -887,7 +887,7 @@ describe('TasksService gateway turn end', () => {
     expect(gateway.flushOutboundBuffer).toHaveBeenCalledWith(childSessionId, { taskId });
   });
 
-  it('sends only the final reply when a newer task already owns the session', async () => {
+  it('still addresses the reply and done to a task that a newer task has superseded', async () => {
     const { service, gateway } = makeService({
       childSession: { tasks: [taskId, callbackTaskId as Task['task_id']] },
     });
@@ -895,9 +895,12 @@ describe('TasksService gateway turn end', () => {
     await service.patch(taskId, { status: TaskStatus.COMPLETED }, tenantParams);
 
     await vi.waitFor(() =>
-      expect(gateway.flushOutboundBuffer).toHaveBeenCalledWith(childSessionId, { taskId })
+      expect(gateway.updateProgress).toHaveBeenCalledWith({
+        session_id: childSessionId,
+        task_id: taskId,
+        state: 'done',
+      })
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(gateway.updateProgress).not.toHaveBeenCalled();
+    expect(gateway.flushOutboundBuffer).toHaveBeenCalledWith(childSessionId, { taskId });
   });
 });

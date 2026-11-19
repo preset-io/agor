@@ -77,10 +77,11 @@ export class TeamsTypingIndicators {
     void this.refresh(key, loop);
   }
 
-  stop(tenantId: TenantID | string, sessionId: string): void {
+  /** With `taskId`, only that Task's loop stops, so a late turn end leaves a newer Task typing. */
+  stop(tenantId: TenantID | string, sessionId: string, taskId?: string): void {
     const key = loopKey(tenantId, sessionId);
     const loop = this.loops.get(key);
-    if (!loop) return;
+    if (!loop || (taskId && loop.taskId !== taskId)) return;
     if (loop.timer) clearTimeout(loop.timer);
     this.loops.delete(key);
   }
