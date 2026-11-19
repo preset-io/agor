@@ -4522,7 +4522,9 @@ export class GatewayService {
    * transcript; Slack receives only a compact truncated preview.
    */
   async updateProgress(data: GatewayProgressData): Promise<void> {
-    if (data.state === 'done' || data.state === 'failed') this.stopTeamsTyping(data.session_id);
+    if (data.state === 'done' || data.state === 'failed') {
+      this.stopTeamsTyping(data.session_id, data.task_id);
+    }
     const previous = this.slackProgressQueues.get(data.session_id) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(() => this.updateProgressNow(data));
     this.slackProgressQueues.set(data.session_id, next);
@@ -4555,9 +4557,9 @@ export class GatewayService {
   }
 
   /** End this Session's Teams typing loop on this replica, e.g. once a reply was posted. */
-  stopTeamsTyping(sessionId: string): void {
+  stopTeamsTyping(sessionId: string, taskId?: string): void {
     const tenantId = getCurrentTenantId();
-    if (tenantId) this.teamsTyping.stop(tenantId, sessionId);
+    if (tenantId) this.teamsTyping.stop(tenantId, sessionId, taskId);
   }
 
   wasMessageStreamedToSlack(messageId: string): boolean {
@@ -4660,6 +4662,23 @@ export class GatewayService {
     const isRestartingAfterTerminal =
       (data.state === 'queued' || data.state === 'working') &&
       (metadata.slack_status_state === 'done' || metadata.slack_status_state === 'failed');
+    const statusTaskId =
+      typeof metadata.slack_status_task_id === 'string' ? metadata.slack_status_task_id : undefined;
+    if (isTerminal && data.task_id && statusTaskId && statusTaskId !== data.task_id) {
+      const statusTask = await this.taskRepo.findById(statusTaskId);
+      if (statusTask && !isTerminalTaskStatus(statusTask.status)) {
+        // A late terminal update ends its own stream, not the status of the task now shown.
+        try {
+          const connector =
+            this.getActiveListener(channel.id) ??
+            getConnector(channel.channel_type as ChannelType, channel.config);
+          await this.stopSlackTaskStream(data.task_id, connector);
+        } catch (_error) {
+          console.warn('[gateway] Failed to stop Slack task stream');
+        }
+        return;
+      }
+    }
     const lastUpdate = this.slackProgressLastUpdate.get(data.session_id) ?? 0;
     if (
       !isTerminal &&
@@ -4707,7 +4726,10 @@ export class GatewayService {
     try {
       if (isTerminal) {
         try {
-          await this.stopSlackTaskStream(activeTaskId, connector);
+          // The mapping may never have recorded the ending task, so stop its stream by id as well.
+          for (const streamTaskId of new Set([data.task_id, activeTaskId])) {
+            await this.stopSlackTaskStream(streamTaskId, connector);
+          }
         } catch (_error) {
           console.warn('[gateway] Failed to stop Slack task stream');
         }
