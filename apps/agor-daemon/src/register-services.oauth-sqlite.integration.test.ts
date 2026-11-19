@@ -1,7 +1,9 @@
 import http, { type Server as HttpServer } from 'node:http';
 import { getBaseUrl, resolveMcpOAuthCallbackOrigin } from '@agor/core/config';
+import * as coreDb from '@agor/core/db';
 import {
   AppVariableRepository,
+  BOUND_SECRET_ENVELOPE_VERSION,
   BranchRepository,
   createDatabaseAsync,
   createTenantScopedDatabaseProxy,
@@ -10,6 +12,8 @@ import {
   generateId,
   MCP_SLACK_CONNECT_CARD_KEY,
   MCP_SLACK_CONNECT_SETTINGS_NAMESPACE,
+  type MCPOAuthClientRegistrationRecord,
+  type MCPOAuthClientRegistrationRepository,
   MCPServerRepository,
   MessagesRepository,
   mcpServers,
@@ -19,6 +23,7 @@ import {
   runWithTenantDatabaseTransaction,
   SessionMCPServerRepository,
   SessionRepository,
+  sealBoundSecret,
   setMCPEgressGatewayMode,
   setMCPSlackConnectCardEnabled,
   setMcpMemberPolicy,
@@ -52,6 +57,7 @@ import type {
   MCPCatalogEntry,
   MCPOAuthBrowserEventRequest,
   MCPOAuthBrowserReservation,
+  MCPOAuthClientRegistrationID,
   MCPServer,
   MCPServerID,
   MessageID,
@@ -77,6 +83,10 @@ import {
 } from './register-hooks.js';
 import { createRegisteredMCPCatalogConnectService } from './register-routes.js';
 import { type RegisterServicesContext, registerMCPServices } from './register-services.js';
+import {
+  type DurableMCPOAuthClientRegistrationInput,
+  MCPOAuthClientRegistrationAuthority,
+} from './services/mcp-oauth-client-registration-authority.js';
 import { issueMCPOAuthConnectLink } from './services/mcp-oauth-connect-delivery.js';
 import * as oauthUse from './services/mcp-oauth-use.js';
 import { createSocketIOConfig } from './setup/socketio.js';
@@ -188,6 +198,8 @@ async function createTestProvider(
     numberedTokenResponses?: boolean;
     holdRefresh?: boolean;
     invalidRefresh?: boolean;
+    invalidRefreshClient?: boolean;
+    rejectUnknownClients?: boolean;
     gitlab?: boolean;
     malformedRefresh?: boolean;
     rejectDynamicRegistration?: boolean;
@@ -386,6 +398,12 @@ async function createTestProvider(
       const clientId = url.searchParams.get('client_id');
       const requested = url.searchParams.get('redirect_uri') ?? '';
       const registered = clientId ? registeredClients.get(clientId) : undefined;
+      if (!registered && options.rejectUnknownClients) {
+        authorizeVerdicts.push({ clientId, outcome: 'invalid_request' });
+        response.writeHead(400, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: 'invalid_client' }));
+        return;
+      }
       if (registered && !registered.redirectUris.includes(requested)) {
         authorizeVerdicts.push({ clientId, outcome: 'invalid_request' });
         response.writeHead(400, { 'content-type': 'application/json' });
@@ -422,20 +440,22 @@ async function createTestProvider(
         }
         refreshRequested.resolve();
         if (options.holdRefresh) await releaseRefresh.promise;
-        response.writeHead(options.invalidRefresh ? 400 : 200, {
+        response.writeHead(options.invalidRefresh || options.invalidRefreshClient ? 400 : 200, {
           'content-type': 'application/json',
         });
         response.end(
           JSON.stringify(
             options.malformedRefresh
               ? { access_token: 'synthetic-access', refresh_token: 42 }
-              : options.invalidRefresh
-                ? { error: 'invalid_grant' }
-                : {
-                    access_token: 'stale-refreshed-access-token',
-                    refresh_token: 'stale-rotated-refresh-token',
-                    expires_in: options.gitlab ? 7200 : 3600,
-                  }
+              : options.invalidRefreshClient
+                ? { error: 'invalid_client' }
+                : options.invalidRefresh
+                  ? { error: 'invalid_grant' }
+                  : {
+                      access_token: 'stale-refreshed-access-token',
+                      refresh_token: 'stale-rotated-refresh-token',
+                      expires_in: options.gitlab ? 7200 : 3600,
+                    }
           )
         );
         return;
@@ -3987,7 +4007,11 @@ describe('SQLite saved-row OAuth authority', () => {
     // had no `/authorize` handler at all.
     const authorizeResponse = await fetch(authorizationUrl, { redirect: 'manual' });
     expect(authorizeResponse.status).toBe(302);
-    expect(provider.authorizeVerdicts.map((verdict) => verdict.outcome)).toEqual(['redirect']);
+    // Two hits: Agor's own unknown-client probe at start, then this browser request.
+    expect(provider.authorizeVerdicts.map((verdict) => verdict.outcome)).toEqual([
+      'redirect',
+      'redirect',
+    ]);
 
     const callback = await harness.callback(authorizationUrl.searchParams.get('state')!);
     expect(callback.status).toBe(200);
@@ -4186,7 +4210,13 @@ describe('SQLite saved-row OAuth authority', () => {
       error: 'invalid_request',
       error_description: 'Mismatching redirect URI',
     });
-    expect(provider.authorizeVerdicts).toEqual([{ clientId, outcome: 'invalid_request' }]);
+    // Agor's start-time probe saw the same 400, but it carries no
+    // registration signal (a redirect mismatch, not an unknown client), so the
+    // client was kept: both hits name the one registered client.
+    expect(provider.authorizeVerdicts).toEqual([
+      { clientId, outcome: 'invalid_request' },
+      { clientId, outcome: 'invalid_request' },
+    ]);
 
     // Nothing came back to Agor: no callback, no token, and an attempt that
     // is still pending. The only durable proxy is its eventual expiry, which
@@ -4343,6 +4373,221 @@ describe('SQLite saved-row OAuth authority', () => {
       })
     );
     expect(provider.requests.filter((entry) => entry.path === '/register')).toEqual([]);
+  });
+
+  it('preserves B replacement C2 when A refreshes forgotten C1 after the start probe', async () => {
+    const provider = await createTestProvider({
+      serveDynamicRegistration: true,
+      invalidRefreshClient: true,
+      rejectUnknownClients: true,
+    });
+    providers.push(provider);
+    const entry = dcrCatalogEntry('test/stale-refresh-client', provider.savedMcpUrl);
+    const catalogMock = vi.mocked(loadCatalog);
+    const previousImplementation = catalogMock.getMockImplementation();
+    catalogMock.mockResolvedValue([entry]);
+    onTestFinished(() => {
+      catalogMock.mockReset();
+      if (previousImplementation) catalogMock.mockImplementation(previousImplementation);
+    });
+    let current: MCPOAuthClientRegistrationRecord | null = null;
+    let currentClientId: string;
+    const snapshot = (): MCPOAuthClientRegistrationRecord | null => current;
+    const bPublishing = deferred<void>();
+    const releaseB = deferred<void>();
+    let publicationChecks = 0;
+    const master = 'stale-refresh-registration-test-secret';
+    let realAuthority: MCPOAuthClientRegistrationAuthority;
+    const invalidateRegistration = vi.fn(async (tenantId, serverId, registrationId) => {
+      if (
+        current?.tenantId !== tenantId ||
+        current?.mcpServerId !== serverId ||
+        current?.registrationId !== registrationId
+      )
+        return false;
+      current = null;
+      return true;
+    });
+    const authority = {
+      resolve: vi.fn(
+        async (
+          input: DurableMCPOAuthClientRegistrationInput,
+          register: () => Promise<{ client_id: string }>
+        ) => {
+          if (current)
+            return {
+              registration: {
+                client_id: currentClientId,
+                redirect_uris: [input.redirectUri],
+                token_endpoint_auth_method: 'none',
+              },
+              registrationId: current.registrationId,
+            };
+          const registration = await register();
+          currentClientId = registration.client_id;
+          const registrationId = generateId() as MCPOAuthClientRegistrationID;
+          const bindingFingerprint = 'fixture-fingerprint';
+          const material = {
+            ...input,
+            version: 1,
+            registrationId,
+            bindingVersion: 1,
+            bindingFingerprint,
+            clientId: registration.client_id,
+          };
+          current = {
+            tenantId: input.tenantId,
+            mcpServerId: input.mcpServerId,
+            registrationId,
+            bindingVersion: 1,
+            bindingFingerprint,
+            serverConfigVersion: 1,
+            envelopeVersion: BOUND_SECRET_ENVELOPE_VERSION,
+            isCurrent: true,
+            status: 'registered',
+            sealedMaterial: sealBoundSecret(
+              JSON.stringify(material),
+              master,
+              'dcr-client',
+              [input.tenantId, input.mcpServerId, registrationId, bindingFingerprint].join('\0')
+            ),
+            claimId: null,
+            claimGeneration: 1,
+            leaseExpiresAt: null,
+            dispatchedAt: null,
+            clientSecretExpiresAt: null,
+            failureCode: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            finishedAt: null,
+          };
+          return { registration, registrationId };
+        }
+      ),
+      invalidateRegistration,
+      invalidateRejectedClient: (tenantId: string, serverId: MCPServerID, clientId: string) =>
+        realAuthority.invalidateRejectedClient(tenantId, serverId, clientId),
+      invalidateForServer: vi.fn(async () => {
+        current = null;
+        return 1;
+      }),
+      lockExactCurrentForAttempt: vi.fn(async (input: { registrationId: string }) => {
+        if (++publicationChecks === 2) {
+          bPublishing.resolve();
+          await releaseB.promise;
+        }
+        const record = snapshot();
+        return record !== null && record.registrationId === input.registrationId;
+      }),
+      maintain: vi.fn(),
+    } as unknown as NonNullable<RegisterServicesContext['mcpOAuthClientRegistrationAuthority']>;
+    const harness = await createHarness(provider, 'per_user', {
+      catalogEntry: entry,
+      durableAuthority: durableAuthorityWithCreate(async () => generateId() as never),
+      durableClientRegistrationAuthority: authority,
+      lockGrantConfiguration: vi.fn(async () => undefined),
+    });
+    databases.push(harness.rawDb);
+    realAuthority = new MCPOAuthClientRegistrationAuthority(harness.db, master);
+    const read = vi.spyOn(coreDb, 'MCPOAuthClientRegistrationRepository').mockImplementation(
+      class {
+        async getCurrent(tenantId: string, serverId: MCPServerID) {
+          return current?.tenantId === tenantId && current?.mcpServerId === serverId
+            ? current
+            : null;
+        }
+      } as unknown as typeof MCPOAuthClientRegistrationRepository
+    );
+    const retire = vi
+      .spyOn(realAuthority, 'invalidateRegistration')
+      .mockImplementation(invalidateRegistration);
+    onTestFinished(() => {
+      read.mockRestore();
+      retire.mockRestore();
+    });
+    // A obtains C1 and retains its grant after the provider forgets it.
+    expect(
+      await harness.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))
+    ).toMatchObject({ success: true });
+    const first = snapshot()!;
+    const tokenRepo = new UserMCPOAuthTokenRepository(harness.rawDb);
+    const c1 = [...provider.registeredClients.keys()][0]!;
+    await tokenRepo.saveToken(harness.user.user_id as UserID, harness.server.mcp_server_id, {
+      accessToken: 'old-access',
+      refreshToken: 'old-refresh',
+      clientId: c1,
+    });
+    await update(harness.rawDb, userMcpOauthTokens)
+      .set({ oauth_token_endpoint: `${provider.baseUrl}/token` })
+      .where(eq(userMcpOauthTokens.mcp_server_id, harness.server.mcp_server_id))
+      .run();
+    const grant = await tokenRepo.getToken(
+      harness.user.user_id as UserID,
+      harness.server.mcp_server_id
+    );
+    provider.registeredClients.clear();
+    expect(grant?.oauth_client_id).toBe(c1);
+    const userB = await new UsersRepository(harness.rawDb).create({
+      email: 'stale-refresh-b@example.test',
+      role: 'admin',
+    });
+    const startingB = harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, {
+        provider: undefined,
+        user: userB,
+        tenant: { tenant_id: 'default', source: 'static' },
+      } as AuthenticatedParams);
+    await bPublishing.promise;
+    onTestFinished(() => releaseB.resolve());
+    const c2 = snapshot()!;
+    expect(c2.registrationId).not.toBe(first.registrationId);
+    expect(currentClientId).not.toBe(c1);
+    expect(provider.requests.filter((request) => request.path === '/register')).toHaveLength(2);
+    expect(
+      provider.authorizeVerdicts.some((v) => v.clientId === c1 && v.outcome === 'invalid_request')
+    ).toBe(true);
+    await harness.app
+      .service('mcp-servers/oauth-auth-headers')
+      .create({ mcp_server_ids: [harness.server.mcp_server_id], force_refresh: true }, {
+        provider: undefined,
+        user: harness.user,
+        tenant: { tenant_id: 'default', source: 'static' },
+        authentication: { _isServiceAccount: true },
+      } as unknown as AuthenticatedParams);
+    expect(
+      await tokenRepo.getToken(harness.user.user_id as UserID, harness.server.mcp_server_id)
+    ).toBeNull();
+    expect(
+      provider.requests.find((request) => request.path === '/token')?.formBody?.get('client_id')
+    ).toBe(c1);
+    expect(snapshot()?.registrationId).toBe(c2.registrationId);
+    expect(authority.invalidateForServer).not.toHaveBeenCalled();
+    releaseB.resolve();
+    const started = await startingB;
+    expect(started).toMatchObject({ success: true });
+    const c2Client = new URL(
+      (started as { authorizationUrl: string }).authorizationUrl
+    ).searchParams.get('client_id')!;
+    expect(c2Client).toBe(currentClientId);
+    // Wrong-tenant rejection cannot retire C2; the matching client can.
+    expect(
+      await realAuthority.invalidateRejectedClient(
+        'other-tenant',
+        harness.server.mcp_server_id,
+        c2Client
+      )
+    ).toBe(false);
+    expect(snapshot()?.registrationId).toBe(c2.registrationId);
+    expect(
+      await realAuthority.invalidateRejectedClient(
+        'default',
+        harness.server.mcp_server_id,
+        c2Client
+      )
+    ).toBe(true);
   });
 
   it('keeps SQLite DCR process-local and refuses the PostgreSQL registration reset path', async () => {

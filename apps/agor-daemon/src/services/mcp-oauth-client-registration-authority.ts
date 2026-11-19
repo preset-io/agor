@@ -389,6 +389,43 @@ export class MCPOAuthClientRegistrationAuthority {
     throw new Error('Timed out waiting for Dynamic Client Registration authority');
   }
 
+  /** Refresh grants retain a client ID, not a DCR row ID. Compare the sealed
+   * current client, then retire that exact row so a concurrent replacement wins.
+   */
+  async invalidateRejectedClient(
+    tenantId: string,
+    serverId: MCPServerID,
+    clientId: string
+  ): Promise<boolean> {
+    const record = await runWithTenantDatabaseScope(this.db, tenantId, (scoped) =>
+      new MCPOAuthClientRegistrationRepository(scoped).getCurrent(tenantId, serverId)
+    );
+    if (
+      record?.status !== 'registered' ||
+      !record.isCurrent ||
+      !record.sealedMaterial ||
+      record.envelopeVersion !== BOUND_SECRET_ENVELOPE_VERSION
+    )
+      return false;
+    const material: unknown = JSON.parse(
+      openBoundSecret(
+        record.sealedMaterial,
+        this.masterSecret!,
+        'dcr-client',
+        registrationBinding(record)
+      )
+    );
+    if (
+      !isMaterial(material) ||
+      material.tenantId !== tenantId ||
+      material.mcpServerId !== serverId ||
+      material.registrationId !== record.registrationId ||
+      material.clientId !== clientId
+    )
+      return false;
+    return this.invalidateRegistration(tenantId, serverId, record.registrationId);
+  }
+
   async invalidateForServer(tenantId: string, serverId: MCPServerID): Promise<number> {
     return runWithTenantDatabaseScope(this.db, tenantId, (scoped) =>
       new MCPOAuthClientRegistrationRepository(scoped).invalidateForServer(tenantId, serverId)

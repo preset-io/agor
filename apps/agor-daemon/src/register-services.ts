@@ -125,6 +125,7 @@ import type {
   MCPOAuthBrowserOperation,
   MCPOAuthBrowserReservation,
   MCPOAuthBrowserReservationRequest,
+  MCPOAuthClientRegistrationID,
   MCPOAuthClientRegistrationResetRequest,
   MCPOAuthClientRegistrationResetResult,
   MCPOAuthConnectTokenClaims,
@@ -2120,6 +2121,23 @@ export async function registerMCPServices(
   const durableOAuthClientRegistrations =
     ctx.mcpOAuthClientRegistrationAuthority ??
     (postgresOAuthDeployment ? new MCPOAuthClientRegistrationAuthority(db) : null);
+  /**
+   * A refresh rejected with `invalid_client` means the server forgot the client
+   * Agor registered, so the cached registration must not be reused by the
+   * reconnect. Registrations are one per server, whichever OAuth mode owns the
+   * grant. A newer client must survive a stale grant's rejection. Best effort:
+   * the grant is already gone and the user has to reconnect either way.
+   */
+  const invalidateRegistrationOnInvalidClient = (tenantId: string | undefined) =>
+    durableOAuthClientRegistrations && tenantId
+      ? async (info: { mcpServerId: MCPServerID; clientId: string }) => {
+          await durableOAuthClientRegistrations.invalidateRejectedClient(
+            tenantId,
+            info.mcpServerId,
+            info.clientId
+          );
+        }
+      : undefined;
   const lockOAuthGrantConfiguration =
     ctx.lockMcpOAuthGrantConfiguration ?? lockMCPOAuthGrantConfiguration;
   const externalFailure = (
@@ -2818,6 +2836,20 @@ export async function registerMCPServices(
                   }
                 )
             : undefined,
+        // The browser sees a 400 for an unknown client_id, not Agor: probe the
+        // authorize endpoint once and register again if the server forgot us.
+        recoverUnknownClient: {
+          invalidateRegistration:
+            durableBinding && durableOAuthClientRegistrations
+              ? async (registrationId: MCPOAuthClientRegistrationID) => {
+                  await durableOAuthClientRegistrations.invalidateRegistration(
+                    durableBinding.tenantId,
+                    durableBinding.mcpServerId as MCPServerID,
+                    registrationId
+                  );
+                }
+              : undefined,
+        },
         resourceUri: effectiveMcpUrl,
         compatibilityMode: effectiveCompatibilityMode,
         dcrMode: effectiveDcrMode,
@@ -7236,6 +7268,7 @@ export async function registerMCPServices(
                 validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
                 resolveTokenEndpointAuthMethod: catalogTokenEndpointAuthMethod,
                 assertCurrent: mcpEgressAssertCurrent,
+                onInvalidClient: invalidateRegistrationOnInvalidClient(tenantId),
                 forceRefresh,
                 resolveDns: ctx.mcpOutboundDnsLookup,
               });
@@ -7379,6 +7412,7 @@ export async function registerMCPServices(
           observedRefreshVersion,
           validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
           resolveTokenEndpointAuthMethod: catalogTokenEndpointAuthMethod,
+          onInvalidClient: invalidateRegistrationOnInvalidClient(tenantId),
         });
 
         const fresh = await runInOAuthTenantScope(db, tenantId, () =>
@@ -7891,6 +7925,7 @@ export async function registerMCPServices(
                 validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
                 resolveTokenEndpointAuthMethod: catalogTokenEndpointAuthMethod,
                 assertCurrent: assertRequestAuthority,
+                onInvalidClient: invalidateRegistrationOnInvalidClient(tenantId),
                 resolveDns: ctx.mcpOutboundDnsLookup,
               })
             );
