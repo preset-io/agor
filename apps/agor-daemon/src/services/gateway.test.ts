@@ -5947,6 +5947,32 @@ describe('GatewayService Slack progress tenant scope', () => {
       });
     }
   );
+
+  it('keeps a running task status when an earlier task reports done late', async () => {
+    const setThreadStatus = vi.fn(async () => {});
+    const { service, threadMapRepo, taskRepo } = makeGatewayHarness({
+      existingMapping: makeMapping({
+        metadata: { slack_status_state: 'working', slack_status_task_id: 'task-2' },
+      }),
+      connector: { setThreadStatus },
+    });
+    const statusOf = (status: TaskStatus) =>
+      vi.fn(async (id: string) => (id === 'task-2' ? { status } : null)) as never;
+    const lateDone = () =>
+      runWithTenantContext('tenant-channel', () =>
+        service.updateProgress({ session_id: 'sess-1', task_id: 'task-1', state: 'done' })
+      );
+
+    taskRepo.findById = statusOf(TaskStatus.RUNNING);
+    await lateDone();
+    expect(setThreadStatus).not.toHaveBeenCalled();
+    expect(threadMapRepo.updateMetadata).not.toHaveBeenCalled();
+
+    // A status left behind by a task that already ended is still cleared.
+    taskRepo.findById = statusOf(TaskStatus.COMPLETED);
+    await lateDone();
+    expect(setThreadStatus).toHaveBeenCalledWith(expect.objectContaining({ status: '' }));
+  });
 });
 
 describe('GatewayService Slack streaming', () => {
