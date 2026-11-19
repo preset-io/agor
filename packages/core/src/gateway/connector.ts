@@ -262,6 +262,7 @@ export interface GatewayConnector {
     status: string;
     loadingMessages?: string[];
     iconEmoji?: string;
+    done?: boolean;
   }): Promise<void>;
 
   /**
