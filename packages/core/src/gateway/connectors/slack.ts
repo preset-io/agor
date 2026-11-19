@@ -2648,7 +2648,7 @@ export class SlackConnector implements GatewayConnector {
     }
 
     const socketLogger = createSlackSdkLoggerController();
-    // Deliberately WITHOUT `clientOptions`, unlike every WebClient this
+    // Deliberately WITHOUT the shared `clientOptions`, unlike every WebClient this
     // connector builds (see SLACK_WEB_CLIENT_OPTIONS).
     //
     // Do not "tidy this up" by giving it the bounded policy for consistency.
@@ -2658,7 +2658,8 @@ export class SlackConnector implements GatewayConnector {
     // expected in Socket Mode, so those retries are how the listener comes
     // back. Capping them converts a recoverable disconnect into a permanently
     // dead listener — the channel simply stops receiving messages, with no
-    // error anyone is watching.
+    // error anyone is watching. The default has no ceiling on the wait, so
+    // retry forever but at most ten minutes apart.
     //
     // Its liveness is already bounded, by mechanisms of its own: a 5s
     // `clientPingTimeout` and a 30s `serverPingTimeout`, either of which
@@ -2667,6 +2668,7 @@ export class SlackConnector implements GatewayConnector {
     const socketMode = new SocketModeClient({
       appToken: this.config.app_token,
       logger: socketLogger.logger,
+      clientOptions: { retryConfig: { forever: true, factor: 1.3, maxTimeout: 600_000 } },
     });
     this.socketLogger = socketLogger;
     this.socketMode = socketMode;
