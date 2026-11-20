@@ -38,10 +38,24 @@ function TryCloudButton({ placement, className }: { placement: string; className
   return <CloudCtaLink placement={placement} className={className} labels={TRY_CLOUD_LABELS} />;
 }
 
+// The a16z and Fathom files are padded 426x132 wordmarks; the Redpoint file is
+// the bare symbol (no padding), so it renders at a fixed height that matches
+// their visible ink height instead of filling the column.
 const INVESTORS = [
-  { name: 'Andreessen Horowitz', src: '/about/investors/andreessen-horowitz.webp' },
-  { name: 'Redpoint Ventures', src: '/about/investors/redpoint.webp' },
-  { name: 'Fathom Capital', src: '/about/investors/fathom-capital.webp' },
+  {
+    name: 'Andreessen Horowitz',
+    src: '/about/investors/andreessen-horowitz.webp',
+    width: 426,
+    height: 132,
+  },
+  {
+    name: 'Redpoint Ventures',
+    src: '/about/investors/redpoint.svg',
+    width: 72,
+    height: 43,
+    mark: true,
+  },
+  { name: 'Fathom Capital', src: '/about/investors/fathom-capital.webp', width: 426, height: 132 },
 ];
 
 const AT_A_GLANCE: Array<{ label: string; value: ReactNode }> = [
@@ -294,8 +308,9 @@ export function AboutPage() {
                 <img
                   src={`${basePath}${investor.src}`}
                   alt={investor.name}
-                  width="426"
-                  height="132"
+                  width={investor.width}
+                  height={investor.height}
+                  className={investor.mark ? styles.investorMark : undefined}
                   loading="lazy"
                   decoding="async"
                 />

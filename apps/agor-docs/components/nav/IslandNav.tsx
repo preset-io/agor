@@ -48,9 +48,10 @@ const MARKETING_PATHS = new Set([
   ...LANDING_PAGES.map((p) => p.href),
 ]);
 
-// "by Preset" lockup beside the Agor logo. The island is a dark surface in
-// every state (top of page, condensed pill, open menus, both docs themes), so
-// it always uses Preset's reverse logo (green mark, white wordmark).
+// "by Preset" lockup beside the Agor logo, at every width. The island is a
+// dark surface in every state (top of page, condensed pill, open menus, both
+// docs themes), so it always uses Preset's reverse logo (green mark, white
+// wordmark).
 const PRESET_REVERSE_LOGO_PATH = '/preset-logo-reverse.svg';
 
 function ByPreset({ className, placement }: { className: string; placement: string }) {
@@ -574,7 +575,6 @@ export function IslandNav() {
           ))}
         </div>
         <div className={styles.sheetFooter}>
-          <ByPreset className={styles.sheetByPreset} placement="mobile-nav-lockup" />
           <div className={styles.sheetFooterPair}>
             <a href={GITHUB_REPO_URL} target="_blank" rel="noopener noreferrer">
               <GitHubIcon size={17} aria-hidden /> Star

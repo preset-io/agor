@@ -121,30 +121,25 @@
   font-weight: 700;
 }
 
-/* "by Preset" lockup beside the logo: low weight, links to preset.io. The
- * island is dark in every state, so the reverse logo (white wordmark) is used
- * throughout. Hidden on narrow viewports; the mobile sheet carries it instead. */
-.byPreset,
-.sheetByPreset {
+/* "by Preset" lockup beside the logo at every width: low weight, links to
+ * preset.io. The island is dark in every state, so the reverse logo (white
+ * wordmark) is used throughout. */
+.byPreset {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   flex: none;
+  /* Sit with the Agor logo rather than the menu triggers. */
+  margin-left: -8px;
+  padding: 4px 4px 2px;
+  border-radius: 6px;
   color: #8d999b;
   font: 500 12px var(--body);
   text-decoration: none;
   white-space: nowrap;
 }
 
-.byPreset {
-  /* Sit with the Agor logo rather than the menu triggers. */
-  margin-left: -8px;
-  padding: 4px 4px 2px;
-  border-radius: 6px;
-}
-
-.byPreset img,
-.sheetByPreset img {
+.byPreset img {
   display: block;
   width: auto;
   height: 15px;
@@ -152,11 +147,6 @@
 
 .byPreset:hover {
   color: #c9d2d3;
-}
-
-.sheetByPreset {
-  justify-content: center;
-  padding: 4px 0 6px;
 }
 
 .trigger {
@@ -551,8 +541,7 @@
 
   .triggers,
   .ctaSlot,
-  .menuRegion,
-  .byPreset {
+  .menuRegion {
     display: none;
   }
 
@@ -569,6 +558,24 @@
 
   .sheet {
     display: flex;
+  }
+}
+
+/* Phones: keep the lockup on one line beside the logo, next to search and the
+ * menu button (checked at 360px and 390px). */
+@media (max-width: 420px) {
+  .barLeft {
+    gap: 12px;
+  }
+
+  .byPreset {
+    gap: 4px;
+    margin-left: -6px;
+    font-size: 11px;
+  }
+
+  .byPreset img {
+    height: 13px;
   }
 }
 
@@ -809,8 +816,7 @@
   color: #fff;
 }
 
-.island a.byPreset,
-.sheet a.sheetByPreset {
+.island a.byPreset {
   color: #8d999b;
 }
 
