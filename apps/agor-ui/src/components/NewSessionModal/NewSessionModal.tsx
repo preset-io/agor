@@ -27,6 +27,7 @@ import {
 import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { CodexSettingsForm } from '../CodexSettingsForm';
+import { fullScreenModalProps } from '../CreateModals/CreateModalShell';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 import { SessionAttachmentTray } from '../SessionPanel/SessionAttachmentTray';
 import { useComposerAttachments } from '../SessionPanel/useComposerAttachments';
@@ -47,6 +48,8 @@ export interface NewSessionModalProps {
   currentUser?: User | null; // Optional - current user for default settings
   client: AgorClient | null;
   uploadPolicy?: import('@agor/core/types').UploadIngressPolicy;
+  /** Render edge-to-edge (mobile), like the shared create modals. */
+  fullScreen?: boolean;
 }
 
 export const NewSessionModal: React.FC<NewSessionModalProps> = ({
@@ -59,6 +62,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   currentUser,
   client,
   uploadPolicy,
+  fullScreen = false,
 }) => {
   // Entity maps are read from the store rather than drilled through props so
   // the App shell doesn't have to forward them into every modal.
@@ -208,6 +212,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       open={open}
       onCancel={handleCancel}
       width={700}
+      {...(fullScreen && fullScreenModalProps(token))}
       maskClosable={false}
       footer={
         <Flex justify="flex-end" gap={token.marginXS}>
