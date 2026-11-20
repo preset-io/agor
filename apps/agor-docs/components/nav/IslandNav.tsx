@@ -15,7 +15,13 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { trackEvent } from '../../lib/analytics';
-import { AGOR_CLOUD_LOGIN_URL, DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../../lib/links';
+import {
+  AGOR_CLOUD_LOGIN_URL,
+  DISCORD_INVITE_URL,
+  GITHUB_REPO_URL,
+  PRESET_URL,
+  presetUtm,
+} from '../../lib/links';
 import { getBasePath, LOGO_MARK_PATH } from '../../lib/siteMetadata';
 import { DiscordIcon, GitHubIcon } from '../BrandIcons';
 import { CloudCtaLink } from '../CloudCtaLink';
@@ -34,7 +40,40 @@ type MenuId = NavMenu['id'];
 
 // Full-bleed marketing pages sit under a transparent bar at the top; docs and
 // blog pages always get the island surface (see IslandNav.module.css).
-const MARKETING_PATHS = new Set(['/', '/cloud', '/contact', ...LANDING_PAGES.map((p) => p.href)]);
+const MARKETING_PATHS = new Set([
+  '/',
+  '/cloud',
+  '/contact',
+  '/about',
+  ...LANDING_PAGES.map((p) => p.href),
+]);
+
+// "by Preset" lockup beside the Agor logo. The island is a dark surface in
+// every state (top of page, condensed pill, open menus, both docs themes), so
+// it always uses Preset's reverse logo (green mark, white wordmark).
+const PRESET_REVERSE_LOGO_PATH = '/preset-logo-reverse.svg';
+
+function ByPreset({ className, placement }: { className: string; placement: string }) {
+  const href = `${PRESET_URL}${presetUtm(placement)}`;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={className}
+      onClick={() => trackEvent('nav_click', { target: PRESET_URL, placement })}
+    >
+      <span>by</span>
+      {/* biome-ignore lint/performance/noImgElement: Static logo asset */}
+      <img
+        src={`${getBasePath()}${PRESET_REVERSE_LOGO_PATH}`}
+        alt="Preset"
+        width="50"
+        height="15"
+      />
+    </a>
+  );
+}
 
 function trackNav(item: Pick<NavItem, 'href' | 'landing'>, placement: string) {
   trackEvent('nav_click', { target: item.href, placement });
@@ -317,6 +356,7 @@ export function IslandNav() {
               <img src={`${basePath}${LOGO_MARK_PATH}`} alt="" width="30" height="30" />
               <span className="agor-docs-wordmark">agor</span>
             </Link>
+            <ByPreset className={styles.byPreset} placement="navbar-lockup" />
             <nav className={styles.triggers} aria-label="Main">
               {NAV_MENUS.map((menu) => {
                 const open = openMenu === menu.id;
@@ -534,6 +574,7 @@ export function IslandNav() {
           ))}
         </div>
         <div className={styles.sheetFooter}>
+          <ByPreset className={styles.sheetByPreset} placement="mobile-nav-lockup" />
           <div className={styles.sheetFooterPair}>
             <a href={GITHUB_REPO_URL} target="_blank" rel="noopener noreferrer">
               <GitHubIcon size={17} aria-hidden /> Star

@@ -17,6 +17,7 @@ Agor is source-available software licensed under BSL 1.1 (never describe it as o
 - [Command Center](https://agor.live/command-center): Reusable prompts and workflows, a knowledge base, artifacts, branch environments, and an MCP server agents drive themselves
 - [Governance & Observability](https://agor.live/governance): Permissions, usage tracking, execution isolation, model choice, and self-hosted or managed deployment
 - [Agor Cloud](https://agor.live/cloud): Fully managed Agor for your whole team; bring your own keys, hosted or in your own AWS
+- [About Agor](https://agor.live/about): Who created Agor, how it started at Preset, Agor Cloud Open Beta, investors, and press
 
 ## Core Documentation
 
