@@ -40,6 +40,16 @@ export interface SafeClaudeResultResponse {
   };
 }
 
+export interface SafeClaudePermissionDenialMetadata {
+  tool_name?: string;
+  tool_use_id?: string;
+  agent_id?: string;
+  decision_reason_type?: string;
+}
+
+const MAX_PERMISSION_DENIAL_FIELD_LENGTH = 256;
+const MAX_PERMISSION_DENIAL_REASON_LENGTH = 512;
+
 function ownDataValue(value: unknown, field: string): unknown {
   if (!value || (typeof value !== 'object' && typeof value !== 'function')) return undefined;
   try {
@@ -48,6 +58,14 @@ function ownDataValue(value: unknown, field: string): unknown {
   } catch {
     return undefined;
   }
+}
+
+function boundedOwnString(value: unknown, field: string, maxLength: number): string | undefined {
+  const raw = ownDataValue(value, field);
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return undefined;
+  return trimmed.length > maxLength ? trimmed.slice(0, maxLength).trimEnd() : trimmed;
 }
 
 function finiteNonNegative(value: unknown): number | undefined {
@@ -200,4 +218,80 @@ export function projectNormalizedSdkResponse(
     ...(durationMs !== undefined ? { durationMs } : {}),
     ...(contextUsageSnapshot ? { contextUsageSnapshot } : {}),
   };
+}
+
+/**
+ * Closed allowlist projection for Claude permission-denial metadata persisted on
+ * `sdk_event` blocks. Excludes `tool_input`, denial prose, session/event UUIDs,
+ * and unknown extension properties; never evaluates accessors or prototypes.
+ */
+export function projectClaudePermissionDenialMetadata(
+  value: unknown
+): SafeClaudePermissionDenialMetadata | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+
+  const toolName = boundedOwnString(value, 'tool_name', MAX_PERMISSION_DENIAL_FIELD_LENGTH);
+  const toolUseId = boundedOwnString(value, 'tool_use_id', MAX_PERMISSION_DENIAL_FIELD_LENGTH);
+  const agentId = boundedOwnString(value, 'agent_id', MAX_PERMISSION_DENIAL_FIELD_LENGTH);
+  const decisionReasonType = boundedOwnString(
+    value,
+    'decision_reason_type',
+    MAX_PERMISSION_DENIAL_FIELD_LENGTH
+  );
+
+  const projected: SafeClaudePermissionDenialMetadata = {
+    ...(toolName !== undefined ? { tool_name: toolName } : {}),
+    ...(toolUseId !== undefined ? { tool_use_id: toolUseId } : {}),
+    ...(agentId !== undefined ? { agent_id: agentId } : {}),
+    ...(decisionReasonType !== undefined ? { decision_reason_type: decisionReasonType } : {}),
+  };
+
+  return Object.keys(projected).length > 0 ? projected : undefined;
+}
+
+/**
+ * Read bounded human-readable denial reason fields from an SDK permission-denied
+ * message without invoking accessors or inherited properties.
+ */
+export function projectClaudePermissionDenialReason(value: unknown): {
+  message?: string;
+  decision_reason?: string;
+} {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+
+  const message = boundedOwnString(value, 'message', MAX_PERMISSION_DENIAL_REASON_LENGTH);
+  const decisionReason = boundedOwnString(
+    value,
+    'decision_reason',
+    MAX_PERMISSION_DENIAL_REASON_LENGTH
+  );
+  return {
+    ...(message !== undefined ? { message } : {}),
+    ...(decisionReason !== undefined ? { decision_reason: decisionReason } : {}),
+  };
+}
+
+/**
+ * Project a raw `permission_denials` list into allowlisted metadata entries,
+ * skipping malformed or empty elements.
+ */
+export function projectClaudePermissionDenials(
+  entries: unknown
+): SafeClaudePermissionDenialMetadata[] {
+  if (!Array.isArray(entries)) return [];
+  const projected: SafeClaudePermissionDenialMetadata[] = [];
+  for (const entry of entries) {
+    const metadata = projectClaudePermissionDenialMetadata(entry);
+    if (metadata) projected.push(metadata);
+  }
+  return projected;
+}
+
+/**
+ * Safely read and project `permission_denials` from an SDK result record.
+ */
+export function projectClaudeResultPermissionDenials(
+  result: unknown
+): SafeClaudePermissionDenialMetadata[] {
+  return projectClaudePermissionDenials(ownDataValue(result, 'permission_denials'));
 }

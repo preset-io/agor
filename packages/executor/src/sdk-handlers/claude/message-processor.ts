@@ -11,14 +11,18 @@
  * - Yield structured events for database persistence
  */
 
-import { projectClaudeResultResponse, SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE } from '@agor/core';
+import {
+  projectClaudePermissionDenialMetadata,
+  projectClaudePermissionDenialReason,
+  projectClaudeResultResponse,
+  SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
+} from '@agor/core';
 import {
   SUPPRESSED_CLAUDE_STATUSES,
   shouldSuppressClaudeSystemEvent,
 } from '@agor/core/client/claude-system-suppression';
 import type {
   SDKAssistantMessage,
-  SDKCompactBoundaryMessage,
   SDKMessage,
   SDKPartialAssistantMessage,
   SDKResultMessage,
@@ -51,6 +55,14 @@ interface ContentBlock {
   input?: Record<string, unknown>;
   tool_use_result?: unknown;
   [key: string]: unknown;
+}
+
+/**
+ * Format a human-readable summary for a permission-denied event.
+ */
+export function formatPermissionDeniedSummary(toolName?: string, reason?: string): string {
+  const target = toolName ? `Permission denied: ${toolName}` : 'Permission denied for tool';
+  return reason ? `${target} — ${reason}` : target;
 }
 
 /**
@@ -150,6 +162,17 @@ export type ProcessedEvent =
       rateLimitType?: string;
       overageStatus?: string;
       isUsingOverage?: boolean;
+      agentSessionId?: string;
+    }
+  | {
+      type: 'permission_denied';
+      toolName?: string;
+      toolUseId?: string;
+      agentId?: string;
+      message?: string;
+      decisionReason?: string;
+      decisionReasonType?: string;
+      summary: string;
       agentSessionId?: string;
     }
   | {
@@ -293,7 +316,7 @@ export class SDKMessageProcessor {
       case 'result':
         return this.handleResult(msg as SDKResultMessage);
       case 'system':
-        return this.handleSystem(msg as SDKSystemMessage | SDKCompactBoundaryMessage);
+        return this.handleSystem(msg as Extract<SDKMessage, { type: 'system' }>);
       case 'rate_limit_event':
         return this.handleRateLimitEvent(
           msg as { type: string; rate_limit_info?: Record<string, unknown> }
@@ -631,7 +654,7 @@ export class SDKMessageProcessor {
   /**
    * Handle system messages
    */
-  private handleSystem(msg: SDKSystemMessage | SDKCompactBoundaryMessage): ProcessedEvent[] {
+  private handleSystem(msg: Extract<SDKMessage, { type: 'system' }>): ProcessedEvent[] {
     if ('subtype' in msg && msg.subtype === 'compact_boundary') {
       console.log(`📦 SDK compact_boundary (compaction finished)`);
 
@@ -717,6 +740,27 @@ export class SDKMessageProcessor {
       }
 
       return events;
+    }
+
+    if ('subtype' in msg && msg.subtype === 'permission_denied') {
+      const metadata = projectClaudePermissionDenialMetadata(msg);
+      const { message, decision_reason: decisionReason } = projectClaudePermissionDenialReason(msg);
+      const reason = message || decisionReason;
+      const summary = formatPermissionDeniedSummary(metadata?.tool_name, reason);
+
+      return [
+        {
+          type: 'permission_denied',
+          toolName: metadata?.tool_name,
+          toolUseId: metadata?.tool_use_id,
+          agentId: metadata?.agent_id,
+          message,
+          decisionReason,
+          decisionReasonType: metadata?.decision_reason_type,
+          summary,
+          agentSessionId: this.state.capturedAgentSessionId,
+        },
+      ];
     }
 
     // Blacklist approach: surface unhandled system subtypes by default

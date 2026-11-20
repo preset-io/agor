@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   claudeResultFailureCode,
+  projectClaudePermissionDenialMetadata,
+  projectClaudePermissionDenialReason,
+  projectClaudePermissionDenials,
+  projectClaudeResultPermissionDenials,
   projectClaudeResultResponse,
   projectContextUsageSnapshot,
   projectNormalizedSdkResponse,
@@ -162,5 +166,102 @@ describe('claudeResultFailureCode', () => {
     );
     expect(claudeResultFailureCode({ type: 'result', subtype: 'success' })).toBeUndefined();
     expect(claudeResultFailureCode({ type: 'result', subtype: 'SENTINEL' })).toBeUndefined();
+  });
+});
+
+describe('Claude permission denial projections', () => {
+  it('projects only safe metadata and drops tool_input, extension fields, and accessors', () => {
+    const sentinelSecret = 'SENTINEL_SECRET_TOKEN_XYZ';
+    const getter = vi.fn(() => sentinelSecret);
+    const input = {
+      tool_name: '  Bash  ',
+      tool_use_id: 'toolu_123',
+      agent_id: 'agent_456',
+      decision_reason_type: 'rule',
+      tool_input: { command: `curl -H "Authorization: Bearer ${sentinelSecret}"` },
+      extra_provider_field: sentinelSecret,
+    };
+    Object.defineProperty(input, 'decision_reason_type', {
+      enumerable: true,
+      get: getter,
+    });
+
+    const projected = projectClaudePermissionDenialMetadata(input);
+    expect(projected).toEqual({
+      tool_name: 'Bash',
+      tool_use_id: 'toolu_123',
+      agent_id: 'agent_456',
+    });
+    expect(getter).not.toHaveBeenCalled();
+    expect(JSON.stringify(projected)).not.toContain(sentinelSecret);
+    expect(JSON.stringify(projected)).not.toContain('tool_input');
+  });
+
+  it('returns undefined for empty, whitespace-only, primitive, null, or array inputs', () => {
+    expect(projectClaudePermissionDenialMetadata(null)).toBeUndefined();
+    expect(projectClaudePermissionDenialMetadata('Bash')).toBeUndefined();
+    expect(projectClaudePermissionDenialMetadata(['Bash'])).toBeUndefined();
+    expect(
+      projectClaudePermissionDenialMetadata({
+        tool_name: '   ',
+        tool_use_id: 123,
+        tool_input: { secret: 'SENTINEL' },
+      })
+    ).toBeUndefined();
+  });
+
+  it('bounds oversized identifier and reason strings', () => {
+    const metadata = projectClaudePermissionDenialMetadata({
+      tool_name: 'x'.repeat(400),
+      tool_use_id: 'y'.repeat(400),
+    });
+    expect(metadata?.tool_name).toHaveLength(256);
+    expect(metadata?.tool_use_id).toHaveLength(256);
+
+    const reason = projectClaudePermissionDenialReason({
+      message: `  ${'m'.repeat(700)}`,
+      decision_reason: 'r'.repeat(700),
+    });
+    expect(reason.message).toHaveLength(512);
+    expect(reason.decision_reason).toHaveLength(512);
+  });
+
+  it('ignores non-string or accessor reason properties', () => {
+    const throwingGetter = vi.fn(() => {
+      throw new Error('boom');
+    });
+    const input = { decision_reason: 42 };
+    Object.defineProperty(input, 'message', { enumerable: true, get: throwingGetter });
+
+    expect(projectClaudePermissionDenialReason(input)).toEqual({});
+    expect(throwingGetter).not.toHaveBeenCalled();
+  });
+
+  it('safely filters malformed permission_denials arrays and non-array result fields', () => {
+    const sentinelSecret = 'SENTINEL_DB_PASSWORD';
+    expect(projectClaudePermissionDenials(null)).toEqual([]);
+    expect(projectClaudePermissionDenials('not-an-array')).toEqual([]);
+    expect(projectClaudePermissionDenials({ tool_name: 'Bash' })).toEqual([]);
+
+    expect(
+      projectClaudePermissionDenials([
+        null,
+        'bad-entry',
+        42,
+        { tool_input: { secret: sentinelSecret } },
+        { tool_name: 'Edit', tool_input: { content: sentinelSecret } },
+        { tool_name: 'Bash', tool_use_id: 'toolu_9' },
+      ])
+    ).toEqual([{ tool_name: 'Edit' }, { tool_name: 'Bash', tool_use_id: 'toolu_9' }]);
+
+    const resultWithThrowingDenials = { type: 'result' };
+    Object.defineProperty(resultWithThrowingDenials, 'permission_denials', {
+      enumerable: true,
+      get: () => {
+        throw new Error('boom');
+      },
+    });
+    expect(projectClaudeResultPermissionDenials(resultWithThrowingDenials)).toEqual([]);
+    expect(projectClaudeResultPermissionDenials(null)).toEqual([]);
   });
 });
