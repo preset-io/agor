@@ -52,9 +52,8 @@ const siteUrl = getSiteUrl();
 const pageUrl = `${siteUrl}/about`;
 
 /**
- * AboutPage entity, reusing the site-wide graph ids from app/layout.tsx.
- * The spec's Person (Maxime Beauchemin) entity is intentionally left out
- * until Max approves it.
+ * AboutPage and Person (Maxime Beauchemin) entities, reusing the site-wide
+ * graph ids from app/layout.tsx.
  */
 export const ABOUT_PAGE_SCHEMA = {
   '@context': 'https://schema.org',
@@ -69,6 +68,14 @@ export const ABOUT_PAGE_SCHEMA = {
       about: { '@id': `${siteUrl}/#software` },
       publisher: { '@id': `${siteUrl}/#organization` },
       dateModified: ABOUT_DATE_MODIFIED,
+    },
+    {
+      '@type': 'Person',
+      '@id': `${pageUrl}#maxime-beauchemin`,
+      name: 'Maxime Beauchemin',
+      jobTitle: 'Founder and CEO',
+      worksFor: { '@id': `${siteUrl}/#organization` },
+      sameAs: ['https://www.linkedin.com/in/maximebeauchemin/'],
     },
   ],
 };

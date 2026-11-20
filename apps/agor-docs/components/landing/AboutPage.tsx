@@ -9,6 +9,7 @@ import { getBasePath } from '../../lib/siteMetadata';
 import { CloudCtaLink } from '../CloudCtaLink';
 import landing from '../LandingPage.module.css';
 import styles from './AboutPage.module.css';
+import { DemoButton } from './DemoButton';
 import { LandingShell } from './LandingShell';
 
 const basePath = getBasePath();
@@ -203,9 +204,8 @@ export function AboutPage() {
               placement={`${CTA_PREFIX}-cloud-section`}
               className={landing.primaryButton}
             />
-            <Link href="/contact" className={landing.secondaryButton}>
-              Book a demo
-            </Link>
+            {/* Same HubSpot meeting scheduler as "Book a demo" elsewhere on the site. */}
+            <DemoButton className={landing.secondaryButton}>Book a demo</DemoButton>
           </div>
         </section>
 
