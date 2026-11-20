@@ -3,9 +3,10 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { ABOUT_FAQ, ABOUT_FAQ_SCHEMA, ABOUT_PAGE_SCHEMA } from '../../lib/aboutSchema';
-import { trackEvent } from '../../lib/analytics';
-import { AGOR_CLOUD_LOGIN_URL, DISCORD_INVITE_URL } from '../../lib/links';
+import type { CloudCtaVariant } from '../../lib/cloudCta';
+import { DISCORD_INVITE_URL } from '../../lib/links';
 import { getBasePath } from '../../lib/siteMetadata';
+import { CloudCtaLink } from '../CloudCtaLink';
 import landing from '../LandingPage.module.css';
 import styles from './AboutPage.module.css';
 import { LandingShell } from './LandingShell';
@@ -22,17 +23,18 @@ function Ext({ href, children }: { href: string; children: ReactNode }) {
   );
 }
 
-/** "Try Agor Cloud Open Beta": the spec links straight to the console. */
+// "Try Agor Cloud Open Beta" on every gate state: the site's CloudCtaLink
+// keeps its sign-up gating and agor_cloud_cta_click tracking, with the
+// approved label in place of the default copy.
+const TRY_CLOUD_LABELS: Record<CloudCtaVariant, string> = {
+  console: 'Try Agor Cloud Open Beta',
+  waitlist: 'Try Agor Cloud Open Beta',
+  capacity: 'Try Agor Cloud Open Beta',
+  hubspot_modal: 'Try Agor Cloud Open Beta',
+};
+
 function TryCloudButton({ placement, className }: { placement: string; className: string }) {
-  return (
-    <a
-      href={AGOR_CLOUD_LOGIN_URL}
-      className={className}
-      onClick={() => trackEvent('nav_click', { target: AGOR_CLOUD_LOGIN_URL, placement })}
-    >
-      Try Agor Cloud Open Beta
-    </a>
-  );
+  return <CloudCtaLink placement={placement} className={className} labels={TRY_CLOUD_LABELS} />;
 }
 
 const INVESTORS = [
