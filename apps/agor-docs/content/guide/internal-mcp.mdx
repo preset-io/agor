@@ -535,8 +535,14 @@ and that the user can still read the session's branch. There is no per-token
 denylist; otherwise a token lasts until `exp` (default 24h). Agor does not
 store MCP tokens or include them in realtime session events. A token saved by
 an older release is ignored on read and removed the next time its session's
-settings or state are updated. Tokens issued by an older release without a
-task binding keep working until they expire.
+settings or state are updated. Tokens without a task binding are rejected.
+
+When one-time launch auth finds that a user is no longer a member of the
+workspace, Agor records the removal on the user. From then on, on every
+daemon, MCP tokens for tasks that started before the removal stop working,
+even before the periodic membership check runs again. Tokens for tasks that
+start after the user is added back keep working. A password change does not
+affect MCP tokens.
 
 ### How agents receive the token
 

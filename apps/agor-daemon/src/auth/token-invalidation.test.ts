@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import { expect, test, vi } from 'vitest';
 import {
   eq,
+  jsonSetString,
   select,
   UserApiKeysRepository,
   UsersRepository,
@@ -53,6 +54,7 @@ function authTime(ms: number) {
 function expectNoTokenMarker(value: unknown): void {
   expect(value).not.toHaveProperty('tokens_valid_after');
   expect(value).not.toHaveProperty('credential_generation');
+  expect(value).not.toHaveProperty('membership_refused_at');
 }
 
 function expectTokenMarker(value: unknown): void {
@@ -184,6 +186,10 @@ dbTest('redacts token invalidation marker from external user service responses',
     user: { user_id: admin.user_id, email: admin.email, role: admin.role },
   };
   const user = await createUser(usersService, 'redacted-users@example.test');
+  await update(db, users)
+    .set({ data: jsonSetString(db, users.data, 'membership_refused_at', new Date().toISOString()) })
+    .where(eq(users.user_id, user.user_id))
+    .run();
 
   const createResult = await usersService.create(
     { email: 'redacted-create@example.test', password: 'test-password-1234', role: ROLES.MEMBER },
@@ -200,6 +206,7 @@ dbTest('redacts token invalidation marker from external user service responses',
 
   const internalUser = await usersService.get(user.user_id);
   expectTokenMarker(internalUser);
+  expect(internalUser).toHaveProperty('membership_refused_at', expect.any(Date));
 
   const getResult = await usersService.get(user.user_id, { provider: 'rest' });
   expectNoTokenMarker(getResult);
@@ -209,6 +216,19 @@ dbTest('redacts token invalidation marker from external user service responses',
   for (const publicUser of findResult.data) {
     expectNoTokenMarker(publicUser);
   }
+});
+
+dbTest('a password change leaves no membership removal marker', async ({ db }) => {
+  const usersService = createUsersService(db);
+  const user = await createUser(usersService, 'password-only@example.test');
+
+  await usersService.patch(user.user_id, { password: 'new-password-1234' });
+
+  const internalUser = await usersService.get(user.user_id);
+  expectTokenMarker(internalUser);
+  expect(internalUser).not.toHaveProperty('membership_refused_at');
+  const row = await select(db).from(users).where(eq(users.user_id, user.user_id)).one();
+  expect(row?.data).not.toHaveProperty('membership_refused_at');
 });
 
 dbTest(

@@ -10,7 +10,7 @@
  *   - expired token → rejected
  *   - deleted session → token rejected (even before `exp`)
  *   - bogus issuer → rejected
- *   - pre-rollout tokens (no jti/exp) → rejected
+ *   - pre-rollout tokens (no jti/exp) and taskless tokens → rejected
  */
 
 import { resolveMultiTenancyConfig } from '@agor/core/config';
@@ -75,13 +75,22 @@ function initTestMcpTokens(
   });
 }
 
+// Every seeded session gets one running task so session-level tests mint task-bound tokens.
+const liveTasks = new Map<SessionID, TaskID>();
+
+function liveTaskFor(sessionId: SessionID): TaskID {
+  return liveTasks.get(sessionId) ?? (generateId() as TaskID);
+}
+
 function mintSessionToken(
   app: ReturnType<typeof makeApp>,
   sessionId: SessionID,
   userId: UserID,
   tenantId = 'tenant-a'
 ): Promise<string> {
-  return runWithTenantContext(tenantId, () => generateSessionToken(app, sessionId, userId));
+  return runWithTenantContext(tenantId, () =>
+    generateSessionToken(app, sessionId, userId, liveTaskFor(sessionId))
+  );
 }
 
 async function seedSession(
@@ -128,11 +137,20 @@ async function seedSession(
     })
     .run();
 
+  const task = await new TaskRepository(db).create({
+    session_id: opts.sessionId,
+    created_by: 'test-user',
+    status: TaskStatus.RUNNING,
+    executor_connected_at: now.toISOString(),
+  });
+  liveTasks.set(opts.sessionId, task.task_id);
+
   return opts.sessionId;
 }
 
 afterEach(() => {
   shutdownMcpTokens();
+  liveTasks.clear();
   vi.useRealTimers();
 });
 
@@ -159,6 +177,7 @@ describe('generateSessionToken', () => {
     expect(decoded.iss).toBe(MCP_TOKEN_ISSUER);
     expect(typeof decoded.jti).toBe('string');
     expect((decoded.jti as string).length).toBeGreaterThan(0);
+    expect(decoded.tsk).toBe(liveTaskFor(sessionId));
     expect(typeof decoded.iat).toBe('number');
     expect(typeof decoded.exp).toBe('number');
     expect((decoded.exp as number) - (decoded.iat as number)).toBe(60);
@@ -202,7 +221,12 @@ describe('generateSessionToken', () => {
       initTestMcpTokens(db, { multiTenancy: {} });
       const sessionId = await seedSession(db);
 
-      const token = await generateSessionToken(makeApp(), sessionId, 'u1' as UserID);
+      const token = await generateSessionToken(
+        makeApp(),
+        sessionId,
+        'u1' as UserID,
+        liveTaskFor(sessionId)
+      );
 
       expect((jwt.decode(token) as { tid?: string }).tid).toBe('default');
     }
@@ -216,7 +240,12 @@ describe('generateSessionToken', () => {
     });
     const sessionId = await seedSession(db);
 
-    const token = await generateSessionToken(makeApp(), sessionId, 'u1' as UserID);
+    const token = await generateSessionToken(
+      makeApp(),
+      sessionId,
+      'u1' as UserID,
+      liveTaskFor(sessionId)
+    );
 
     expect((jwt.decode(token) as { tid?: string }).tid).toBe('tenant-static');
   });
@@ -263,9 +292,9 @@ describe('generateSessionToken', () => {
     initTestMcpTokens(db);
     const sessionId = await seedSession(db);
 
-    await expect(generateSessionToken(makeApp(), sessionId, 'u1' as UserID)).rejects.toThrow(
-      /missing active tenant context/
-    );
+    await expect(
+      generateSessionToken(makeApp(), sessionId, 'u1' as UserID, liveTaskFor(sessionId))
+    ).rejects.toThrow(/missing active tenant context/);
   });
 
   dbTest('issues in required_from_auth mode with an ambient tenant scope', async ({ db }) => {
@@ -306,6 +335,34 @@ describe('validateSessionToken', () => {
     expect(ctx?.userId).toBe('u1');
     expect(ctx?.tenantId).toBe('tenant-a');
     expect(typeof ctx?.jti).toBe('string');
+    const task = await new TaskRepository(db).findById(liveTaskFor(sessionId));
+    expect(ctx?.taskConnectedAtMs).toBe(Date.parse(task!.executor_connected_at!));
+  });
+
+  dbTest('rejects a signature-valid token that carries no task', async ({ db }) => {
+    initTestMcpTokens(db);
+    const sessionId = await seedSession(db);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const taskless = jwt.sign(
+      {
+        sub: sessionId,
+        uid: 'u1',
+        tid: 'tenant-a',
+        aud: MCP_TOKEN_AUDIENCE,
+        iss: MCP_TOKEN_ISSUER,
+        iat: nowSec,
+        exp: nowSec + 60,
+        jti: generateId(),
+      },
+      JWT_SECRET,
+      { algorithm: 'HS256' }
+    );
+
+    expect(verifySessionTokenDetailed(makeApp(), taskless)).toEqual({
+      context: null,
+      reason: 'missing_task',
+    });
+    expect(await validateSessionToken(makeApp(), taskless)).toBeNull();
   });
 
   dbTest('rejects a token whose exp has passed', async ({ db }) => {
@@ -559,7 +616,6 @@ describe('task-bound tokens', () => {
     expect(await validateSessionToken(makeApp(), secondToken)).toMatchObject({
       taskId: second.task_id,
     });
-    expect(await mintSessionToken(makeApp(), sessionId, 'u1' as UserID)).not.toBe(secondToken);
   });
 });
 
@@ -576,6 +632,7 @@ describe('verification diagnostics', () => {
           sub: 'session',
           uid: 'user',
           tid: 'tenant-a',
+          tsk: 'task',
           jti: 'synthetic-jti',
           aud: MCP_TOKEN_AUDIENCE,
           iss: MCP_TOKEN_ISSUER,
@@ -603,6 +660,8 @@ describe('verification diagnostics', () => {
           [signed({ nbf: now + 60 }), 'not_active'],
           [signed({ tid: undefined }), 'missing_identity'],
           [signed({ exp: undefined }), 'missing_lifetime'],
+          [signed({ tsk: undefined }), 'missing_task'],
+          [signed({ tsk: '' }), 'missing_identity'],
         ] as const;
         for (const [token, reason] of cases) {
           expect(verifySessionTokenDetailed(makeApp(), token)).toEqual({ context: null, reason });

@@ -1,8 +1,12 @@
 import { readFileSync } from 'node:fs';
+import { eq, jsonSetString, update, users } from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
 import type { HookContext } from '@agor/core/types';
+import { ROLES } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
+import { dbTest } from '../../../packages/core/src/db/test-helpers';
 import { redactUserOwnerOnlyFieldsForBroadcast } from './register-hooks';
+import { createUsersService } from './services/users';
 
 /**
  * `users` is a tenant-wide realtime fan-out path, and `rowToUser` decides one
@@ -162,6 +166,48 @@ describe('users redaction under real Feathers hook composition', () => {
     expect(published).toBeDefined();
     expect(published).not.toHaveProperty('agentic_tools_public_values');
     expect(JSON.stringify(published)).not.toContain('llm.internal.corp.example');
+  });
+});
+
+describe('users auth metadata redaction on broadcast', () => {
+  dbTest('a provider-less patch keeps auth metadata off every socket', async ({ db }) => {
+    const service = createUsersService(db);
+    const created = await service.create({
+      email: 'internal-patch@example.test',
+      password: 'test-password-1234',
+      role: ROLES.MEMBER,
+    });
+    await update(db, users)
+      .set({
+        data: jsonSetString(db, users.data, 'membership_refused_at', new Date().toISOString()),
+      })
+      .where(eq(users.user_id, created.user_id))
+      .run();
+    const app = feathers();
+    app.use('users', service as never);
+    app
+      .service('users')
+      .hooks({ after: { all: [redactUserOwnerOnlyFieldsForBroadcast] } } as never);
+    let broadcast: unknown;
+    app.service('users').on('patched', (_data: unknown, context: HookContext) => {
+      broadcast = broadcastPayload(context);
+    });
+
+    // Internal callers (avatar sync, OAuth, env vars) patch without a provider.
+    const result = await app.service('users').patch(created.user_id, { name: 'Renamed' } as never);
+
+    expect(result).toHaveProperty('membership_refused_at', expect.any(Date));
+    expect(result).toHaveProperty('credential_generation');
+    expect(broadcast).toMatchObject({ user_id: created.user_id, name: 'Renamed' });
+    for (const field of [
+      'membership_refused_at',
+      'tokens_valid_after',
+      'credential_generation',
+      'tenant_id',
+      'password',
+    ]) {
+      expect(broadcast).not.toHaveProperty(field);
+    }
   });
 });
 

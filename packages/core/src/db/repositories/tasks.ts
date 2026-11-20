@@ -1535,7 +1535,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
 
   /** Whether a connected executor still owns this Session's Task and no Stop has been requested. */
   async isOwnedByLiveExecutor(id: TaskID, sessionId: SessionID): Promise<boolean> {
-    const row = await select(this.db, { task_id: tasks.task_id })
+    return (await this.liveExecutorConnectedAt(id, sessionId)) !== null;
+  }
+
+  /** When the executor that still owns this live, unstopped Session Task connected; null otherwise. */
+  async liveExecutorConnectedAt(id: TaskID, sessionId: SessionID): Promise<Date | null> {
+    const row = await select(this.db, { executor_connected_at: tasks.executor_connected_at })
       .from(tasks)
       .where(
         and(
@@ -1548,7 +1553,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       )
       .limit(1)
       .one();
-    return !!row;
+    return row?.executor_connected_at ? new Date(row.executor_connected_at) : null;
   }
 
   /** No heartbeat/lease write can be used to authorize retrieval of a provider bearer. */

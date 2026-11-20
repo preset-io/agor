@@ -40,6 +40,7 @@ export function toUserDirectoryEntry(user: Partial<User>): UserDirectoryEntry {
 type BackendUserAuthFields = {
   tokens_valid_after?: unknown;
   credential_generation?: unknown;
+  membership_refused_at?: unknown;
   password?: unknown;
   tenant_id?: unknown;
 };
@@ -53,6 +54,7 @@ export function redactUserAuthMetadata<T extends object>(
   const {
     tokens_valid_after: _tokensValidAfter,
     credential_generation: _credentialGeneration,
+    membership_refused_at: _membershipRefusedAt,
     password: _password,
     tenant_id: _tenantId,
     ...publicUser

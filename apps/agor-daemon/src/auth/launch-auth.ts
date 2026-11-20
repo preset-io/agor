@@ -16,9 +16,11 @@ import {
   and,
   eq,
   generateId,
+  getDatabaseWallClock,
   hash,
   insert,
   isExecutionHomeKeyAvailable,
+  jsonSetString,
   reattributeLegacyAnonymousRows,
   runWithTenantContext,
   runWithTenantDatabaseTransaction,
@@ -1130,6 +1132,40 @@ async function requestSessionRevalidation(
 }
 
 /**
+ * Durably fence a user whose tenant membership the issuer refused. Runs inside
+ * the caller's tenant transaction.
+ *
+ * `tokens_valid_after` stays on the daemon clock because browser tokens carry
+ * daemon-clock issue times. `membership_refused_at` is compared with
+ * `tasks.executor_connected_at`, which PostgreSQL stamps from its own clock, so
+ * it reads the database wall clock after the lock; SQLite stamps both from the
+ * process clock.
+ */
+export async function fenceRefusedMembership(
+  scopedDb: TenantScopedDatabase,
+  userId: UserID,
+  daemonNowMs: number
+): Promise<void> {
+  // Serializes with users.patch, which reads and rewrites `data` under this lock.
+  await lockTenantAuthorizationFence(scopedDb);
+  const daemonNow = new Date(daemonNowMs);
+  const refusedAt =
+    (await getDatabaseWallClock(scopedDb, users, eq(users.user_id, userId), daemonNow)) ??
+    daemonNow;
+  await update(scopedDb, users)
+    .set({
+      tokens_valid_after: daemonNow,
+      credential_generation: sql`${users.credential_generation} + 1`,
+      // Removal-only marker: MCP tokens of tasks connected at or before it stop working.
+      data: jsonSetString(scopedDb, users.data, 'membership_refused_at', refusedAt.toISOString()),
+    })
+    .where(eq(users.user_id, userId))
+    .run();
+  // Personal keys carry no generation claim, so a refusal has to remove them.
+  await new UserApiKeysRepository(scopedDb).deleteAllForUser(userId);
+}
+
+/**
  * Build the refresh-time membership check for launched sessions. Returns
  * undefined unless external launch is enabled with a session revalidation URL,
  * so local and self-hosted installs keep their refresh behavior unchanged.
@@ -1285,17 +1321,9 @@ export function createLaunchSessionRevalidator(
         const refusedTenantId = tenantId;
         try {
           // Same fence as a password change: the generation holds against racing refreshes and clock skew.
-          await runWithTenantDatabaseTransaction(options.db, refusedTenantId, async (scopedDb) => {
-            await update(scopedDb, users)
-              .set({
-                tokens_valid_after: new Date(now()),
-                credential_generation: sql`${users.credential_generation} + 1`,
-              })
-              .where(eq(users.user_id, userId))
-              .run();
-            // Personal keys carry no generation claim, so a refusal has to remove them.
-            await new UserApiKeysRepository(scopedDb).deleteAllForUser(userId);
-          });
+          await runWithTenantDatabaseTransaction(options.db, refusedTenantId, (scopedDb) =>
+            fenceRefusedMembership(scopedDb, userId, now())
+          );
         } catch {
           console.warn('[auth.refresh] session_revalidation_fence_failed');
         }

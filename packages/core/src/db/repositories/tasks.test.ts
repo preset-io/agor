@@ -6,7 +6,9 @@
 import type {
   MCPServerID,
   MessageID,
+  SessionID,
   Task,
+  TaskID,
   TaskLaunchFields,
   TaskPendingDispatchStatus,
   UserID,
@@ -762,6 +764,39 @@ describe('TaskRepository.findById', () => {
 // ============================================================================
 // FindAll
 // ============================================================================
+
+describe('TaskRepository.liveExecutorConnectedAt', () => {
+  dbTest('returns the connection time only while a live executor owns the task', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const otherSessionId = await createSessionWithDeps(db);
+    const connectedAt = '2026-11-01T12:00:00.000Z';
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: connectedAt,
+      })
+    );
+    const taskId = task.task_id as TaskID;
+    const sid = sessionId as SessionID;
+
+    expect(await taskRepo.liveExecutorConnectedAt(taskId, sid)).toEqual(new Date(connectedAt));
+    expect(await taskRepo.isOwnedByLiveExecutor(taskId, sid)).toBe(true);
+    expect(await taskRepo.liveExecutorConnectedAt(taskId, otherSessionId as SessionID)).toBeNull();
+
+    await taskRepo.update(task.task_id, {
+      termination_request: { cause: 'user_stop', requested_at: new Date().toISOString() },
+    });
+    expect(await taskRepo.liveExecutorConnectedAt(taskId, sid)).toBeNull();
+    expect(await taskRepo.isOwnedByLiveExecutor(taskId, sid)).toBe(false);
+
+    const pending = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+    );
+    expect(await taskRepo.liveExecutorConnectedAt(pending.task_id as TaskID, sid)).toBeNull();
+  });
+});
 
 describe('TaskRepository.findAll', () => {
   dbTest('should return empty array when no tasks', async ({ db }) => {
