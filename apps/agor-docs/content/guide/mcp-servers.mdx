@@ -212,16 +212,36 @@ their parent. Inherited branch, user or gateway-channel defaults, and the server
 attached by an MCP Catalog "Start new session", keep global servers, and later
 link edits never change it. It is not inferred from an empty
 attachment table on older sessions. The built-in Agor MCP remains available.
-`attached_mcp_servers` reports explicit links, not implicit global servers, so an
-empty list alone does not establish that a historical task ran without external MCP.
+`attached_mcp_servers` reports the session's effective set, global servers
+included (tagged `source: "global"`), plus global servers waiting for you to
+connect them (`state: "needs_connect"`).
 
 OAuth badges reflect the last saved-grant check, refreshed when the UI loads or
 reconnects and after explicit OAuth actions/events. Idle tabs do not scan all
 grants on a timer. The badge is not a live provider-health guarantee: credentials
 can expire or be revoked between observations. Runtime credential resolution
-independently validates the effective session servers (attached and enabled global
-servers), and refreshes credentials when needed. A provider timeout is not proof
+independently validates the effective session servers (see below), and refreshes
+credentials when needed. A provider timeout is not proof
 that authentication has been revoked.
+
+### Global servers in a session
+
+A global server is available to everyone in the workspace. In a given session it
+is on only when it can work for the person prompting:
+
+- Servers with no auth, a shared credential, or saved keys are on by default.
+- A per-user OAuth server is on once you have connected it, then stays on in all
+  your sessions. Until then the agent doesn't load it. The session's **MCP** pill
+  lists it as a dimmed row with **Connect**, and the count shows how many are
+  waiting (for example **MCP 2 · 3 to connect**). **Hide** removes the row for
+  you; **Show hidden** brings it back.
+- Use the switch next to a global server to turn it off for just this session.
+  Agents can do the same with `agor_sessions_remove_mcp_server`. Forks and
+  subsessions keep the setting.
+
+A per-user OAuth server set to the `client_credentials` grant can't be signed
+into by anyone. It never loads, and **My Servers** marks it **Misconfigured** for
+administrators.
 
 ### Capability metadata
 

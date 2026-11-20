@@ -7,6 +7,7 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { type Application, feathers } from '@agor/core/feathers';
+import { resolveSessionMcpEntries } from '@agor/core/mcp';
 import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
 import type { MCPServerID, UserID } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
@@ -191,6 +192,36 @@ describe('MCP OAuth status through Feathers response hooks', () => {
           skip: 0,
           data: [{ mcp_server_id: server.mcp_server_id, enabled: true }],
         };
+      },
+    } as never);
+    // `attached_mcp_servers` reads the session route's effective view. The
+    // full route lives in register-routes; this harness feeds the same
+    // resolver from the services above.
+    app.use('sessions/:id/mcp-servers', {
+      async find(params: { query?: { effective?: boolean } }) {
+        const linksResult = await app.service('session-mcp-servers').find({});
+        const links = (linksResult as { data: Array<{ mcp_server_id: string; enabled: boolean }> })
+          .data;
+        const linkedServers = await Promise.all(
+          links.map((link) =>
+            app.service('mcp-servers').get(link.mcp_server_id, { provider: undefined } as never)
+          )
+        );
+        const entries = resolveSessionMcpEntries({
+          links,
+          linkedServers,
+          globalServers: [],
+          connectedServerIds: new Set(),
+          forUserId: user.user_id,
+        });
+        return params.query?.effective
+          ? {
+              entries: entries.map((entry) => ({
+                ...entry,
+                mcp_server_id: entry.server.mcp_server_id,
+              })),
+            }
+          : entries.map((entry) => entry.server);
       },
     } as never);
 

@@ -113,15 +113,17 @@ export function loadSessionMcpServerIds(client: AgorClient, sessionId: string): 
           (await client
             .service('session-mcp-servers')
             .find({ query: { session_id: sessionId } })) as
-            | Array<{ session_id: string; mcp_server_id: string }>
-            | { data: Array<{ session_id: string; mcp_server_id: string }> },
+            | Array<{ session_id: string; mcp_server_id: string; enabled?: boolean }>
+            | { data: Array<{ session_id: string; mcp_server_id: string; enabled?: boolean }> },
         (result, fence) => {
           if (fence.touched(collection, deletedKey(sessionId))) return;
           // Its session left meanwhile (unpinned, evicted): its links don't enter.
           if (!holdsSession(sessionId)) return;
           const rows = Array.isArray(result) ? result : result.data;
+          // The store holds enabled links; a disabled one is a per-session
+          // opt-out of a global server (`@agor/core/mcp/effective-set`).
           const snapshotIds = rows
-            .filter((row) => row.session_id === sessionId)
+            .filter((row) => row.session_id === sessionId && row.enabled !== false)
             .map((row) => row.mcp_server_id);
           // The links and their loaded mark publish in one update.
           agorStore.getState().applyMaps(

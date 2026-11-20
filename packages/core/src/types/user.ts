@@ -492,6 +492,8 @@ export interface UserPreferences {
   use_slack_avatar?: boolean;
   /** Home "My work" layout. Undefined defaults to list. */
   homeWorkView?: HomeWorkView;
+  /** Global per-user OAuth MCP servers this user hid from their session connect rows. */
+  hidden_mcp_server_ids?: string[];
   // Future preferences can be added here
   [key: string]: unknown;
 }

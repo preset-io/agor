@@ -1,3 +1,4 @@
+import { mcpServerConfigWarning } from '@agor/core/mcp/effective-set';
 import type {
   AgorClient,
   CreateMCPServerInput,
@@ -595,6 +596,15 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
             policyUnavailable ? 'Saved OAuth policy is unavailable' : 'Loading saved OAuth policy…'
           }
           action={policyUnavailable && <Button onClick={retryPolicy}>Retry policy read</Button>}
+        />
+      )}
+      {server && mcpServerConfigWarning(server) && (
+        <Alert
+          type="warning"
+          showIcon
+          title="Users can't sign in to this server"
+          description={mcpServerConfigWarning(server)}
+          style={{ marginTop: 16 }}
         />
       )}
       {!mutationAllowed && (

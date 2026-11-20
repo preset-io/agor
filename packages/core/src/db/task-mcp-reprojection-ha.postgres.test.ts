@@ -230,7 +230,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         const attachments = new SessionMCPServerRepository(scoped);
         await attachments.addServer(seed.sessionId, server.mcp_server_id);
         await attachments.addServer(collaboratorSession.session_id, server.mcp_server_id);
-        await attachments.toggleServer(collaboratorSession.session_id, server.mcp_server_id, false);
+        await attachments.setServerEnabled(
+          collaboratorSession.session_id,
+          server.mcp_server_id,
+          false
+        );
 
         const tasks = new TaskRepository(scoped);
         const target = await tasks.create(

@@ -18,10 +18,11 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { NotFound } from '@agor/core/feathers';
-import { resolveEffectiveSessionMcpServers } from '@agor/core/mcp';
+import { activeSessionMcpServers } from '@agor/core/mcp';
 import type { MCPServerID, TenantID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { resolveSessionMcpViewForSession } from './session-mcp-effective.js';
 import { SessionsService } from './sessions.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -206,16 +207,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         await links.setServers(session.session_id, [], { markSelectionExplicit: true });
         const stored = await new SessionRepository(scoped).findById(session.session_id);
         expect(stored?.mcp_selection_explicit).toBe(true);
-        const global = vi.fn(async () => [owner.server]);
         expect(
-          await resolveEffectiveSessionMcpServers(
-            stored!,
-            await links.listServers(session.session_id),
-            global,
-            owner.user.user_id
+          activeSessionMcpServers(
+            await resolveSessionMcpViewForSession(scoped, stored!, owner.user.user_id)
           )
         ).toEqual([]);
-        expect(global).not.toHaveBeenCalled();
       });
       await expect(
         runWithTenantDatabaseScope(db, tenantB, (scoped) =>
