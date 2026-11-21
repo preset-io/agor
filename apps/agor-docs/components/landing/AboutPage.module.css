@@ -169,7 +169,7 @@
 /* Bare symbol (Redpoint): fixed height to match the wordmarks' ink height. */
 .investors img.investorMark {
   width: auto;
-  height: 40px;
+  height: 52px;
 }
 
 .glance {
@@ -220,6 +220,10 @@
 
   .investors img {
     max-width: 170px;
+  }
+
+  .investors img.investorMark {
+    height: 46px;
   }
 
   .glance th,
