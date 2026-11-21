@@ -214,6 +214,7 @@ export const NAV_MENUS: NavMenu[] = [
 export const NAV_LINKS: Array<{ label: string; href: string }> = [
   { label: 'Docs', href: '/guide' },
   { label: 'Blog', href: '/blog' },
+  { label: 'About', href: '/about' },
 ];
 
 export const isExternal = (href: string) => /^https?:\/\//.test(href);

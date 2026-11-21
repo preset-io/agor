@@ -52,6 +52,8 @@ export default {
   // The Preset agent roster (linked from the home radar and the nav); not a
   // spoke in LANDING_PAGES, but framed the same way.
   'agent-roster': landingPageMeta,
+  // Who makes Agor (Preset) and how it started; linked from the island nav.
+  about: landingPageMeta,
   guide: 'Docs',
   blog: 'Blog',
   'api-reference': 'API Reference',

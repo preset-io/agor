@@ -1,0 +1,242 @@
+/* /about: a long-form, single-column reading page inside LandingShell. */
+
+.hero {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: clamp(88px, 12vh, 140px) 28px 40px;
+  text-align: center;
+}
+
+.hero h1 {
+  margin: 0;
+  color: var(--landing-ink);
+  font-family: var(--font-body-stack);
+  font-size: clamp(2.6rem, 5vw, 4.4rem);
+  font-weight: 100;
+  letter-spacing: -0.03em;
+  line-height: 1.02;
+}
+
+.subhead {
+  margin: 24px auto 0;
+  max-width: 720px;
+  color: var(--landing-ink);
+  font-size: clamp(1.1rem, 1.6vw, 1.3rem);
+  line-height: 1.6;
+}
+
+.secondLine {
+  margin: 16px auto 0;
+  max-width: 680px;
+  color: var(--landing-muted);
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
+.body {
+  position: relative;
+  z-index: 1;
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 16px 28px 24px;
+}
+
+.block {
+  padding: 40px 0;
+  border-top: 1px solid var(--landing-line);
+}
+
+.block h2 {
+  margin: 0 0 16px;
+  color: var(--landing-ink);
+  font-family: var(--font-body-stack);
+  font-size: clamp(1.6rem, 2.6vw, 2.1rem);
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.block p,
+.block li,
+.block td {
+  color: var(--landing-muted);
+  font-size: 1rem;
+  line-height: 1.75;
+}
+
+.block p {
+  margin: 12px 0 0;
+}
+
+.block strong {
+  color: var(--landing-ink);
+  font-weight: 600;
+}
+
+/* The docs theme colors every link teal (`.dark a`); restate it here so the
+ * page's links read the same in both docs themes. */
+.block a:not([class]) {
+  color: var(--landing-teal);
+  text-decoration: underline;
+  text-decoration-color: rgba(52, 230, 196, 0.35);
+  text-underline-offset: 3px;
+}
+
+.block a:not([class]):hover {
+  text-decoration-color: currentColor;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 26px;
+}
+
+.list {
+  display: grid;
+  gap: 12px;
+  margin: 12px 0 0;
+  padding-left: 1.2em;
+  list-style: disc;
+}
+
+.list li::marker {
+  color: var(--landing-teal);
+}
+
+.block .listLabel {
+  margin-top: 24px;
+  color: var(--landing-ink);
+  font-family: var(--font-mono-stack);
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.photo {
+  margin: 28px 0 0;
+}
+
+.photo img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 16px;
+  border: 1px solid var(--landing-line);
+}
+
+.block .photo figcaption > p {
+  margin-top: 12px;
+  font-size: 0.95rem;
+}
+
+.block .photo .credit {
+  margin-top: 4px;
+  color: #7f9c97;
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+/* Investor wordmarks are dark (a16z and Redpoint are black text), so they sit
+ * on a light strip rather than the page's dark background. */
+.investors {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: center;
+  gap: clamp(16px, 4vw, 40px);
+  margin: 24px 0 0;
+  padding: clamp(20px, 3vw, 28px) clamp(20px, 4vw, 40px);
+  border-radius: 16px;
+  background: #f4f7f6;
+  list-style: none;
+}
+
+.investors li {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.investors img {
+  display: block;
+  width: 100%;
+  max-width: 190px;
+  height: auto;
+}
+
+/* Bare symbol (Redpoint): fixed height to match the wordmarks' ink height. */
+.investors img.investorMark {
+  width: auto;
+  height: 52px;
+}
+
+.glance {
+  width: 100%;
+  margin-top: 8px;
+  border-collapse: collapse;
+}
+
+.glance th,
+.glance td {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--landing-line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.glance th {
+  width: 32%;
+  padding-right: 20px;
+  color: var(--landing-ink);
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.faq {
+  display: grid;
+  gap: 26px;
+  margin-top: 8px;
+}
+
+.faq h3 {
+  margin: 0;
+  color: var(--landing-ink);
+  font-family: var(--font-body-stack);
+  font-size: 1.15rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.block .faq div > p {
+  margin-top: 6px;
+}
+
+@media (max-width: 640px) {
+  .investors {
+    grid-template-columns: 1fr;
+  }
+
+  .investors img {
+    max-width: 170px;
+  }
+
+  .investors img.investorMark {
+    height: 46px;
+  }
+
+  .glance th,
+  .glance td {
+    display: block;
+    width: auto;
+    padding: 4px 0;
+    border-bottom: 0;
+  }
+
+  .glance tr {
+    display: block;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--landing-line);
+  }
+}
