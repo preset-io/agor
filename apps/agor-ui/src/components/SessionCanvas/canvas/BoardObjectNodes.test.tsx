@@ -14,6 +14,15 @@ vi.mock('../../../utils/clipboard', async (importOriginal) => ({
   copyToClipboard: copySpy,
 }));
 
+// The real NodeToolbar portals into a mounted React Flow renderer, which these
+// isolated node renders lack; render it inline. Stacking is covered by
+// ZoneToolbar.stacking.browser.test.tsx.
+vi.mock('reactflow', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('reactflow')>()),
+  NodeToolbar: ({ isVisible, children }: { isVisible?: boolean; children?: ReactNode }) =>
+    isVisible ? <>{children}</> : null,
+}));
+
 vi.mock('./ZoneConfigModal', () => ({
   ZoneConfigModal: (props: { zoneName: string }) => {
     zoneConfigModalRenderSpy(props);

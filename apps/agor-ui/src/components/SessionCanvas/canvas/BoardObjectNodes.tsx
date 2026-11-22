@@ -45,7 +45,14 @@ import {
 } from 'antd';
 import type { Color } from 'antd/es/color-picker';
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { NodeResizeControl, NodeResizer, ResizeControlVariant, useViewport } from 'reactflow';
+import {
+  NodeResizeControl,
+  NodeResizer,
+  NodeToolbar,
+  Position,
+  ResizeControlVariant,
+  useViewport,
+} from 'reactflow';
 import { useConnectionState, useMutationGate } from '../../../contexts/ConnectionContext';
 import type { BoardWriteResult } from '../../../hooks/useBoardMutationGuard';
 import { type BoardWriteTicket, hasBoardWriteTicketEnded } from '../../../store/boardMutationGuard';
@@ -237,7 +244,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   const { authGeneration } = useConnectionState();
   const mutationDisabled = !mutationGate.canMutate || data.canEdit === false;
 
-  // Inverse scale to keep toolbar at constant size regardless of zoom
+  // Inverse scale to keep the label at constant size regardless of zoom
   const scale = 1 / zoom;
 
   // Sync label state when data.label changes (from WebSocket or modal
@@ -492,7 +499,11 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
           position: 'relative',
         }}
       >
-        {selected && !mutationDisabled && (
+        {/* NodeToolbar portals out of the zone's stacking context (zIndex ~100)
+            so higher-layer board objects (markdown, apps, artifacts) can never
+            paint over the selected zone's actions. It also positions in screen
+            space, so the toolbar keeps a constant size at any zoom. */}
+        <NodeToolbar isVisible={selected && !mutationDisabled} position={Position.Top} offset={12}>
           <div
             className="nodrag nopan"
             role="toolbar"
@@ -501,11 +512,6 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             onPointerUp={(event) => event.stopPropagation()}
             onClick={(event) => event.stopPropagation()}
             style={{
-              position: 'absolute',
-              top: '-48px',
-              left: '50%',
-              transform: `translateX(-50%) scale(${scale})`,
-              transformOrigin: 'center bottom',
               display: 'flex',
               alignItems: 'center',
               gap: token.marginXXS,
@@ -514,7 +520,6 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
               border: `1px solid ${token.colorBorder}`,
               borderRadius: token.borderRadiusLG,
               boxShadow: token.boxShadowSecondary,
-              zIndex: 1000,
               userSelect: 'none',
               whiteSpace: 'nowrap',
               pointerEvents: 'auto',
@@ -779,7 +784,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
               />
             </Dropdown>
           </div>
-        )}
+        </NodeToolbar>
         <div
           style={{
             pointerEvents: 'auto',
