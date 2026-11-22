@@ -78,7 +78,6 @@ import {
   ZONE_MIN_HEIGHT,
   ZONE_MIN_WIDTH,
   zoneGridDropIndex,
-  zoneGridWidthOnSwitch,
   zoneLayoutOf,
 } from '@agor/core/utils/zone-layout';
 import { boardCommentZoneParentObjectKey, hasMinimumRole, ROLES, shortId } from '@agor-live/client';
@@ -1186,12 +1185,11 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         }
 
         holdZoneOrder(objectId, order);
-        const gridWidth =
-          layout === 'grid' ? zoneGridWidthOnSwitch(zone.width, order.length) : undefined;
+        // Only the layout and order change: the zone keeps the size people set.
         const saved = await writeZone(ticket, 'change the zone layout', () =>
           client.service('boards').patch(board.board_id, {
             _action: 'mergeObjectFields',
-            objects: { [objectId]: { layout, order, ...(gridWidth ? { width: gridWidth } : {}) } },
+            objects: { [objectId]: { layout, order } },
           } as unknown as Partial<Board>)
         );
         if (!saved) releaseZoneOrder(objectId, order);

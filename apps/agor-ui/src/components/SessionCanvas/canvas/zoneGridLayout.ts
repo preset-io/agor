@@ -51,7 +51,7 @@ export function zoneGridOrder(
     .map(({ child }) => child);
 }
 
-/** The width people set; a grid may show wider to fit its columns. */
+/** The width people set; arranging never changes it. */
 function zoneWidthOf(zone: Node) {
   return Number(zone.data?.width) || 0;
 }
@@ -82,8 +82,9 @@ function sameNumber(a: unknown, b: number) {
 
 /**
  * Place every branch and card pinned to an arranged zone (row, column or
- * grid), stretched to columns that fill the zone's width. Those zones fit
- * their height to their cards, and their width to the columns. Display-only: nothing here is persisted. Returns the same
+ * grid), stretched to columns that fill the zone's width. The zone keeps the
+ * width and height people set; cards that do not fit overflow it. Display-only:
+ * nothing here is persisted. Returns the same
  * array when nothing moved, so callers can feed it straight into setNodes
  * without a render loop.
  */
@@ -108,7 +109,6 @@ export function applyZoneGridLayouts(nodes: Node[], inputs: ZoneGridLayoutInputs
     string,
     { position: BoardPosition; wideZIndex?: number; slotWidth: number; hidden: boolean }
   >();
-  const zoneSizes = new Map<string, { width: number; height: number }>();
   for (const [zoneId, { node: zone, layout }] of autoZones) {
     const ordered = zoneGridOrder(zone, childrenByZone.get(zoneId) ?? [], inputs);
     const plan = planZoneGrid(
@@ -133,7 +133,6 @@ export function applyZoneGridLayouts(nodes: Node[], inputs: ZoneGridLayoutInputs
         hidden: !!inputs.hideUnmeasured && !inputs.measuredSizes.has(item.id),
       });
     }
-    zoneSizes.set(zoneId, { width: plan.contentWidth, height: plan.contentHeight });
   }
 
   let changed = false;
@@ -167,20 +166,6 @@ export function applyZoneGridLayouts(nodes: Node[], inputs: ZoneGridLayoutInputs
         },
         data: { ...node.data, slotWidth },
       };
-    }
-    const size = zoneSizes.get(node.id);
-    if (size) {
-      const { width, height } = size;
-      if (
-        sameNumber(node.style?.width, width) &&
-        sameNumber(node.width, width) &&
-        sameNumber(node.style?.height, height) &&
-        sameNumber(node.height, height)
-      ) {
-        return node;
-      }
-      changed = true;
-      return { ...node, width, height, style: { ...node.style, width, height } };
     }
     return node;
   });

@@ -23,7 +23,7 @@ export const ZONE_GRID_GAP = 20;
 export const ZONE_GRID_PADDING = 20;
 /** Space kept clear for the zone label and status above the first row. */
 export const ZONE_GRID_HEADER = 80;
-/** Smallest zone that holds one branch card under its header: the floor for resizing and fitting. */
+/** Smallest zone that holds one branch card under its header: the floor for resizing. */
 export const ZONE_MIN_WIDTH = BRANCH_CARD_WIDTH + 2 * ZONE_GRID_PADDING;
 export const ZONE_MIN_HEIGHT = ZONE_GRID_HEADER + BRANCH_CARD_HEIGHT + ZONE_GRID_PADDING;
 
@@ -41,7 +41,7 @@ export function isAutoZoneLayout(layout: ZoneLayout): layout is AutoZoneLayout {
 
 const snapUp = (value: number) => Math.ceil(value / ZONE_GRID_STEP) * ZONE_GRID_STEP;
 
-/** Fewest columns a grid shows; a narrower zone widens on screen to fit them. */
+/** Fewest columns a grid shows; in a narrower zone they overflow it. */
 export const ZONE_GRID_MIN_COLUMNS = 2;
 
 /** Fewest grid columns that fill this width without any exceeding the maximum. */
@@ -59,8 +59,8 @@ export interface ZoneGridColumns {
 /**
  * The columns an arranged zone shows, sized to fill its width. A row has one
  * per card and a column one; a grid has the fewest that keep each within the
- * maximum width, no more than it has cards, and at least two. Widths stay within the bounds, so a zone
- * too narrow or too wide for them shows wider or narrower than set.
+ * maximum width, no more than it has cards, and at least two. Widths stay within the bounds, so cards
+ * overflow a zone too narrow for them; the zone itself keeps the size people set.
  */
 export function zoneGridColumns(
   layout: AutoZoneLayout,
@@ -81,21 +81,6 @@ export function zoneGridColumns(
   };
 }
 
-/**
- * Width a zone takes when it switches to grid, or undefined to keep its own.
- * A width that would put every card in one row (say, left over from a row)
- * gets roughly square columns instead, so the grid looks like a grid.
- */
-export function zoneGridWidthOnSwitch(zoneWidth: number, itemCount: number): number | undefined {
-  if (itemCount < 3 || gridColumnsToFill(zoneWidth) < itemCount) return undefined;
-  return zoneWidthFor(Math.max(ZONE_GRID_MIN_COLUMNS, Math.ceil(Math.sqrt(itemCount))));
-}
-
-/** Zone width that fits these columns, padding included. */
-function zoneWidthFor(count: number, width = ZONE_GRID_COLUMN_WIDTH): number {
-  return 2 * ZONE_GRID_PADDING + count * width + (count - 1) * ZONE_GRID_GAP;
-}
-
 export interface ZoneGridOrderItem {
   id: string;
   /** Stored zone-relative position: orders cards the zone hasn't listed yet. */
@@ -113,10 +98,6 @@ export interface ZoneGridPlan {
   positions: Map<string, BoardPosition>;
   /** Column of each item, keyed by id. */
   columns: Map<string, number>;
-  /** Zone height that fits every item, header and bottom padding included, and at least one card. */
-  contentHeight: number;
-  /** Zone width that fits every column, padding included. */
-  contentWidth: number;
   /** Width every card is shown at. */
   columnWidth: number;
 }
@@ -139,7 +120,6 @@ export function planZoneGrid(
   const columnTops = new Array<number>(columnCount).fill(ZONE_GRID_HEADER);
   const positions = new Map<string, BoardPosition>();
   const columns = new Map<string, number>();
-  let bottom = ZONE_GRID_HEADER;
 
   items.forEach((item, index) => {
     const column = index % columnCount;
@@ -151,14 +131,11 @@ export function planZoneGrid(
     columns.set(item.id, column);
     const height = Number.isFinite(item.height) && item.height > 0 ? item.height : 0;
     columnTops[column] = snapUp(y + height + ZONE_GRID_GAP);
-    bottom = Math.max(bottom, y + height);
   });
 
   return {
     positions,
     columns,
-    contentHeight: Math.max(ZONE_MIN_HEIGHT, snapUp(bottom + ZONE_GRID_PADDING)),
-    contentWidth: zoneWidthFor(columnCount, columnWidth),
     columnWidth,
   };
 }

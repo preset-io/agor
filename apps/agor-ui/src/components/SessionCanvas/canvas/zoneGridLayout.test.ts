@@ -62,48 +62,56 @@ describe('applyZoneGridLayouts', () => {
     expect(result.get('c')?.position).toEqual({ x: 20, y: 260 });
   });
 
-  it('fits the zone height to its cards, growing and shrinking', () => {
-    const tall = layout([zone('zone-1', 'column', 600, 200), branch('a', 'zone-1')], {
-      a: { width: 500, height: 400 },
-    });
-    expect(byId(tall).get('zone-1')?.style?.height).toBe(500);
+  it.each(['row', 'column', 'grid'])(
+    'never resizes a %s zone: it keeps the width and height people set',
+    (zoneLayout) => {
+      const sizes = {
+        a: { width: 560, height: 400 },
+        b: { width: 560, height: 300 },
+        c: { width: 560, height: 300 },
+      };
+      const cards = [branch('a', 'zone-1'), branch('b', 'zone-1'), branch('c', 'zone-1')];
+      // Too small for its cards: they overflow, the zone stays put.
+      const small = byId(layout([zone('zone-1', zoneLayout, 500, 200), ...cards], sizes));
+      expect(small.get('zone-1')).toMatchObject({
+        width: 500,
+        height: 200,
+        style: { width: 500, height: 200 },
+      });
+      // Far bigger than its cards: the zone does not shrink to fit them.
+      const roomy = byId(layout([zone('zone-1', zoneLayout, 3000, 2000), ...cards], sizes));
+      expect(roomy.get('zone-1')).toMatchObject({
+        width: 3000,
+        height: 2000,
+        style: { width: 3000, height: 2000 },
+      });
+    }
+  );
 
-    const roomy = layout([zone('zone-1', 'column', 600, 900), branch('a', 'zone-1')], {
-      a: { width: 500, height: 240 },
-    });
-    expect(byId(roomy).get('zone-1')?.style?.height).toBe(340);
-
-    // Never shorter than one branch card under the header.
-    const short = layout([zone('zone-1', 'column', 600, 900), branch('a', 'zone-1')], {
-      a: { width: 500, height: 100 },
-    });
-    expect(byId(short).get('zone-1')?.style?.height).toBe(300);
-  });
-
-  it('fits a row zone to its cards side by side, stretched up to the maximum width', () => {
+  it('lines a row zone up side by side, stretched up to the maximum width', () => {
     const result = byId(
       layout([zone('zone-1', 'row', 2000), branch('a', 'zone-1'), branch('b', 'zone-1')], {
         a: { width: 560, height: 150 },
         b: { width: 560, height: 300 },
       })
     );
-    expect(result.get('zone-1')?.style).toMatchObject({ width: 1180, height: 400 });
     expect(result.get('b')?.position).toEqual({ x: 600, y: 80 });
+    expect(result.get('b')?.data.slotWidth).toBe(560);
   });
 
-  it('narrows cards to fit two grid columns, and widens the zone only below the minimum', () => {
+  it('narrows cards to fit two grid columns, overflowing a zone below the minimum', () => {
     const sizes = { a: { width: 450, height: 150 }, b: { width: 450, height: 150 } };
     const fitted = byId(
       layout([zone('zone-1', 'grid', 960), branch('a', 'zone-1'), branch('b', 'zone-1')], sizes)
     );
-    expect(fitted.get('zone-1')?.style?.width).toBe(960);
     expect(fitted.get('b')?.position.x).toBe(490);
     expect(fitted.get('b')?.data.slotWidth).toBe(450);
 
     const narrow = byId(
       layout([zone('zone-1', 'grid', 500), branch('a', 'zone-1'), branch('b', 'zone-1')], sizes)
     );
-    expect(narrow.get('zone-1')?.style?.width).toBe(700);
+    expect(narrow.get('zone-1')?.style?.width).toBe(500);
+    expect(narrow.get('b')?.position.x).toBe(360);
   });
 
   it("follows the zone's saved order, with cards it hasn't listed last", () => {

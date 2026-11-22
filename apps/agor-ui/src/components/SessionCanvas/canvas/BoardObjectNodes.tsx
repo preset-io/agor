@@ -45,7 +45,7 @@ import {
 } from 'antd';
 import type { Color } from 'antd/es/color-picker';
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { NodeResizeControl, NodeResizer, ResizeControlVariant, useViewport } from 'reactflow';
+import { NodeResizer, useViewport } from 'reactflow';
 import { useConnectionState, useMutationGate } from '../../../contexts/ConnectionContext';
 import type { BoardWriteResult } from '../../../hooks/useBoardMutationGuard';
 import { type BoardWriteTicket, hasBoardWriteTicketEnded } from '../../../store/boardMutationGuard';
@@ -436,45 +436,21 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
 
   return (
     <>
-      {isAutoZoneLayout(layout) ? (
-        // Arranged zones fit their height to their cards; only the width resizes, and the columns follow it.
-        resizable && (
-          <>
-            <NodeResizeControl
-              variant={ResizeControlVariant.Line}
-              position="right"
-              minWidth={ARRANGED_ZONE_MIN_WIDTH}
-              style={{ borderColor }}
-            />
-            <NodeResizeControl
-              position="right"
-              minWidth={ARRANGED_ZONE_MIN_WIDTH}
-              style={{
-                width: 10,
-                height: 10,
-                borderRadius: '50%',
-                border: 'none',
-                backgroundColor: borderColor,
-              }}
-            />
-          </>
-        )
-      ) : (
-        <NodeResizer
-          isVisible={resizable}
-          minWidth={ZONE_MIN_WIDTH}
-          minHeight={ZONE_MIN_HEIGHT}
-          handleStyle={{
-            width: '10px',
-            height: '10px',
-            borderRadius: '50%',
-            backgroundColor: borderColor,
-          }}
-          lineStyle={{
-            borderColor: borderColor,
-          }}
-        />
-      )}
+      {/* Every layout resizes both ways; arranging cards never changes the zone's size. */}
+      <NodeResizer
+        isVisible={resizable}
+        minWidth={isAutoZoneLayout(layout) ? ARRANGED_ZONE_MIN_WIDTH : ZONE_MIN_WIDTH}
+        minHeight={ZONE_MIN_HEIGHT}
+        handleStyle={{
+          width: '10px',
+          height: '10px',
+          borderRadius: '50%',
+          backgroundColor: borderColor,
+        }}
+        lineStyle={{
+          borderColor: borderColor,
+        }}
+      />
       <div
         style={{
           width: '100%',
