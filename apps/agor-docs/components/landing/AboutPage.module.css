@@ -194,23 +194,374 @@
   font-weight: 600;
 }
 
+/* The next section's top border already closes the table. */
+.glance tr:last-child th,
+.glance tr:last-child td {
+  border-bottom: 0;
+}
+
 .faq {
-  display: grid;
-  gap: 26px;
   margin-top: 8px;
+  border-top: 1px solid var(--landing-line);
+}
+
+.faqItem {
+  border-bottom: 1px solid var(--landing-line);
+}
+
+.faqItem summary {
+  position: relative;
+  display: block;
+  padding: 18px 40px 18px 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+.faqItem summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Plus that turns into a minus when the item is open. */
+.faqItem summary::before,
+.faqItem summary::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  width: 14px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--landing-teal);
+  transition:
+    transform 0.2s ease,
+    opacity 0.2s ease;
+}
+
+.faqItem summary::after {
+  transform: rotate(90deg);
+}
+
+.faqItem[open] summary::after {
+  transform: rotate(0deg);
+  opacity: 0;
+}
+
+.faqItem summary:focus-visible {
+  outline: 2px solid var(--landing-teal);
+  outline-offset: 4px;
+  border-radius: 6px;
 }
 
 .faq h3 {
   margin: 0;
   color: var(--landing-ink);
   font-family: var(--font-body-stack);
-  font-size: 1.15rem;
+  font-size: 1.1rem;
   font-weight: 600;
   line-height: 1.4;
+  transition: color 0.2s ease;
 }
 
-.block .faq div > p {
-  margin-top: 6px;
+.faqItem summary:hover h3 {
+  color: var(--landing-teal);
+}
+
+.block details.faqItem > p {
+  margin: 0;
+  padding: 0 40px 20px 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .faqItem summary::before,
+  .faqItem summary::after,
+  .faq h3 {
+    transition: none;
+  }
+}
+
+/* Max's projects in order: mark tiles joined by a rule, names set as text. */
+.lineage {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin: 32px 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.lineage::before {
+  content: "";
+  position: absolute;
+  top: 36px;
+  left: 12.5%;
+  right: 12.5%;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--landing-line) 8%,
+    rgba(52, 230, 196, 0.45) 92%,
+    transparent
+  );
+}
+
+.lineage li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.lineageMark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  border: 1px solid var(--landing-line);
+  border-radius: 18px;
+  background: #0d1a19;
+}
+
+.lineage li:last-child .lineageMark {
+  border-color: rgba(52, 230, 196, 0.45);
+  box-shadow: 0 0 24px rgba(52, 230, 196, 0.18);
+}
+
+.lineageMark img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 50px;
+  max-height: 40px;
+}
+
+.lineageYear {
+  margin-top: 14px;
+  color: var(--landing-teal);
+  font-family: var(--font-mono-stack);
+  font-size: 0.78rem;
+  letter-spacing: 0.12em;
+}
+
+.lineageName {
+  margin-top: 4px;
+  color: var(--landing-ink);
+  font-size: 0.98rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.lineageRole {
+  margin-top: 4px;
+  color: var(--landing-muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+/* Agor milestones: a vertical rule with a dot per date. */
+.milestones {
+  display: grid;
+  gap: 0;
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.block .milestones li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 16px;
+  padding: 10px 0 10px 24px;
+  border-left: 1px solid var(--landing-line);
+  line-height: 1.5;
+}
+
+.milestones li::before {
+  content: "";
+  position: absolute;
+  top: 17px;
+  left: -5px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #0d1a19;
+  border: 1px solid var(--landing-teal);
+}
+
+.milestones li:last-child::before {
+  background: var(--landing-teal);
+  box-shadow: 0 0 12px rgba(52, 230, 196, 0.6);
+}
+
+.milestoneDate {
+  color: var(--landing-ink);
+  font-family: var(--font-mono-stack);
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  padding-top: 2px;
+}
+
+/* Tall, narrow screenshots (the Slack thread) read better below full width. */
+.narrowFigure {
+  max-width: 560px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Preset logo bug + link to the Open Beta announcement on preset.io. */
+.presetCard {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin-top: 24px;
+  padding: 18px 22px;
+  border: 1px solid var(--landing-line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  text-decoration: none;
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease;
+}
+
+.presetCard:hover {
+  border-color: rgba(47, 192, 150, 0.6);
+  background: rgba(47, 192, 150, 0.06);
+}
+
+.presetCard img {
+  flex: none;
+  width: 52px;
+  height: auto;
+}
+
+.presetCard > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.presetCardEyebrow {
+  color: var(--landing-muted);
+  font-family: var(--font-mono-stack);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.presetCardTitle {
+  color: var(--landing-ink);
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.presetCardCta {
+  color: #2fc096;
+  font-size: 0.92rem;
+}
+
+@media (max-width: 640px) {
+  .lineage {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 28px;
+  }
+
+  .lineage::before {
+    display: none;
+  }
+
+  .lineage[data-animate] li,
+  .lineage[data-animate] li:first-child {
+    transform: translate3d(0, 12px, 0);
+  }
+
+  .block .milestones li {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
+
+/* Horizontal-accordion entrance (see Lineage in AboutPage.tsx). With
+ * [data-animate] each tile waits one column to its left, tucked under the
+ * tile before it; [data-open] slides them out left to right in a chain, one
+ * every --lineage-step. Only transform and opacity animate, so the browser
+ * can run it on the compositor without repainting. */
+.lineage {
+  --lineage-step: 0.28s;
+  --lineage-lead: 0.2s;
+  --lineage-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lineage[data-animate]::before {
+  transform: scaleX(0);
+  transform-origin: left center;
+}
+
+.lineage[data-animate] li {
+  z-index: calc(10 - var(--i));
+  opacity: 0;
+  transform: translate3d(calc(-100% - 16px), 0, 0);
+}
+
+.lineage[data-animate] li:first-child {
+  transform: translate3d(0, 10px, 0);
+}
+
+.lineage[data-animate][data-open]::before {
+  transform: scaleX(1);
+  transition: transform calc(var(--lineage-step) * 3 + 0.9s) var(--lineage-ease) var(--lineage-lead);
+}
+
+.lineage[data-animate][data-open] li {
+  opacity: 1;
+  transform: none;
+  transition:
+    transform 0.9s var(--lineage-ease) calc(var(--lineage-lead) + var(--i) * var(--lineage-step)),
+    opacity 0.5s ease calc(var(--lineage-lead) + var(--i) * var(--lineage-step));
+}
+
+/* Year, name, and role wait until their tile has nearly landed, so only the
+ * marks are in motion while tiles slide out from under each other. */
+.lineage[data-animate] li > span:not(.lineageMark) {
+  opacity: 0;
+}
+
+.lineage[data-animate][data-open] li > span:not(.lineageMark) {
+  opacity: 1;
+  transition: opacity 0.45s ease calc(var(--lineage-lead) + var(--i) * var(--lineage-step) + 0.55s);
+}
+
+/* Agor lands with one ring pulse (transform + opacity on a pseudo-element,
+ * no box-shadow repaints). */
+.lineage[data-animate] li:last-child .lineageMark::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 1px solid var(--landing-teal);
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.lineage[data-animate][data-open] li:last-child .lineageMark::after {
+  animation: lineageLand 1s var(--lineage-ease)
+    calc(var(--lineage-lead) + 3 * var(--lineage-step) + 0.7s);
+}
+
+@keyframes lineageLand {
+  from {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(1.35);
+  }
 }
 
 @media (max-width: 640px) {
@@ -238,5 +589,9 @@
     display: block;
     padding: 10px 0;
     border-bottom: 1px solid var(--landing-line);
+  }
+
+  .glance tr:last-child {
+    border-bottom: 0;
   }
 }

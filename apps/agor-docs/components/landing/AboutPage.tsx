@@ -1,16 +1,18 @@
 'use client';
 
 import Link from 'next/link';
-import type { ReactNode } from 'react';
+import { type CSSProperties, type ReactNode, useEffect, useRef } from 'react';
 import { ABOUT_FAQ, ABOUT_FAQ_SCHEMA, ABOUT_PAGE_SCHEMA } from '../../lib/aboutSchema';
 import type { CloudCtaVariant } from '../../lib/cloudCta';
-import { DISCORD_INVITE_URL } from '../../lib/links';
-import { getBasePath } from '../../lib/siteMetadata';
+import { DISCORD_INVITE_URL, PRESET_URL, presetUtm } from '../../lib/links';
+import { getBasePath, LOGO_MARK_PATH } from '../../lib/siteMetadata';
+import { BlogVideo } from '../BlogVideo';
 import { CloudCtaLink } from '../CloudCtaLink';
 import landing from '../LandingPage.module.css';
 import styles from './AboutPage.module.css';
 import { DemoButton } from './DemoButton';
 import { LandingShell } from './LandingShell';
+import { PressCursors } from './PressCursors';
 
 const basePath = getBasePath();
 const CTA_PREFIX = 'about-page';
@@ -58,6 +60,96 @@ const INVESTORS = [
   { name: 'Fathom Capital', src: '/about/investors/fathom-capital.webp', width: 426, height: 132 },
 ];
 
+// Max's projects, oldest first. Marks only: the Airflow, Superset, and Preset
+// wordmarks are dark or white and would disappear on this dark page, so the
+// names are set as text instead.
+const LINEAGE = [
+  {
+    name: 'Apache Airflow',
+    year: '2014',
+    role: 'Orchestrates data pipelines',
+    src: '/about/lineage/apache-airflow.webp',
+    width: 192,
+    height: 192,
+  },
+  {
+    name: 'Apache Superset',
+    year: '2015',
+    role: 'Explores and visualizes data',
+    src: '/about/lineage/apache-superset.webp',
+    width: 135,
+    height: 68,
+  },
+  {
+    name: 'Preset',
+    year: '2019',
+    role: 'AI-native analytics platform',
+    src: '/about/lineage/preset.svg',
+    width: 155,
+    height: 145,
+  },
+  {
+    name: 'Agor',
+    year: '2025',
+    role: 'Multiplayer AI for teams',
+    src: LOGO_MARK_PATH,
+    width: 734,
+    height: 734,
+  },
+];
+
+// Agor's own milestones; every date here also appears in the page copy.
+const MILESTONES = [
+  { date: 'Fall 2025', text: 'Max builds a board to see all of his agents at once' },
+  { date: 'October 2025', text: 'Public launch as a source-available project on GitHub' },
+  { date: 'November 2025', text: 'Agor Cloud private beta opens' },
+  { date: 'October 13, 2026', text: 'Agor Cloud Open Beta opens to everyone' },
+];
+
+/**
+ * Max's projects as a horizontal accordion: once the row is on screen, the
+ * Airflow tile unfolds, then each later tile slides out from behind the one
+ * before it and unfolds in turn, ending on Agor. The connecting rule draws
+ * left to right alongside. Server HTML renders the row fully open; the
+ * folded start state is only applied after hydration, and never under
+ * reduced motion, so crawlers, agents, and no-JS readers see it as-is.
+ */
+function Lineage() {
+  const ref = useRef<HTMLOListElement>(null);
+
+  useEffect(() => {
+    const list = ref.current;
+    if (!list || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    list.dataset.animate = '';
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry.isIntersecting) return;
+        list.dataset.open = '';
+        observer.disconnect();
+      },
+      { threshold: 0.6 }
+    );
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <ol ref={ref} className={styles.lineage} aria-label="Maxime Beauchemin's projects, in order">
+      {LINEAGE.map((item, i) => (
+        <li key={item.name} style={{ '--i': i } as CSSProperties}>
+          <span className={styles.lineageMark}>
+            {/* biome-ignore lint/performance/noImgElement: Static docs asset */}
+            <img src={`${basePath}${item.src}`} alt="" width={item.width} height={item.height} />
+          </span>
+          <span className={styles.lineageYear}>{item.year}</span>
+          <span className={styles.lineageName}>{item.name}</span>
+          <span className={styles.lineageRole}>{item.role}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 const AT_A_GLANCE: Array<{ label: string; value: ReactNode }> = [
   {
     label: 'What it is',
@@ -94,7 +186,7 @@ const AT_A_GLANCE: Array<{ label: string; value: ReactNode }> = [
   {
     label: 'Works with',
     value:
-      'Claude Code, Codex, and Gemini, among other agents. Bring your own API keys or supported subscriptions',
+      'Claude Code, Codex, GitHub Copilot, and OpenCode, plus Gemini and Cursor in beta. More than 180 model providers through OpenCode, including OpenRouter. Bring your own API keys or supported subscriptions',
   },
 ];
 
@@ -147,8 +239,10 @@ export function AboutPage() {
           AI teammates that carry ongoing work.
         </p>
         <p className={styles.secondLine}>
-          Agor is built by Preset, founded by Maxime Beauchemin, the original creator of Apache
-          Airflow® and Apache Superset™.
+          Agor is built by <Ext href={`${PRESET_URL}/${presetUtm('about-hero')}`}>Preset</Ext>,
+          founded by Maxime Beauchemin, the original creator of{' '}
+          <Ext href="https://airflow.apache.org/">Apache&nbsp;Airflow®</Ext> and{' '}
+          <Ext href="https://superset.apache.org/">Apache&nbsp;Superset™</Ext>.
         </p>
       </section>
 
@@ -157,13 +251,18 @@ export function AboutPage() {
           <h2 id="how-agor-started">How Agor started</h2>
           <p>
             Maxime Beauchemin has spent his career building tools for people who work with data:
-            Apache Airflow to orchestrate pipelines, Apache Superset to explore and visualize what
-            those pipelines produce, and Preset to bring hosted Superset to teams. In fall 2025 he
-            turned to the next emerging space in tech, AI agents. He was running a growing number of
-            them across a pile of terminal tabs and could not easily see what any of them were
-            doing, so he built a board to see all of the work, live and collaborative from the
-            start. Figma did that for design, and agent work seemed to need the same shift.
+            Apache Airflow to orchestrate pipelines,{' '}
+            <Ext href={`https://preset.io/apache-superset/${presetUtm('about-how-agor-started')}`}>
+              Apache Superset
+            </Ext>{' '}
+            to explore and visualize what those pipelines produce, and Preset to bring hosted
+            Superset to teams. In fall 2025 he turned to the next emerging space in tech, AI agents.
+            He was running a growing number of them across a pile of terminal tabs and could not
+            easily see what any of them were doing, so he built a board to see all of the work, live
+            and collaborative from the start. Figma did that for design, and agent work seemed to
+            need the same shift.
           </p>
+          <Lineage />
           <p>
             The first version came together in under a month, with Agor used to build Agor, and
             launched publicly in October 2025 as a source-available project on{' '}
@@ -180,6 +279,12 @@ export function AboutPage() {
             person's chat window, and a workflow that saved an hour never left its author's laptop.
             A shared board gave that work a place the rest of the team could find.
           </p>
+          <BlogVideo
+            src={`${basePath}/videos/showcase-boards.mp4`}
+            srcSmall={`${basePath}/videos/showcase-boards-540.mp4`}
+            poster={`${basePath}/videos/showcase-boards-poster.jpg`}
+            label="An Agor board with Ship this week, Review lane, and Teammates zones, each holding branch cards with their agent sessions."
+          />
           <p>
             Today, people can see which session is waiting for input, comment on a result, and save
             what worked. Agents with ongoing responsibilities become AI teammates, with a role,
@@ -192,6 +297,23 @@ export function AboutPage() {
             from triage to pull request. People still review and approve their work, and the
             teammates still get things wrong.
           </p>
+          <figure className={`${styles.photo} ${styles.narrowFigure}`}>
+            {/* biome-ignore lint/performance/noImgElement: Static docs asset */}
+            <img
+              src={`${basePath}/screenshots/marketing/agor-marketing-slack-thread.png`}
+              alt="Slack thread: Max asks @DatAgor to debug the Airflow job that failed this morning, and DatAgor opens an Agor session and starts reading the logs"
+              width="1302"
+              height="1064"
+              loading="lazy"
+              decoding="async"
+            />
+            <figcaption>
+              <p>
+                Max asks DatAgor, Preset's AI data engineer, to debug a failed Airflow job from a
+                Slack thread.
+              </p>
+            </figcaption>
+          </figure>
         </section>
 
         <section className={styles.block} aria-labelledby="agor-cloud-open-beta" data-reveal>
@@ -199,9 +321,17 @@ export function AboutPage() {
           <p>
             Running Agor yourself means managing infrastructure, execution, credentials, and
             updates. In November 2025 we opened a private beta of Agor Cloud, and on October 13,
-            2026 we opened it to everyone as Agor Cloud Open Beta. We ship updates every week based
+            2026 we opened it to everyone as Agor Cloud Open Beta. We ship updates regularly based
             on feedback from the people using it.
           </p>
+          <ol className={styles.milestones} aria-label="Agor milestones">
+            {MILESTONES.map((m) => (
+              <li key={m.date}>
+                <span className={styles.milestoneDate}>{m.date}</span>
+                <span>{m.text}</span>
+              </li>
+            ))}
+          </ol>
           <p>
             Agor Cloud is a beta: keep it to non-critical work and keep your own backups. The Agor
             project is source-available under the{' '}
@@ -272,6 +402,20 @@ export function AboutPage() {
             Apache Airflow, Apache Superset, and Agor share a common thread: tools built by data
             people, for whatever the next paradigm shift of working with data turns out to be.
           </p>
+          <a
+            className={styles.presetCard}
+            href={`https://preset.io/blog/agor-cloud-open-beta/${presetUtm('about-preset-section')}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {/* biome-ignore lint/performance/noImgElement: Static docs asset */}
+            <img src={`${basePath}/about/preset-bug.webp`} alt="Preset" width="272" height="256" />
+            <span>
+              <span className={styles.presetCardEyebrow}>On the Preset blog</span>
+              <span className={styles.presetCardTitle}>Announcing Agor Cloud Open Beta</span>
+              <span className={styles.presetCardCta}>Read the announcement</span>
+            </span>
+          </a>
         </section>
 
         <section className={styles.block} aria-labelledby="our-commitments" data-reveal>
@@ -285,7 +429,7 @@ export function AboutPage() {
               Publish what we learn from running AI teammates at Preset: how we model agents, manage
               context, and review their work.
             </li>
-            <li>Keep shipping every week in Agor Cloud, based on your feedback.</li>
+            <li>Keep shipping updates to Agor Cloud, based on your feedback.</li>
             <li>Support the community through Discord, GitHub, and more.</li>
             <li>
               Keep people in control. Agor shows who has access, what is running, what happened, and
@@ -320,82 +464,85 @@ export function AboutPage() {
         </section>
 
         <section className={styles.block} aria-labelledby="press-and-podcasts" data-reveal>
-          <h2 id="press-and-podcasts">Press and podcasts</h2>
-          <p>Coverage of Agor and of Maxime Beauchemin's work on AI agents.</p>
+          {/* Decorative multiplayer cursors that wander the links below. */}
+          <PressCursors>
+            <h2 id="press-and-podcasts">Press and podcasts</h2>
+            <p>Coverage of Agor and of Maxime Beauchemin's work on AI agents.</p>
 
-          <p className={styles.listLabel}>Articles</p>
-          <ul className={styles.list}>
-            <li>
-              <strong>
-                Taming the agent beast: From monolithic prompt to modular agentic workflow
-              </strong>
-              , Red Hat Blog, August 26, 2026. Red Hat engineers Ioannis Angelakopoulos and Sephi
-              Berry describe a Jira-ticket pipeline built on Agor, with one agent session per
-              ticket.{' '}
-              <Ext href="https://www.redhat.com/en/blog/taming-agent-beast-monolithic-prompt-modular-agentic-workflow">
-                Read the article
-              </Ext>
-            </li>
-          </ul>
+            <p className={styles.listLabel}>Articles</p>
+            <ul className={styles.list}>
+              <li>
+                <strong>
+                  Taming the agent beast: From monolithic prompt to modular agentic workflow
+                </strong>
+                , Red Hat Blog, August 26, 2026. Red Hat engineers Ioannis Angelakopoulos and Sephi
+                Berry describe a Jira-ticket pipeline built on Agor, with one agent session per
+                ticket.{' '}
+                <Ext href="https://www.redhat.com/en/blog/taming-agent-beast-monolithic-prompt-modular-agentic-workflow">
+                  Read the article
+                </Ext>
+              </li>
+            </ul>
 
-          <p className={styles.listLabel}>Podcasts and video</p>
-          <ul className={styles.list}>
-            <li>
-              <strong>Airflow's Creator on His "Claude Code" Moment</strong>, The Joe Reis Show,
-              June 25, 2026. Max on the history of Airflow and Superset, his Claude Code moment, and
-              how his team runs persistent AI agents with Agor.{' '}
-              <Ext href="https://www.youtube.com/watch?v=DLYnHGoI9z8">Watch on YouTube</Ext> or{' '}
-              <Ext href="https://podcasts.apple.com/us/podcast/max-beauchemin-on-agentic-ai-and-his-claude-code-moment/id1676305617?i=1000774201443">
-                listen on Apple Podcasts
-              </Ext>{' '}
-              (audio title: "Max Beauchemin on Agentic AI and His Claude Code Moment")
-            </li>
-            <li>
-              <strong>
-                Generative UI: When AI Agents Design the Interface with Maxime Beauchemin and Evan
-                Rusackas
-              </strong>
-              , ODSC's Ai X Podcast, June 18, 2026.{' '}
-              <Ext href="https://www.youtube.com/watch?v=fjvTqknb0LA">Watch on YouTube</Ext>
-            </li>
-            <li>
-              <strong>
-                Maxime Beauchemin Built Airflow and Superset. Now He's Building the Agentic Coding
-                Layer for Teams.
-              </strong>
-              , Recce (YouTube), June 7, 2026.{' '}
-              <Ext href="https://www.youtube.com/watch?v=lp97DYjeb-k">Watch on YouTube</Ext>
-            </li>
-            <li>
-              <strong>
-                Data Renegades, Ep. #12: Agent Orchestration at Scale with Maxime Beauchemin
-              </strong>
-              , Heavybit, May 26, 2026. Max on the thinking behind Agor and how AI is changing
-              engineering, product, design, and data work.{' '}
-              <Ext href="https://www.heavybit.com/library/podcasts/data-renegades/ep-12-agent-orchestration-at-scale-with-maxime-beauchemin">
-                Episode page
-              </Ext>
-              , <Ext href="https://www.youtube.com/watch?v=zbjUhmGDN4s">YouTube</Ext>, or{' '}
-              <Ext href="https://open.spotify.com/episode/0MYQoBbVYi8gYvqeod9Oak">Spotify</Ext>
-            </li>
-            <li>
-              <strong>Maxime Beauchemin – The Man Who Built the Modern Data Stack</strong>, Insane
-              Data Podcast, May 20, 2026. Max on how AI is reshaping data teams, ending with what he
-              is building next in Agor.{' '}
-              <Ext href="https://open.spotify.com/episode/39fDhvpbMG4N0H2gEaFqHV">
-                Listen on Spotify
-              </Ext>{' '}
-              or{' '}
-              <Ext href="https://podcasts.apple.com/us/podcast/maxime-beauchemin-the-man-who-built-the-modern-data-stack/id1793347942?i=1000768731128">
-                Apple Podcasts
-              </Ext>
-            </li>
-            <li>
-              <strong>Anatomy of Our Data Agent: How AI Supports Analytics</strong>, Maxime
-              Beauchemin at OpenXdata 2026, Onehouse (YouTube), May 12, 2026.{' '}
-              <Ext href="https://www.youtube.com/watch?v=AMJhqvkdu3g">Watch on YouTube</Ext>
-            </li>
-          </ul>
+            <p className={styles.listLabel}>Podcasts and video</p>
+            <ul className={styles.list}>
+              <li>
+                <strong>Airflow's Creator on His "Claude Code" Moment</strong>, The Joe Reis Show,
+                June 25, 2026. Max on the history of Airflow and Superset, his Claude Code moment,
+                and how his team runs persistent AI agents with Agor.{' '}
+                <Ext href="https://www.youtube.com/watch?v=DLYnHGoI9z8">Watch on YouTube</Ext> or{' '}
+                <Ext href="https://podcasts.apple.com/us/podcast/max-beauchemin-on-agentic-ai-and-his-claude-code-moment/id1676305617?i=1000774201443">
+                  listen on Apple Podcasts
+                </Ext>{' '}
+                (audio title: "Max Beauchemin on Agentic AI and His Claude Code Moment")
+              </li>
+              <li>
+                <strong>
+                  Generative UI: When AI Agents Design the Interface with Maxime Beauchemin and Evan
+                  Rusackas
+                </strong>
+                , ODSC's Ai X Podcast, June 18, 2026.{' '}
+                <Ext href="https://www.youtube.com/watch?v=fjvTqknb0LA">Watch on YouTube</Ext>
+              </li>
+              <li>
+                <strong>
+                  Maxime Beauchemin Built Airflow and Superset. Now He's Building the Agentic Coding
+                  Layer for Teams.
+                </strong>
+                , Recce (YouTube), June 7, 2026.{' '}
+                <Ext href="https://www.youtube.com/watch?v=lp97DYjeb-k">Watch on YouTube</Ext>
+              </li>
+              <li>
+                <strong>
+                  Data Renegades, Ep. #12: Agent Orchestration at Scale with Maxime Beauchemin
+                </strong>
+                , Heavybit, May 26, 2026. Max on the thinking behind Agor and how AI is changing
+                engineering, product, design, and data work.{' '}
+                <Ext href="https://www.heavybit.com/library/podcasts/data-renegades/ep-12-agent-orchestration-at-scale-with-maxime-beauchemin">
+                  Episode page
+                </Ext>
+                , <Ext href="https://www.youtube.com/watch?v=zbjUhmGDN4s">YouTube</Ext>, or{' '}
+                <Ext href="https://open.spotify.com/episode/0MYQoBbVYi8gYvqeod9Oak">Spotify</Ext>
+              </li>
+              <li>
+                <strong>Maxime Beauchemin – The Man Who Built the Modern Data Stack</strong>, Insane
+                Data Podcast, May 20, 2026. Max on how AI is reshaping data teams, ending with what
+                he is building next in Agor.{' '}
+                <Ext href="https://open.spotify.com/episode/39fDhvpbMG4N0H2gEaFqHV">
+                  Listen on Spotify
+                </Ext>{' '}
+                or{' '}
+                <Ext href="https://podcasts.apple.com/us/podcast/maxime-beauchemin-the-man-who-built-the-modern-data-stack/id1793347942?i=1000768731128">
+                  Apple Podcasts
+                </Ext>
+              </li>
+              <li>
+                <strong>Anatomy of Our Data Agent: How AI Supports Analytics</strong>, Maxime
+                Beauchemin at OpenXdata 2026, Onehouse (YouTube), May 12, 2026.{' '}
+                <Ext href="https://www.youtube.com/watch?v=AMJhqvkdu3g">Watch on YouTube</Ext>
+              </li>
+            </ul>
+          </PressCursors>
         </section>
 
         <section className={styles.block} aria-labelledby="more-about-agor" data-reveal>
@@ -450,12 +597,17 @@ export function AboutPage() {
 
         <section className={styles.block} aria-labelledby="agor-faq" data-reveal>
           <h2 id="agor-faq">Agor FAQ</h2>
+          {/* Native <details>: answers stay in the server HTML (crawlers, agents,
+              and find-in-page all reach them) and the FAQPage JSON-LD carries
+              the same text, so collapsing costs nothing for discoverability. */}
           <div className={styles.faq}>
             {ABOUT_FAQ.map(({ question, answer }) => (
-              <div key={question}>
-                <h3>{question}</h3>
+              <details key={question} className={styles.faqItem}>
+                <summary>
+                  <h3>{question}</h3>
+                </summary>
                 <p>{answer}</p>
-              </div>
+              </details>
             ))}
           </div>
         </section>

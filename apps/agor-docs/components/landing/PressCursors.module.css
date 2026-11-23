@@ -1,0 +1,47 @@
+/* See PressCursors.tsx. Cursor and ring match CursorTroupe.module.css. */
+.stage {
+  position: relative;
+}
+
+.layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  opacity: 0;
+  transform-origin: 2px 1px;
+  will-change: transform, opacity;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.45));
+}
+
+/* Click pulse, centered on the cursor tip. */
+.ring {
+  position: absolute;
+  top: -22px;
+  left: -22px;
+  width: 44px;
+  height: 44px;
+  border: 2px solid;
+  border-radius: 50%;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
+/* The link a cursor is on lights up in that cursor's color, like a
+ * collaborator's selection. Extra :not([class]) outranks the page's own
+ * `.block a:not([class])` link rule. */
+.stage a[data-cursor-on]:not([class]) {
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--cursor-color) 18%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--cursor-color) 18%, transparent);
+  text-decoration-color: currentColor;
+  transition:
+    background 0.2s ease,
+    box-shadow 0.2s ease;
+}
