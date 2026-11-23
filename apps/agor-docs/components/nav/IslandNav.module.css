@@ -400,7 +400,7 @@
   font: 500 13.5px var(--body);
 }
 
-/* --- Mobile sheet (below ~900px) ------------------------------------------ */
+/* --- Mobile sheet (below 1080px; see NARROW_QUERY in IslandNav.tsx) -------- */
 .sheet {
   --body: var(--font-body), "Hanken Grotesk", system-ui, sans-serif;
   --mono: var(--font-mono-label), "JetBrains Mono", ui-monospace, monospace;
@@ -529,7 +529,7 @@
   text-decoration: none;
 }
 
-@media (max-width: 899px) {
+@media (max-width: 1079px) {
   .island,
   .island[data-scrolled="true"],
   .island[data-open="true"] {

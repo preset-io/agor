@@ -34,7 +34,10 @@ import { isExternal, NAV_LINKS, NAV_MENUS, type NavItem, type NavMenu } from './
 const HOVER_INTENT_MS = 120;
 const CLOSE_DELAY_MS = 240;
 const SCROLL_THRESHOLD = 40;
-const NARROW_QUERY = '(max-width: 899px)';
+// Collapse to the menu button below 1080px: with the "by Preset" lockup and
+// the About link, the full bar needs about 990px of viewport (keep in sync
+// with the max-width: 1079px block in IslandNav.module.css).
+const NARROW_QUERY = '(max-width: 1079px)';
 
 type MenuId = NavMenu['id'];
 
