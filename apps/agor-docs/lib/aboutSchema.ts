@@ -8,7 +8,7 @@
  *
  * Bump ABOUT_DATE_MODIFIED whenever the page copy changes.
  */
-import { getSiteUrl } from './siteMetadata';
+import { getCanonicalUrl, getSiteUrl } from './siteMetadata';
 
 export const ABOUT_DATE_MODIFIED = '2026-11-23';
 
@@ -49,7 +49,9 @@ export const ABOUT_FAQ: ReadonlyArray<{ question: string; answer: string }> = [
 ];
 
 const siteUrl = getSiteUrl();
-const pageUrl = `${siteUrl}/about`;
+// Same URL as the page's canonical (respects basePath); the root graph ids
+// (#organization, #website, #software) stay on siteUrl like app/layout.tsx.
+const pageUrl = getCanonicalUrl('/about');
 
 /**
  * AboutPage and Person (Maxime Beauchemin) entities, reusing the site-wide
