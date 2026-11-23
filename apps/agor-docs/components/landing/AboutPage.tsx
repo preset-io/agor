@@ -1,11 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { type CSSProperties, type ReactNode, useEffect, useRef } from 'react';
+import type { ReactNode } from 'react';
 import { ABOUT_FAQ, ABOUT_FAQ_SCHEMA, ABOUT_PAGE_SCHEMA } from '../../lib/aboutSchema';
 import type { CloudCtaVariant } from '../../lib/cloudCta';
 import { DISCORD_INVITE_URL, PRESET_URL, presetUtm } from '../../lib/links';
-import { getBasePath, LOGO_MARK_PATH } from '../../lib/siteMetadata';
+import { getBasePath } from '../../lib/siteMetadata';
 import { BlogVideo } from '../BlogVideo';
 import { CloudCtaLink } from '../CloudCtaLink';
 import landing from '../LandingPage.module.css';
@@ -60,44 +60,6 @@ const INVESTORS = [
   { name: 'Fathom Capital', src: '/about/investors/fathom-capital.webp', width: 426, height: 132 },
 ];
 
-// Max's projects, oldest first. Marks only: the Airflow, Superset, and Preset
-// wordmarks are dark or white and would disappear on this dark page, so the
-// names are set as text instead.
-const LINEAGE = [
-  {
-    name: 'Apache Airflow',
-    year: '2014',
-    role: 'Orchestrates data pipelines',
-    src: '/about/lineage/apache-airflow.webp',
-    width: 192,
-    height: 192,
-  },
-  {
-    name: 'Apache Superset',
-    year: '2015',
-    role: 'Explores and visualizes data',
-    src: '/about/lineage/apache-superset.webp',
-    width: 135,
-    height: 68,
-  },
-  {
-    name: 'Preset',
-    year: '2019',
-    role: 'AI-native analytics platform',
-    src: '/about/lineage/preset.svg',
-    width: 155,
-    height: 145,
-  },
-  {
-    name: 'Agor',
-    year: '2025',
-    role: 'Multiplayer AI for teams',
-    src: LOGO_MARK_PATH,
-    width: 734,
-    height: 734,
-  },
-];
-
 // Agor's own milestones; every date here also appears in the page copy.
 const MILESTONES = [
   { date: 'Fall 2025', text: 'Max builds a board to see all of his agents at once' },
@@ -105,50 +67,6 @@ const MILESTONES = [
   { date: 'November 2025', text: 'Agor Cloud private beta opens' },
   { date: 'October 13, 2026', text: 'Agor Cloud Open Beta opens to everyone' },
 ];
-
-/**
- * Max's projects as a horizontal accordion: once the row is on screen, the
- * Airflow tile unfolds, then each later tile slides out from behind the one
- * before it and unfolds in turn, ending on Agor. The connecting rule draws
- * left to right alongside. Server HTML renders the row fully open; the
- * folded start state is only applied after hydration, and never under
- * reduced motion, so crawlers, agents, and no-JS readers see it as-is.
- */
-function Lineage() {
-  const ref = useRef<HTMLOListElement>(null);
-
-  useEffect(() => {
-    const list = ref.current;
-    if (!list || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    list.dataset.animate = '';
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (!entry.isIntersecting) return;
-        list.dataset.open = '';
-        observer.disconnect();
-      },
-      { threshold: 0.6 }
-    );
-    observer.observe(list);
-    return () => observer.disconnect();
-  }, []);
-
-  return (
-    <ol ref={ref} className={styles.lineage} aria-label="Maxime Beauchemin's projects, in order">
-      {LINEAGE.map((item, i) => (
-        <li key={item.name} style={{ '--i': i } as CSSProperties}>
-          <span className={styles.lineageMark}>
-            {/* biome-ignore lint/performance/noImgElement: Static docs asset */}
-            <img src={`${basePath}${item.src}`} alt="" width={item.width} height={item.height} />
-          </span>
-          <span className={styles.lineageYear}>{item.year}</span>
-          <span className={styles.lineageName}>{item.name}</span>
-          <span className={styles.lineageRole}>{item.role}</span>
-        </li>
-      ))}
-    </ol>
-  );
-}
 
 const AT_A_GLANCE: Array<{ label: string; value: ReactNode }> = [
   {
@@ -186,7 +104,7 @@ const AT_A_GLANCE: Array<{ label: string; value: ReactNode }> = [
   {
     label: 'Works with',
     value:
-      'Claude Code, Codex, GitHub Copilot, and OpenCode, plus Gemini and Cursor in beta. More than 180 model providers through OpenCode, including OpenRouter. Bring your own API keys or supported subscriptions',
+      'Claude Code, Codex, and Gemini, among other agents. Bring your own API keys or supported subscriptions',
   },
 ];
 
@@ -247,22 +165,69 @@ export function AboutPage() {
       </section>
 
       <div className={styles.body}>
+        <section className={styles.block} aria-labelledby="built-by-preset" data-reveal>
+          <h2 id="built-by-preset">Agor is built by Preset</h2>
+          <p>
+            Agor is created and maintained by <Ext href="https://preset.io/">Preset, Inc.</Ext>{' '}
+            Preset is an open analytics platform powered by{' '}
+            <Ext href="https://preset.io/apache-superset/">Apache Superset</Ext>, and its AI
+            products, Preset Chatbot and Preset MCP, bring AI to analytics.
+          </p>
+          <p>
+            Agor is a separate product from Preset's analytics tools. For analytics use Preset; for
+            agents use Agor. Agor is a shared place for teams and agents to do research,
+            engineering, operations work, and more, and an agent working in Agor can reach Preset's
+            analytics through MCP.
+          </p>
+          <a
+            className={styles.presetCard}
+            href={`https://preset.io/blog/agor-cloud-open-beta/${presetUtm('about-preset-section')}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <span>
+              <span className={styles.presetCardEyebrow}>On the Preset blog</span>
+              <span className={styles.presetCardTitle}>Announcing Agor Cloud Open Beta</span>
+              <span className={styles.presetCardCta}>Read the announcement</span>
+            </span>
+          </a>
+        </section>
+
+        <section className={styles.block} aria-labelledby="investors" data-reveal>
+          <h2 id="investors">Preset's investors</h2>
+          <p>
+            Agor is built by Preset, which is backed by Andreessen Horowitz, Fathom Capital, and
+            Redpoint Ventures.
+          </p>
+          {/* Light strip: the a16z and Redpoint wordmarks are black text. */}
+          <ul className={styles.investors}>
+            {INVESTORS.map((investor) => (
+              <li key={investor.name}>
+                {/* biome-ignore lint/performance/noImgElement: Static docs asset */}
+                <img
+                  src={`${basePath}${investor.src}`}
+                  alt={investor.name}
+                  width={investor.width}
+                  height={investor.height}
+                  className={investor.mark ? styles.investorMark : undefined}
+                  loading="lazy"
+                  decoding="async"
+                />
+              </li>
+            ))}
+          </ul>
+        </section>
+
         <section className={styles.block} aria-labelledby="how-agor-started" data-reveal>
           <h2 id="how-agor-started">How Agor started</h2>
           <p>
-            Maxime Beauchemin has spent his career building tools for people who work with data:
-            Apache Airflow to orchestrate pipelines,{' '}
-            <Ext href={`https://preset.io/apache-superset/${presetUtm('about-how-agor-started')}`}>
-              Apache Superset
-            </Ext>{' '}
-            to explore and visualize what those pipelines produce, and Preset to bring hosted
-            Superset to teams. In fall 2025 he turned to the next emerging space in tech, AI agents.
-            He was running a growing number of them across a pile of terminal tabs and could not
-            easily see what any of them were doing, so he built a board to see all of the work, live
-            and collaborative from the start. Figma did that for design, and agent work seemed to
-            need the same shift.
+            Maxime Beauchemin created Apache Airflow and Apache Superset and founded Preset, all
+            tools for people who work with data. In fall 2025 he turned to the next emerging space
+            in tech, AI agents. He was running a growing number of them across a pile of terminal
+            tabs and could not easily see what any of them were doing, so he built a board to see
+            all of the work, live and collaborative from the start. Figma did that for design, and
+            agent work seemed to need the same shift.
           </p>
-          <Lineage />
           <p>
             The first version came together in under a month, with Agor used to build Agor, and
             launched publicly in October 2025 as a source-available project on{' '}
@@ -321,7 +286,7 @@ export function AboutPage() {
           <p>
             Running Agor yourself means managing infrastructure, execution, credentials, and
             updates. In November 2025 we opened a private beta of Agor Cloud, and on October 13,
-            2026 we opened it to everyone as Agor Cloud Open Beta. We ship updates regularly based
+            2026 we opened it to everyone as Agor Cloud Open Beta. We ship updates every week based
             on feedback from the people using it.
           </p>
           <ol className={styles.milestones} aria-label="Agor milestones">
@@ -385,39 +350,6 @@ export function AboutPage() {
           </figure>
         </section>
 
-        <section className={styles.block} aria-labelledby="built-by-preset" data-reveal>
-          <h2 id="built-by-preset">Agor is built by Preset</h2>
-          <p>
-            Agor is created and maintained by <Ext href="https://preset.io/">Preset, Inc.</Ext>{' '}
-            Preset is an open analytics platform powered by{' '}
-            <Ext href="https://preset.io/apache-superset/">Apache Superset</Ext>, and its AI
-            products, Preset Chatbot and Preset MCP, bring AI to analytics.
-          </p>
-          <p>
-            Agor is a different product with a different job. It is a shared place for teams and
-            agents to do research, engineering, operations work, and more, and an agent working in
-            Agor can reach Preset's analytics through MCP.
-          </p>
-          <p>
-            Apache Airflow, Apache Superset, and Agor share a common thread: tools built by data
-            people, for whatever the next paradigm shift of working with data turns out to be.
-          </p>
-          <a
-            className={styles.presetCard}
-            href={`https://preset.io/blog/agor-cloud-open-beta/${presetUtm('about-preset-section')}`}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            {/* biome-ignore lint/performance/noImgElement: Static docs asset */}
-            <img src={`${basePath}/about/preset-bug.webp`} alt="Preset" width="272" height="256" />
-            <span>
-              <span className={styles.presetCardEyebrow}>On the Preset blog</span>
-              <span className={styles.presetCardTitle}>Announcing Agor Cloud Open Beta</span>
-              <span className={styles.presetCardCta}>Read the announcement</span>
-            </span>
-          </a>
-        </section>
-
         <section className={styles.block} aria-labelledby="our-commitments" data-reveal>
           <h2 id="our-commitments">Our commitments</h2>
           <ul className={styles.list}>
@@ -429,37 +361,12 @@ export function AboutPage() {
               Publish what we learn from running AI teammates at Preset: how we model agents, manage
               context, and review their work.
             </li>
-            <li>Keep shipping updates to Agor Cloud, based on your feedback.</li>
+            <li>Keep shipping every week in Agor Cloud, based on your feedback.</li>
             <li>Support the community through Discord, GitHub, and more.</li>
             <li>
               Keep people in control. Agor shows who has access, what is running, what happened, and
               what it costs.
             </li>
-          </ul>
-        </section>
-
-        <section className={styles.block} aria-labelledby="investors" data-reveal>
-          <h2 id="investors">Preset's investors</h2>
-          <p>
-            Agor is built by Preset, which is backed by Andreessen Horowitz, Fathom Capital, and
-            Redpoint Ventures.
-          </p>
-          {/* Light strip: the a16z and Redpoint wordmarks are black text. */}
-          <ul className={styles.investors}>
-            {INVESTORS.map((investor) => (
-              <li key={investor.name}>
-                {/* biome-ignore lint/performance/noImgElement: Static docs asset */}
-                <img
-                  src={`${basePath}${investor.src}`}
-                  alt={investor.name}
-                  width={investor.width}
-                  height={investor.height}
-                  className={investor.mark ? styles.investorMark : undefined}
-                  loading="lazy"
-                  decoding="async"
-                />
-              </li>
-            ))}
           </ul>
         </section>
 

@@ -279,88 +279,6 @@
   }
 }
 
-/* Max's projects in order: mark tiles joined by a rule, names set as text. */
-.lineage {
-  position: relative;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-  margin: 32px 0 8px;
-  padding: 0;
-  list-style: none;
-}
-
-.lineage::before {
-  content: "";
-  position: absolute;
-  top: 36px;
-  left: 12.5%;
-  right: 12.5%;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    var(--landing-line) 8%,
-    rgba(52, 230, 196, 0.45) 92%,
-    transparent
-  );
-}
-
-.lineage li {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-}
-
-.lineageMark {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 72px;
-  height: 72px;
-  border: 1px solid var(--landing-line);
-  border-radius: 18px;
-  background: #0d1a19;
-}
-
-.lineage li:last-child .lineageMark {
-  border-color: rgba(52, 230, 196, 0.45);
-  box-shadow: 0 0 24px rgba(52, 230, 196, 0.18);
-}
-
-.lineageMark img {
-  display: block;
-  width: auto;
-  height: auto;
-  max-width: 50px;
-  max-height: 40px;
-}
-
-.lineageYear {
-  margin-top: 14px;
-  color: var(--landing-teal);
-  font-family: var(--font-mono-stack);
-  font-size: 0.78rem;
-  letter-spacing: 0.12em;
-}
-
-.lineageName {
-  margin-top: 4px;
-  color: var(--landing-ink);
-  font-size: 0.98rem;
-  font-weight: 600;
-  line-height: 1.3;
-}
-
-.lineageRole {
-  margin-top: 4px;
-  color: var(--landing-muted);
-  font-size: 0.88rem;
-  line-height: 1.45;
-}
-
 /* Agor milestones: a vertical rule with a dot per date. */
 .milestones {
   display: grid;
@@ -412,7 +330,7 @@
   margin-right: auto;
 }
 
-/* Preset logo bug + link to the Open Beta announcement on preset.io. */
+/* Text card linking to the Open Beta announcement on preset.io (no logo). */
 .presetCard {
   display: flex;
   align-items: center;
@@ -431,12 +349,6 @@
 .presetCard:hover {
   border-color: rgba(47, 192, 150, 0.6);
   background: rgba(47, 192, 150, 0.06);
-}
-
-.presetCard img {
-  flex: none;
-  width: 52px;
-  height: auto;
 }
 
 .presetCard > span {
@@ -465,102 +377,9 @@
 }
 
 @media (max-width: 640px) {
-  .lineage {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    row-gap: 28px;
-  }
-
-  .lineage::before {
-    display: none;
-  }
-
-  .lineage[data-animate] li,
-  .lineage[data-animate] li:first-child {
-    transform: translate3d(0, 12px, 0);
-  }
-
   .block .milestones li {
     grid-template-columns: 1fr;
     gap: 2px;
-  }
-}
-
-/* Horizontal-accordion entrance (see Lineage in AboutPage.tsx). With
- * [data-animate] each tile waits one column to its left, tucked under the
- * tile before it; [data-open] slides them out left to right in a chain, one
- * every --lineage-step. Only transform and opacity animate, so the browser
- * can run it on the compositor without repainting. */
-.lineage {
-  --lineage-step: 0.28s;
-  --lineage-lead: 0.2s;
-  --lineage-ease: cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.lineage[data-animate]::before {
-  transform: scaleX(0);
-  transform-origin: left center;
-}
-
-.lineage[data-animate] li {
-  z-index: calc(10 - var(--i));
-  opacity: 0;
-  transform: translate3d(calc(-100% - 16px), 0, 0);
-}
-
-.lineage[data-animate] li:first-child {
-  transform: translate3d(0, 10px, 0);
-}
-
-.lineage[data-animate][data-open]::before {
-  transform: scaleX(1);
-  transition: transform calc(var(--lineage-step) * 3 + 0.9s) var(--lineage-ease) var(--lineage-lead);
-}
-
-.lineage[data-animate][data-open] li {
-  opacity: 1;
-  transform: none;
-  transition:
-    transform 0.9s var(--lineage-ease) calc(var(--lineage-lead) + var(--i) * var(--lineage-step)),
-    opacity 0.5s ease calc(var(--lineage-lead) + var(--i) * var(--lineage-step));
-}
-
-/* Year, name, and role wait until their tile has nearly landed, so only the
- * marks are in motion while tiles slide out from under each other. */
-.lineage[data-animate] li > span:not(.lineageMark) {
-  opacity: 0;
-}
-
-.lineage[data-animate][data-open] li > span:not(.lineageMark) {
-  opacity: 1;
-  transition: opacity 0.45s ease calc(var(--lineage-lead) + var(--i) * var(--lineage-step) + 0.55s);
-}
-
-/* Agor lands with one ring pulse (transform + opacity on a pseudo-element,
- * no box-shadow repaints). */
-.lineage[data-animate] li:last-child .lineageMark::after {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  border: 1px solid var(--landing-teal);
-  border-radius: inherit;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.lineage[data-animate][data-open] li:last-child .lineageMark::after {
-  animation: lineageLand 1s var(--lineage-ease)
-    calc(var(--lineage-lead) + 3 * var(--lineage-step) + 0.7s);
-}
-
-@keyframes lineageLand {
-  from {
-    opacity: 0.8;
-    transform: scale(1);
-  }
-
-  to {
-    opacity: 0;
-    transform: scale(1.35);
   }
 }
 
