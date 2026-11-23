@@ -71,27 +71,34 @@ function renderSegment(segment: Segment, key: number) {
   );
 }
 
-export function SocialProofBand() {
+interface SocialProofBandProps {
+  /** Sits inside a page's text column (e.g. /about): no band padding, quotes stacked. */
+  inline?: boolean;
+  /** Replaces "Takeaways from the <name>" with this linked text, e.g. "Red Hat Blog, August 26, 2026". */
+  attribution?: string;
+}
+
+export function SocialProofBand({ inline = false, attribution }: SocialProofBandProps = {}) {
   const { quotes } = SOURCE;
+  const sourceLink = (
+    <a
+      href={SOURCE.href}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={() => trackEvent('social_proof_click', { source: SOURCE.id })}
+    >
+      {attribution ?? SOURCE.name}
+    </a>
+  );
   return (
     <section
-      className={`${styles.section} ${outfit.className}`}
-      aria-label="What people say about Agor"
+      className={`${styles.section} ${inline ? styles.inline : ''} ${outfit.className}`}
+      aria-label={inline ? `Quotes from the ${SOURCE.name}` : 'What people say about Agor'}
       data-reveal
     >
       <p className={styles.label}>
         <span className={styles.labelRule} aria-hidden="true" />
-        <span>
-          Takeaways from the{' '}
-          <a
-            href={SOURCE.href}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={() => trackEvent('social_proof_click', { source: SOURCE.id })}
-          >
-            {SOURCE.name}
-          </a>
-        </span>
+        {attribution ? sourceLink : <span>Takeaways from the {sourceLink}</span>}
       </p>
       <div className={styles.row}>
         {/* Cells sit directly in the table row: quote, divider, quote. */}

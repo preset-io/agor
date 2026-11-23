@@ -34,6 +34,8 @@ export type FrontMatterLike = {
   imageAlt?: string;
   imageHeight?: number | string;
   imageWidth?: number | string;
+  /** Full <title> used verbatim, without the ' – agor' suffix. */
+  metaTitle?: string;
   noindex?: boolean;
   ogImage?: string;
   socialImage?: string;
