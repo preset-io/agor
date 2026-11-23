@@ -378,8 +378,7 @@ export function AboutPage() {
             <Ext href="https://preset.io/blog/meet-datagor-ai-data-engineer/">DatAgor</Ext> writes
             dbt models and watches data pipelines, and{' '}
             <Link href="/blog/meet-bug-basher">Bug Basher</Link> works through Apache Superset bugs
-            from triage to pull request. People still review and approve their work, and the
-            teammates still get things wrong.
+            from triage to pull request.
           </p>
           <figure className={`${styles.photo} ${styles.narrowFigure}`}>
             {/* biome-ignore lint/performance/noImgElement: Static docs asset */}
