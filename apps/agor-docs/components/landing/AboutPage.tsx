@@ -223,7 +223,7 @@ const AT_A_GLANCE: Array<{ label: string; value: ReactNode }> = [
   {
     label: 'Works with',
     value:
-      'Claude Code, Codex, and Gemini, among other agents. Bring your own API keys or supported subscriptions',
+      'Claude Code, Codex, GitHub Copilot, OpenCode, Gemini (beta), and Cursor (beta). Bring your own API keys or supported subscriptions',
   },
 ];
 

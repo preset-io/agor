@@ -34,7 +34,7 @@ export const ABOUT_FAQ: ReadonlyArray<{ question: string; answer: string }> = [
   {
     question: 'What is Agor Cloud?',
     answer:
-      "Agor Cloud is Multiplayer AI for teams, fully managed by Preset: an agent orchestration platform where your team and its AI agents work together on live spatial boards. People follow agent sessions as they run, comment on results, and turn the prompts and workflows that work into something the whole team can reuse. Long-lived AI teammates take on ongoing responsibilities with a role, memory, and connections to your team's tools, and you can reach them in Slack, Teams, or Discord. Agor Cloud works with Claude Code, Codex, GitHub Copilot, OpenCode, Gemini, and Cursor, using your own API keys. Preset operates it for you, with scaling, execution isolation, governance, and observability handled, either hosted or in your own AWS. Agor Cloud has been in open beta since October 13, 2026, so use it for non-critical work and keep your own backups. Learn more at https://agor.live/cloud.",
+      'Agor Cloud is the hosted version of Agor, run by Preset. It entered open beta on October 13, 2026. Because it is a beta, use it for non-critical work and keep your own backups.',
   },
   {
     question: 'How does Agor relate to Preset and Apache Superset?',
@@ -44,7 +44,7 @@ export const ABOUT_FAQ: ReadonlyArray<{ question: string; answer: string }> = [
   {
     question: 'Which AI agents does Agor work with?',
     answer:
-      'Agor works with six agent tools: Claude Code, Codex, GitHub Copilot, and OpenCode, plus Gemini and Cursor in beta. Through OpenCode you can also use more than 180 model providers that need only an API key, including OpenRouter, Anthropic, OpenAI, Google, xAI, Mistral, and DeepSeek. You bring your own API keys or supported subscriptions and choose the agent and model that fit each task. Agor supports the latest frontier models and adds new ones as they are released.',
+      'Agor works with Claude Code, Codex, GitHub Copilot, OpenCode, Gemini (beta), and Cursor (beta). You bring your own API keys or supported subscriptions and choose the agent and model that fit each task.',
   },
 ];
 
