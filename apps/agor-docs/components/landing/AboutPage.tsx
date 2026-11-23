@@ -12,7 +12,7 @@ import landing from '../LandingPage.module.css';
 import styles from './AboutPage.module.css';
 import { DemoButton } from './DemoButton';
 import { LandingShell } from './LandingShell';
-import { PressCursors } from './PressCursors';
+import { SocialProofBand } from './SocialProofBand';
 
 const basePath = getBasePath();
 const CTA_PREFIX = 'about-page';
@@ -67,6 +67,125 @@ const MILESTONES = [
   { date: 'November 2025', text: 'Agor Cloud private beta opens' },
   { date: 'October 13, 2026', text: 'Agor Cloud Open Beta opens to everyone' },
 ];
+
+const RED_HAT_ARTICLE_URL =
+  'https://www.redhat.com/en/blog/taming-agent-beast-monolithic-prompt-modular-agentic-workflow';
+
+interface PressItem {
+  outlet: string;
+  title: string;
+  date: string;
+  desc?: string;
+  /** Shown after the links, e.g. the podcast's audio title. */
+  note?: string;
+  links: Array<{ label: string; href: string }>;
+}
+
+const ARTICLES: PressItem[] = [
+  {
+    outlet: 'Red Hat Blog',
+    title: 'Taming the agent beast: From monolithic prompt to modular agentic workflow',
+    date: 'August 26, 2026',
+    desc: 'Red Hat engineers Ioannis Angelakopoulos and Sephi Berry describe a Jira-ticket pipeline built on Agor, with one agent session per ticket.',
+    links: [{ label: 'Read the article', href: RED_HAT_ARTICLE_URL }],
+  },
+];
+
+// Newest first.
+const PODCASTS: PressItem[] = [
+  {
+    outlet: 'The Joe Reis Show',
+    title: 'Airflow\'s Creator on His "Claude Code" Moment',
+    date: 'June 25, 2026',
+    desc: 'Max on the history of Airflow and Superset, his Claude Code moment, and how his team runs persistent AI agents with Agor.',
+    note: '(audio title: "Max Beauchemin on Agentic AI and His Claude Code Moment")',
+    links: [
+      { label: 'YouTube', href: 'https://www.youtube.com/watch?v=DLYnHGoI9z8' },
+      {
+        label: 'Apple Podcasts',
+        href: 'https://podcasts.apple.com/us/podcast/max-beauchemin-on-agentic-ai-and-his-claude-code-moment/id1676305617?i=1000774201443',
+      },
+    ],
+  },
+  {
+    outlet: "ODSC's Ai X Podcast",
+    title:
+      'Generative UI: When AI Agents Design the Interface with Maxime Beauchemin and Evan Rusackas',
+    date: 'June 18, 2026',
+    links: [{ label: 'YouTube', href: 'https://www.youtube.com/watch?v=fjvTqknb0LA' }],
+  },
+  {
+    outlet: 'Recce (YouTube)',
+    title:
+      "Maxime Beauchemin Built Airflow and Superset. Now He's Building the Agentic Coding Layer for Teams.",
+    date: 'June 7, 2026',
+    links: [{ label: 'YouTube', href: 'https://www.youtube.com/watch?v=lp97DYjeb-k' }],
+  },
+  {
+    outlet: 'Heavybit',
+    title: 'Data Renegades, Ep. #12: Agent Orchestration at Scale with Maxime Beauchemin',
+    date: 'May 26, 2026',
+    desc: 'Max on the thinking behind Agor and how AI is changing engineering, product, design, and data work.',
+    links: [
+      {
+        label: 'Heavybit page',
+        href: 'https://www.heavybit.com/library/podcasts/data-renegades/ep-12-agent-orchestration-at-scale-with-maxime-beauchemin',
+      },
+      { label: 'YouTube', href: 'https://www.youtube.com/watch?v=zbjUhmGDN4s' },
+      { label: 'Spotify', href: 'https://open.spotify.com/episode/0MYQoBbVYi8gYvqeod9Oak' },
+    ],
+  },
+  {
+    outlet: 'Insane Data Podcast',
+    title: 'Maxime Beauchemin – The Man Who Built the Modern Data Stack',
+    date: 'May 20, 2026',
+    desc: 'Max on how AI is reshaping data teams, ending with what he is building next in Agor.',
+    links: [
+      { label: 'Spotify', href: 'https://open.spotify.com/episode/39fDhvpbMG4N0H2gEaFqHV' },
+      {
+        label: 'Apple Podcasts',
+        href: 'https://podcasts.apple.com/us/podcast/maxime-beauchemin-the-man-who-built-the-modern-data-stack/id1793347942?i=1000768731128',
+      },
+    ],
+  },
+  {
+    outlet: 'Onehouse (YouTube)',
+    title: 'Anatomy of Our Data Agent: How AI Supports Analytics',
+    date: 'May 12, 2026',
+    desc: 'Maxime Beauchemin at OpenXdata 2026',
+    links: [{ label: 'YouTube', href: 'https://www.youtube.com/watch?v=AMJhqvkdu3g' }],
+  },
+];
+
+/** One press or podcast card: outlet, date, title, a line, and platform links. */
+function PressCard({ item }: { item: PressItem }) {
+  return (
+    <li className={styles.pressCard}>
+      <p className={styles.pressMeta}>
+        <span>{item.outlet}</span>
+        <span aria-hidden="true">·</span>
+        <span>{item.date}</span>
+      </p>
+      <h3 className={styles.pressTitle}>{item.title}</h3>
+      {item.desc ? <p className={styles.pressDesc}>{item.desc}</p> : null}
+      <p className={styles.pressLinks}>
+        {item.links.map((link) => (
+          <a
+            key={link.href}
+            href={link.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={styles.pressLink}
+            aria-label={`${item.title}: ${link.label}`}
+          >
+            {link.label}
+          </a>
+        ))}
+      </p>
+      {item.note ? <p className={styles.pressNote}>{item.note}</p> : null}
+    </li>
+  );
+}
 
 const AT_A_GLANCE: Array<{ label: string; value: ReactNode }> = [
   {
@@ -371,85 +490,26 @@ export function AboutPage() {
         </section>
 
         <section className={styles.block} aria-labelledby="press-and-podcasts" data-reveal>
-          {/* Decorative multiplayer cursors that wander the links below. */}
-          <PressCursors>
-            <h2 id="press-and-podcasts">Press and podcasts</h2>
-            <p>Coverage of Agor and of Maxime Beauchemin's work on AI agents.</p>
+          <h2 id="press-and-podcasts">Press and podcasts</h2>
+          <p>Coverage of Agor and of Maxime Beauchemin's work on AI agents.</p>
 
-            <p className={styles.listLabel}>Articles</p>
-            <ul className={styles.list}>
-              <li>
-                <strong>
-                  Taming the agent beast: From monolithic prompt to modular agentic workflow
-                </strong>
-                , Red Hat Blog, August 26, 2026. Red Hat engineers Ioannis Angelakopoulos and Sephi
-                Berry describe a Jira-ticket pipeline built on Agor, with one agent session per
-                ticket.{' '}
-                <Ext href="https://www.redhat.com/en/blog/taming-agent-beast-monolithic-prompt-modular-agentic-workflow">
-                  Read the article
-                </Ext>
-              </li>
-            </ul>
+          {/* The home page's quote callout and its verbatim Red Hat quotes. No
+              logo, and no partnership or endorsement implied. */}
+          <SocialProofBand inline attribution="Red Hat Blog, August 26, 2026" />
 
-            <p className={styles.listLabel}>Podcasts and video</p>
-            <ul className={styles.list}>
-              <li>
-                <strong>Airflow's Creator on His "Claude Code" Moment</strong>, The Joe Reis Show,
-                June 25, 2026. Max on the history of Airflow and Superset, his Claude Code moment,
-                and how his team runs persistent AI agents with Agor.{' '}
-                <Ext href="https://www.youtube.com/watch?v=DLYnHGoI9z8">Watch on YouTube</Ext> or{' '}
-                <Ext href="https://podcasts.apple.com/us/podcast/max-beauchemin-on-agentic-ai-and-his-claude-code-moment/id1676305617?i=1000774201443">
-                  listen on Apple Podcasts
-                </Ext>{' '}
-                (audio title: "Max Beauchemin on Agentic AI and His Claude Code Moment")
-              </li>
-              <li>
-                <strong>
-                  Generative UI: When AI Agents Design the Interface with Maxime Beauchemin and Evan
-                  Rusackas
-                </strong>
-                , ODSC's Ai X Podcast, June 18, 2026.{' '}
-                <Ext href="https://www.youtube.com/watch?v=fjvTqknb0LA">Watch on YouTube</Ext>
-              </li>
-              <li>
-                <strong>
-                  Maxime Beauchemin Built Airflow and Superset. Now He's Building the Agentic Coding
-                  Layer for Teams.
-                </strong>
-                , Recce (YouTube), June 7, 2026.{' '}
-                <Ext href="https://www.youtube.com/watch?v=lp97DYjeb-k">Watch on YouTube</Ext>
-              </li>
-              <li>
-                <strong>
-                  Data Renegades, Ep. #12: Agent Orchestration at Scale with Maxime Beauchemin
-                </strong>
-                , Heavybit, May 26, 2026. Max on the thinking behind Agor and how AI is changing
-                engineering, product, design, and data work.{' '}
-                <Ext href="https://www.heavybit.com/library/podcasts/data-renegades/ep-12-agent-orchestration-at-scale-with-maxime-beauchemin">
-                  Episode page
-                </Ext>
-                , <Ext href="https://www.youtube.com/watch?v=zbjUhmGDN4s">YouTube</Ext>, or{' '}
-                <Ext href="https://open.spotify.com/episode/0MYQoBbVYi8gYvqeod9Oak">Spotify</Ext>
-              </li>
-              <li>
-                <strong>Maxime Beauchemin – The Man Who Built the Modern Data Stack</strong>, Insane
-                Data Podcast, May 20, 2026. Max on how AI is reshaping data teams, ending with what
-                he is building next in Agor.{' '}
-                <Ext href="https://open.spotify.com/episode/39fDhvpbMG4N0H2gEaFqHV">
-                  Listen on Spotify
-                </Ext>{' '}
-                or{' '}
-                <Ext href="https://podcasts.apple.com/us/podcast/maxime-beauchemin-the-man-who-built-the-modern-data-stack/id1793347942?i=1000768731128">
-                  Apple Podcasts
-                </Ext>
-              </li>
-              <li>
-                <strong>Anatomy of Our Data Agent: How AI Supports Analytics</strong>, Maxime
-                Beauchemin at OpenXdata 2026, Onehouse (YouTube), May 12, 2026.{' '}
-                <Ext href="https://www.youtube.com/watch?v=AMJhqvkdu3g">Watch on YouTube</Ext>
-              </li>
-            </ul>
-          </PressCursors>
+          <p className={styles.listLabel}>Articles</p>
+          <ul className={styles.pressGrid}>
+            {ARTICLES.map((item) => (
+              <PressCard key={item.title} item={item} />
+            ))}
+          </ul>
+
+          <p className={styles.listLabel}>Podcasts and video</p>
+          <ul className={styles.pressGrid}>
+            {PODCASTS.map((item) => (
+              <PressCard key={item.title} item={item} />
+            ))}
+          </ul>
         </section>
 
         <section className={styles.block} aria-labelledby="more-about-agor" data-reveal>

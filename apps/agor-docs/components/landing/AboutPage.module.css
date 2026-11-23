@@ -139,6 +139,96 @@
   font-style: italic;
 }
 
+/* Press and podcasts: cards in the agent roster's style, two per row on wide
+ * screens, one on phones. */
+.pressGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pressCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 20px 22px;
+  border: 1px solid rgba(52, 230, 196, 0.14);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(15, 34, 31, 0.7), rgba(10, 22, 20, 0.5));
+}
+
+.block .pressMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  color: #8fa9a6;
+  font-family: var(--font-mono-stack);
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
+.block .pressTitle {
+  margin: 0;
+  color: var(--landing-ink);
+  font-family: var(--font-display-stack);
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.block .pressDesc {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.block .pressLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: auto 0 0;
+  padding-top: 6px;
+}
+
+.block a.pressLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(52, 230, 196, 0.3);
+  border-radius: 999px;
+  color: var(--landing-teal);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.block a.pressLink:hover {
+  border-color: var(--landing-teal);
+  background: rgba(52, 230, 196, 0.08);
+}
+
+.block a.pressLink:focus-visible {
+  outline: 2px solid var(--landing-teal);
+  outline-offset: 2px;
+}
+
+.block .pressNote {
+  margin: 0;
+  color: #7f9c97;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
 /* Investor wordmarks are dark (a16z and Redpoint are black text), so they sit
  * on a light strip rather than the page's dark background. */
 .investors {
