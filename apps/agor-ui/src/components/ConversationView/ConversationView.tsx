@@ -14,10 +14,10 @@ import { isTaskExecuting } from '@agor/core/types';
 import type {
   AgenticToolName,
   AgorClient,
+  DirectoryUser,
   Message,
   PermissionScope,
   SessionID,
-  User,
 } from '@agor-live/client';
 import { LEAN_TRANSCRIPT_TASK_WINDOW, shortId, TaskStatus } from '@agor-live/client';
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
@@ -37,7 +37,7 @@ const { Text } = Typography;
 const EMPTY_STREAMING_MESSAGES = new Map();
 // Default-param `= new Map()` would mint a fresh Map on every render and
 // defeat every TaskBlock's React.memo whenever the prop is omitted.
-const EMPTY_USER_MAP = new Map<string, User>();
+const EMPTY_USER_MAP = new Map<string, DirectoryUser>();
 // Shared empty-array sentinel so TaskBlock's `taskMessages` prop keeps a stable
 // reference for tasks whose messages haven't been loaded — otherwise `|| []`
 // would mint a fresh array on every render and thrash TaskBlock's React.memo.
@@ -75,7 +75,7 @@ export interface ConversationViewProps {
   /**
    * All users for emoji avatars (Map-based)
    */
-  userById?: Map<string, User>;
+  userById?: Map<string, DirectoryUser>;
 
   /**
    * Current user ID for showing emoji

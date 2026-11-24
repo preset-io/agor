@@ -121,6 +121,34 @@
   font-weight: 700;
 }
 
+/* "by Preset" lockup beside the logo at every width: low weight, links to
+ * preset.io. The island is dark in every state, so the reverse logo (white
+ * wordmark) is used throughout. */
+.byPreset {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  /* Sit with the Agor logo rather than the menu triggers. */
+  margin-left: -8px;
+  padding: 4px 4px 2px;
+  border-radius: 6px;
+  color: #8d999b;
+  font: 500 12px var(--body);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.byPreset img {
+  display: block;
+  width: auto;
+  height: 15px;
+}
+
+.byPreset:hover {
+  color: #c9d2d3;
+}
+
 .trigger {
   display: inline-flex;
   align-items: center;
@@ -234,6 +262,7 @@
 .cta:focus-visible,
 .ctaSecondary:focus-visible,
 .logo:focus-visible,
+.byPreset:focus-visible,
 .navItem:focus-visible,
 .feature:focus-visible,
 .sheetRow:focus-visible {
@@ -371,7 +400,7 @@
   font: 500 13.5px var(--body);
 }
 
-/* --- Mobile sheet (below ~900px) ------------------------------------------ */
+/* --- Mobile sheet (below 1080px; see NARROW_QUERY in IslandNav.tsx) -------- */
 .sheet {
   --body: var(--font-body), "Hanken Grotesk", system-ui, sans-serif;
   --mono: var(--font-mono-label), "JetBrains Mono", ui-monospace, monospace;
@@ -500,7 +529,7 @@
   text-decoration: none;
 }
 
-@media (max-width: 899px) {
+@media (max-width: 1079px) {
   .island,
   .island[data-scrolled="true"],
   .island[data-open="true"] {
@@ -529,6 +558,24 @@
 
   .sheet {
     display: flex;
+  }
+}
+
+/* Phones: keep the lockup on one line beside the logo, next to search and the
+ * menu button (checked at 360px and 390px). */
+@media (max-width: 420px) {
+  .barLeft {
+    gap: 12px;
+  }
+
+  .byPreset {
+    gap: 4px;
+    margin-left: -6px;
+    font-size: 11px;
+  }
+
+  .byPreset img {
+    height: 13px;
   }
 }
 
@@ -767,4 +814,12 @@
 
 .island a.ctaSecondary:hover {
   color: #fff;
+}
+
+.island a.byPreset {
+  color: #8d999b;
+}
+
+.island a.byPreset:hover {
+  color: #c9d2d3;
 }

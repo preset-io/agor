@@ -13,10 +13,10 @@ import {
   type BoardID,
   type CursorLeftEvent,
   type CursorMovedEvent,
+  type DirectoryUser,
   PRESENCE_SOCKET_EVENTS,
   type PresenceLeftEvent,
   type PresenceUpdatedEvent,
-  type User,
 } from '@agor-live/client';
 import { useEffect, useMemo, useState } from 'react';
 import { PRESENCE_CONFIG } from '../config/presence';
@@ -24,7 +24,7 @@ import { PRESENCE_CONFIG } from '../config/presence';
 interface UsePresenceOptions {
   client: AgorClient | null;
   boardId: BoardID | null;
-  users: User[];
+  users: DirectoryUser[];
   enabled?: boolean;
   globalPresence?: boolean;
   /** Coalesce unchanged facepile updates inside this window. */
@@ -33,7 +33,7 @@ interface UsePresenceOptions {
 
 interface UsePresenceResult {
   activeUsers: ActiveUser[];
-  remoteCursors: Map<string, { x: number; y: number; user: User; timestamp: number }>;
+  remoteCursors: Map<string, { x: number; y: number; user: DirectoryUser; timestamp: number }>;
 }
 
 interface CursorInstance {
@@ -306,7 +306,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
   }, [client, boardId, enabled, globalPresence, presenceMinUpdateIntervalMs]);
 
   return useMemo(() => {
-    const userById = new Map<string, User>(users.map((user) => [user.user_id, user]));
+    const userById = new Map<string, DirectoryUser>(users.map((user) => [user.user_id, user]));
     const activeByUser = new Map<
       string,
       { lastSeen: number; boardId?: BoardID; boardTimestamp?: number; x?: number; y?: number }
@@ -351,7 +351,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
     }
     const remoteCursors = new Map<
       string,
-      { x: number; y: number; user: User; timestamp: number }
+      { x: number; y: number; user: DirectoryUser; timestamp: number }
     >();
     for (const [userId, cursor] of latestCursorByUser) {
       const user = userById.get(userId);

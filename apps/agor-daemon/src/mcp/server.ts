@@ -761,10 +761,11 @@ export function setupMCPRoutes(
           throw error;
         }
 
-        const context = await validateVerifiedSessionToken(verifiedToken);
+        const { context, reason: stateRejection } =
+          await validateVerifiedSessionToken(verifiedToken);
         if (!context) {
           logAuthRejection(
-            'session_missing',
+            stateRejection,
             req.method,
             credentialSource,
             req.body,

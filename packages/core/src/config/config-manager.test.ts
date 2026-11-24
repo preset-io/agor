@@ -17,6 +17,7 @@ import {
   createInitialConfig,
   DEFAULT_REFRESH_TOKEN_TTL_SECONDS,
   DEFAULT_SESSION_MAX_LIFETIME_SECONDS,
+  enforcesPublicHealthEgress,
   ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   expandHomePath,
@@ -1830,6 +1831,70 @@ describe('unixUserModeRequiresExecutionHomeKey', () => {
     expect(unixUserModeRequiresExecutionHomeKey('simple')).toBe(false);
     expect(unixUserModeRequiresExecutionHomeKey('sandbox')).toBe(false);
     expect(unixUserModeRequiresExecutionHomeKey('delegated')).toBe(true);
+  });
+});
+
+describe('enforcesPublicHealthEgress', () => {
+  // Pass an explicit empty env so an ambient AGOR_DEPLOYMENT_MODE cannot flip
+  // the trusted-local cases.
+  const noEnv: NodeJS.ProcessEnv = {};
+
+  it('allows private health egress only on a trusted-local single-tenant non-HA install', () => {
+    expect(enforcesPublicHealthEgress({} as AgorConfig, noEnv)).toBe(false);
+    expect(
+      enforcesPublicHealthEgress({ execution: { unix_user_mode: 'simple' } } as AgorConfig, noEnv)
+    ).toBe(false);
+  });
+
+  it('enforces public-only health egress on isolated execution modes', () => {
+    expect(
+      enforcesPublicHealthEgress({ execution: { unix_user_mode: 'sandbox' } } as AgorConfig, noEnv)
+    ).toBe(true);
+    expect(
+      enforcesPublicHealthEgress(
+        { execution: { unix_user_mode: 'delegated' } } as AgorConfig,
+        noEnv
+      )
+    ).toBe(true);
+  });
+
+  it('enforces public-only health egress on a multi-tenant deployment even in simple mode', () => {
+    expect(
+      enforcesPublicHealthEgress(
+        {
+          execution: { unix_user_mode: 'simple' },
+          multi_tenancy: { mode: 'required_from_auth' },
+        } as AgorConfig,
+        noEnv
+      )
+    ).toBe(true);
+  });
+
+  it('enforces public-only health egress on an HA deployment even with simple + static tenancy', () => {
+    // HA is shared infrastructure, so the authenticated /branches/:id/health
+    // probe must be public-only like the automatic distributed monitor.
+    expect(
+      enforcesPublicHealthEgress(
+        { execution: { unix_user_mode: 'simple' }, deployment: { mode: 'ha' } } as AgorConfig,
+        noEnv
+      )
+    ).toBe(true);
+    // Also via the AGOR_DEPLOYMENT_MODE env override, matching resolveDeploymentConfig.
+    expect(
+      enforcesPublicHealthEgress({ execution: { unix_user_mode: 'simple' } } as AgorConfig, {
+        AGOR_DEPLOYMENT_MODE: 'ha',
+      })
+    ).toBe(true);
+    // A standalone deployment in trusted-local mode stays permissive.
+    expect(
+      enforcesPublicHealthEgress(
+        {
+          execution: { unix_user_mode: 'simple' },
+          deployment: { mode: 'standalone' },
+        } as AgorConfig,
+        noEnv
+      )
+    ).toBe(false);
   });
 });
 

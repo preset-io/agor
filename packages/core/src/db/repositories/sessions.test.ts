@@ -7,9 +7,12 @@
 
 import type { Session, UUID } from '@agor/core/types';
 import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
+import { eq } from 'drizzle-orm';
 import { describe, expect, it, vi } from 'vitest';
 import { generateId, shortId, toShortId } from '../../lib/ids';
-import type { SessionRow } from '../schema';
+import type { Database } from '../client';
+import { select, update } from '../database-wrapper';
+import { type SessionRow, sessions } from '../schema';
 import { ownedDbTest as dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, getHiddenTenantId, RepositoryError } from './base';
 import { BranchRepository } from './branches';
@@ -293,7 +296,6 @@ describe('SessionRepository.create', () => {
         sprintNumber: 42,
       },
       sdk_session_id: 'claude-sdk-session-123',
-      mcp_token: 'mcp-token-abc123',
       genealogy: {
         parent_session_id: parentId,
         spawn_point_task_id: spawnTaskId,
@@ -320,7 +322,6 @@ describe('SessionRepository.create', () => {
       sprintNumber: 42,
     });
     expect(created.sdk_session_id).toBe('claude-sdk-session-123');
-    expect(created.mcp_token).toBe('mcp-token-abc123');
     expect(created.genealogy?.parent_session_id).toBe(parentId);
     expect(created.genealogy?.spawn_point_task_id).toBe(spawnTaskId);
     expect(created.genealogy?.children).toEqual([]);
@@ -368,6 +369,44 @@ describe('SessionRepository.create', () => {
 // ============================================================================
 // FindById (with short ID support)
 // ============================================================================
+
+describe('SessionRepository MCP bearer tokens', () => {
+  const rawData = async (db: Database, sessionId: string) =>
+    (await select(db).from(sessions).where(eq(sessions.session_id, sessionId)).one())
+      ?.data as SessionRow['data'];
+
+  dbTest('never persists or returns a caller-supplied mcp_token', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const created = await repo.create(
+      createSessionData({ branch_id: branch.branch_id, mcp_token: 'raw-bearer-on-create' })
+    );
+    expect(created).not.toHaveProperty('mcp_token');
+    expect(await rawData(db, created.session_id)).not.toHaveProperty('mcp_token');
+
+    const updated = await repo.update(created.session_id, {
+      title: 'renamed',
+      mcp_token: 'raw-bearer-on-update',
+    } as Partial<Session>);
+    expect(updated).not.toHaveProperty('mcp_token');
+    expect(await rawData(db, created.session_id)).not.toHaveProperty('mcp_token');
+  });
+
+  dbTest('hides a legacy stored mcp_token and drops it on the next write', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const created = await repo.create(createSessionData({ branch_id: branch.branch_id }));
+    const data = await rawData(db, created.session_id);
+    await update(db, sessions)
+      .set({ data: { ...data, mcp_token: 'legacy-bearer' } })
+      .where(eq(sessions.session_id, created.session_id))
+      .run();
+
+    expect(await repo.findById(created.session_id)).not.toHaveProperty('mcp_token');
+    await repo.update(created.session_id, { title: 'touched' });
+    expect(await rawData(db, created.session_id)).not.toHaveProperty('mcp_token');
+  });
+});
 
 describe('SessionRepository.findById', () => {
   dbTest('should find session by full UUID', async ({ db }) => {

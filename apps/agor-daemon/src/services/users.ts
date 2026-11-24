@@ -107,7 +107,9 @@ import {
   toAgenticToolsStatus,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
+import { toUserDirectoryEntry } from '../auth/user-redaction.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
+import { assertSafeModelBaseUrl } from '../utils/model-base-url.js';
 import { resolveOwnerHomeStore } from '../utils/sandbox-context.js';
 import type { ClaudeUserCredentialPatchCoordinator } from './claude-credential-mutation.js';
 import { lockTenantAuthorizationFence } from './tenant-authorization-fence.js';
@@ -278,6 +280,26 @@ function isAdmin(params: Params | undefined): boolean {
   return hasMinimumRole((params as AuthenticatedParams | undefined)?.user?.role, ROLES.ADMIN);
 }
 
+/** Transport callers see every user's full profile only as an admin or service account. */
+function canReadAllProfiles(params: Params | undefined): boolean {
+  return (
+    !params?.provider ||
+    isLocalAuthenticationLookup(params) ||
+    isAuthenticationUserLookup(params) ||
+    isServiceAccount(params) ||
+    isAdmin(params)
+  );
+}
+
+function canReadFullProfile(params: Params | undefined, userId: string): boolean {
+  return canReadAllProfiles(params) || (params as AuthenticatedParams).user?.user_id === userId;
+}
+
+function scopeProfileForReader<T extends User>(user: T, params: Params | undefined): T {
+  // Internal callers keep User; transport clients type these rows as DirectoryUser.
+  return canReadFullProfile(params, user.user_id) ? user : (toUserDirectoryEntry(user) as T);
+}
+
 function isSelfEmailLookup(params: Params | undefined, email: string): boolean {
   const requesterEmail = (params as AuthenticatedParams | undefined)?.user?.email;
   return !!requesterEmail && requesterEmail.toLowerCase() === email.toLowerCase();
@@ -321,6 +343,30 @@ function ensureCanExactEmailLookup(params: Params | undefined, email: string): v
  *
  * Returns the next stored shape (caller writes it back to `data.agentic_tools`).
  */
+/** Per-user agentic-tools patch buckets that carry a model-provider base URL. */
+const AGENTIC_BASE_URL_FIELDS = [
+  ['claude-code', 'ANTHROPIC_BASE_URL'],
+  ['codex', 'OPENAI_BASE_URL'],
+] as const;
+
+/**
+ * Validate any model-provider base URL in a per-user agentic-tools patch before
+ * it is stored. The daemon later fetches this URL, so the mode-gated public-only
+ * policy applies; see {@link assertSafeModelBaseUrl}.
+ */
+export async function validateAgenticBaseUrls(
+  patch: AgenticToolsUpdate,
+  config: AgorConfig
+): Promise<void> {
+  const buckets = patch as Record<string, Record<string, string | null | undefined> | undefined>;
+  for (const [tool, field] of AGENTIC_BASE_URL_FIELDS) {
+    const raw = buckets[tool]?.[field];
+    if (typeof raw === 'string') {
+      await assertSafeModelBaseUrl(raw, field, config);
+    }
+  }
+}
+
 function applyAgenticToolsPatch(
   current: StoredAgenticTools,
   patch: AgenticToolsUpdate
@@ -766,7 +812,7 @@ export class UsersService {
    * - `email` exact lookup for authorized callers; password is included only
    *   for the internal local-authentication lookup marker
    * - `search` / `query` / `q` case-insensitive substring lookup across
-   *   name, email, and unix_username
+   *   name, email, and (for admins and service accounts) unix_username
    * - Feathers-style `$limit` / `$skip`, plus plain `limit` / `skip` /
    *   `offset` for MCP/client ergonomics
    */
@@ -806,8 +852,10 @@ export class UsersService {
 
     if (search) {
       const needle = search.toLowerCase();
+      // Only fields the caller may read are searchable, so matches cannot reveal hidden ones.
+      const searchesExecutionHome = canReadAllProfiles(params);
       rows = rows.filter((row) =>
-        [row.name, row.email, row.unix_username].some((value) =>
+        [row.name, row.email, searchesExecutionHome ? row.unix_username : null].some((value) =>
           (value ?? '').toLowerCase().includes(needle)
         )
       );
@@ -827,7 +875,12 @@ export class UsersService {
     const includeAuthMetadata = shouldIncludeAuthMetadata(params, includePassword);
     const results = [];
     for (const row of pageRows) {
-      results.push(await this.rowToUser(row, includePassword, requesterId, includeAuthMetadata));
+      results.push(
+        scopeProfileForReader(
+          await this.rowToUser(row, includePassword, requesterId, includeAuthMetadata),
+          params
+        )
+      );
     }
 
     return {
@@ -854,7 +907,10 @@ export class UsersService {
     const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as
       | UserID
       | undefined;
-    return this.rowToUser(row, false, requesterId, shouldIncludeAuthMetadata(params));
+    return scopeProfileForReader(
+      await this.rowToUser(row, false, requesterId, shouldIncludeAuthMetadata(params)),
+      params
+    );
   }
 
   /**
@@ -1168,6 +1224,12 @@ export class UsersService {
           if (isInvalidModelConfigError(error)) throw new BadRequest(error.message);
           throw error;
         }
+      }
+
+      // Reject an unsafe model-provider base URL before it is persisted (the
+      // daemon later fetches it; see validateAgenticBaseUrls).
+      if (data.agentic_tools) {
+        await validateAgenticBaseUrls(data.agentic_tools, this.config);
       }
 
       // Handle per-tool credential patches (encrypt-on-write, drop-on-null).

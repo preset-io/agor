@@ -3,7 +3,7 @@ import { runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { inspectClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
 import { inspectCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
-import { createCheckAuthService } from './check-auth';
+import { createCheckAuthService, validateProviderCredential } from './check-auth';
 import { resolveCodexCredentialRoute } from './codex-auth-shared.js';
 
 const claudeQueryMock = vi.hoisted(() => vi.fn());
@@ -80,6 +80,25 @@ beforeEach(() => {
   delete process.env.ANTHROPIC_AUTH_TOKEN;
   isTenantAgenticToolEnabledMock.mockResolvedValue(true);
   resolveApiKeyMock.mockResolvedValue({ apiKey: undefined, source: 'none', useNativeAuth: false });
+});
+
+describe('check-auth input validation', () => {
+  it('rejects a null request body with a coded 400 instead of an uncoded TypeError', async () => {
+    // The body is untrusted transport input. Destructuring `data` blind would
+    // throw an uncoded TypeError misclassified as a server 5xx.
+    await expect(service().create(null as never)).rejects.toMatchObject({ name: 'BadRequest' });
+  });
+
+  it('rejects a non-object request body with a coded 400', async () => {
+    await expect(service().create('nope' as never)).rejects.toMatchObject({ name: 'BadRequest' });
+  });
+
+  it('rejects a non-string apiKey with a coded 400 instead of an uncoded TypeError', async () => {
+    // {apiKey: 123} would throw on the later rawKey?.trim(); guard it up front.
+    await expect(
+      service().create({ tool: 'claude-code', apiKey: 123 } as never)
+    ).rejects.toMatchObject({ name: 'BadRequest' });
+  });
 });
 
 // #1867 — Claude subscription-token handling (kept verbatim; `authenticated`
@@ -458,5 +477,74 @@ describe('check-auth codex auth.json probe', () => {
       status: 'unknown',
       hint: 'Remove the filesystem_home override for this account or use an API key.',
     });
+  });
+});
+
+describe('validateProviderCredential outbound egress gating', () => {
+  // Multi-tenant → shared daemon → public-only, DNS-pinned egress enforced.
+  const enforced = { multi_tenancy: { mode: 'required_from_auth' } } as never;
+  // Default (simple + static + standalone) → trusted-local → plain fetch allowed.
+  const trustedLocal = {} as never;
+
+  it('refuses a private base URL at fetch time on an enforced deployment', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const status = await validateProviderCredential(
+      'codex',
+      { OPENAI_API_KEY: 'sk-test', OPENAI_BASE_URL: 'https://10.0.0.5' },
+      enforced
+    );
+    // The pinned fetch refuses before any socket; indistinguishable from
+    // unreachable, so no internal-service oracle leaks.
+    expect(status).toBe('unknown');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it('probes a local endpoint with a plain fetch on a trusted-local deployment', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(null, { status: 401 }));
+    const status = await validateProviderCredential(
+      'codex',
+      { OPENAI_API_KEY: 'sk-test', OPENAI_BASE_URL: 'http://localhost:4321' },
+      trustedLocal
+    );
+    expect(status).toBe('unauthenticated');
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'http://localhost:4321/models',
+      expect.objectContaining({ method: 'GET' })
+    );
+    fetchSpy.mockRestore();
+  });
+
+  it('refuses a base-URL hostname that resolves to a private address (rebinding)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const status = await validateProviderCredential(
+      'codex',
+      { OPENAI_API_KEY: 'sk-test', OPENAI_BASE_URL: 'https://models.example.com' },
+      enforced,
+      { resolveDns: async () => [{ address: '10.0.0.8', family: 4 }] }
+    );
+    expect(status).toBe('unknown');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it.each([
+    [
+      'HA + simple + static',
+      { deployment: { mode: 'ha' }, execution: { unix_user_mode: 'simple' } },
+    ],
+    ['sandbox execution', { execution: { unix_user_mode: 'sandbox' } }],
+  ])('enforces public-only egress on %s deployments', async (_label, config) => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const status = await validateProviderCredential(
+      'codex',
+      { OPENAI_API_KEY: 'sk-test', OPENAI_BASE_URL: 'https://169.254.169.254' },
+      config as never
+    );
+    expect(status).toBe('unknown');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
   });
 });

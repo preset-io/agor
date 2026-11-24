@@ -5,6 +5,8 @@ import { pathToFileURL } from 'node:url';
 // Use the installed release's repositories and schema, not a second transcript
 // format. This fixture replaces daemon transport/auth, not agent execution or
 // task completion. It has no connection to a user's daemon or database.
+export const SMOKE_MCP_TOKEN = 'smoke-fixture-token';
+
 export async function openSmokeState(packageRoot, root) {
   const require = createRequire(join(packageRoot, 'package.json'));
   const core = await import(pathToFileURL(require.resolve('@agor/core/db')).href);
@@ -35,7 +37,11 @@ export async function openSmokeState(packageRoot, root) {
           const repo = repos[name];
           if (!repo) throw new Error('Unsupported smoke service');
           return {
-            get: (id) => repo.findById(id),
+            // The daemon attaches a minted MCP token to session reads; sessions never store one.
+            get: async (id) => {
+              const row = await repo.findById(id);
+              return name === 'sessions' && row ? { ...row, mcp_token: SMOKE_MCP_TOKEN } : row;
+            },
             create: (data) => repo.create(data),
             patch: (id, data) => repo.update(id, data),
             find: ({ query = {} } = {}) => {

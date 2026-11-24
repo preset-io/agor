@@ -1,4 +1,4 @@
-import { shortId, type Task, type User } from '@agor-live/client';
+import { type DirectoryUser, shortId, type Task } from '@agor-live/client';
 import { formatAbsoluteTime, formatRelativeTimeSafe } from '../../utils/time';
 import type { CompactNoticeDetail } from '../CompactNotice';
 
@@ -6,7 +6,7 @@ const DEFAULT_STOP_TEXT = /^\s*(stopped by user\.?)?\s*$/i;
 
 export interface TurnOutcomeDetailsContext {
   agenticTool?: string;
-  userById?: Map<string, User>;
+  userById?: Map<string, DirectoryUser>;
 }
 
 /** "45s", "3m 29s", "1h 02m". */

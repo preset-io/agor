@@ -18,6 +18,7 @@ import {
   branchMaintenanceCapabilities,
   createUserProcessEnvironment,
   ENVIRONMENT,
+  enforcesPublicHealthEgress,
   ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   environmentCommandCapabilities,
@@ -125,8 +126,8 @@ import {
   TEAMMATE_FRAMEWORK_REPO_URL,
 } from '@agor/core/types';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
-import { createPinnedFetch } from '@agor/core/utils/pinned-fetch';
-import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
+import { createPinnedFetch, isOutboundRefusal } from '@agor/core/utils/pinned-fetch';
+import { isAllowedHealthCheckUrl, isPublicHttpUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { matchesExecutorCommandRuntimeScope } from '../auth/executor-runtime-scope.js';
 import {
@@ -308,13 +309,38 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   private db: TenantScopeAwareDatabase;
   private app: Application;
   private processes = new Map<BranchID, ManagedProcess>();
-  private readonly fetchDynamicEnvironmentHealth = createPinnedFetch({
-    timeoutMs: ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS,
+  // Pinned, public-only health fetch: used for dynamic (provider-reported)
+  // health always, and for static (branch-configured) health on
+  // isolated/multi-tenant deployments. It resolves the name and refuses any
+  // private/loopback/link-local/metadata answer at connect time, defeating the
+  // wildcard-DNS and DNS-rebinding SSRF oracle, and never follows redirects. A
+  // trusted-local single-tenant install instead probes a loopback/private dev
+  // server through a plain fetch (see fetchEnvironmentHealthObservation).
+  private readonly fetchEnvironmentHealth = createPinnedFetch({
+    // Backstop only: fetchEnvironmentHealthObservation's AbortController trips at
+    // HEALTH_CHECK_TIMEOUT_MS and carries the "Timeout" message, so this stays
+    // longer to stay the authoritative-timeout's backstop rather than racing it.
+    timeoutMs: ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS + 5_000,
     maxBytes: 64 * 1024,
     // Health only needs the status. Stop consuming a streaming response after
     // its first body chunk; an empty response still completes on `end`.
     isBodyComplete: () => true,
   });
+  // Builds a pinned, public-only fetch for a managed-environment webhook
+  // (logs/start/stop/nuke) sized to the caller's byte cap — same SSRF posture as
+  // fetchEnvironmentHealth. isBodyComplete stops reading once the body passes
+  // maxBytes, and readLimitedWebhookBody then trims to exactly maxBytes and flags
+  // truncation, so a large body is truncated, not refused. The hard ceiling
+  // (maxBytes plus generous slack) only guards a single pathological chunk, and
+  // executeEnvironmentWebhook's AbortController trips at LOGS_TIMEOUT_MS and owns
+  // the user-facing timeout message. Sizing per call (rather than a shared field)
+  // keeps truncation correct for any cap; it is a field so tests can stub it.
+  private readonly createWebhookFetch = (maxBytes: number) =>
+    createPinnedFetch({
+      timeoutMs: ENVIRONMENT.LOGS_TIMEOUT_MS + 5_000,
+      maxBytes: maxBytes + 2 * 1024 * 1024,
+      isBodyComplete: (text) => Buffer.byteLength(text, 'utf8') > maxBytes,
+    });
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
   private boardObjectsService?: {
     find: (params?: unknown) => Promise<unknown>;
@@ -623,13 +649,23 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       })}`
     );
 
+    // The webhook URL is attacker-controllable branch configuration fetched from
+    // the daemon's privileged network position, so it goes through the pinned
+    // fetch: it refuses non-public URLs, resolves the name and refuses any
+    // private/loopback/link-local/metadata answer at connect time (defeating
+    // wildcard-DNS and DNS rebinding), and never follows redirects, so a 3xx is
+    // reported as a failure rather than chased.
+    const webhookFetch = this.createWebhookFetch(maxBytes);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), ENVIRONMENT.LOGS_TIMEOUT_MS);
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort(new Error('Environment webhook timed out'));
+    }, ENVIRONMENT.LOGS_TIMEOUT_MS);
 
     try {
-      const response = await fetch(url, {
+      const response = await webhookFetch(url, {
         method: 'GET',
-        redirect: 'manual',
         signal: controller.signal,
         headers: {
           'User-Agent': 'Agor managed-environment webhook',
@@ -649,10 +685,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         contentType: response.headers.get('content-type'),
       };
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
+      if (timedOut) {
         throw new Error(
           `Environment ${commandType} webhook timed out after ${ENVIRONMENT.LOGS_TIMEOUT_MS / 1000}s`
         );
+      }
+      // The pinned fetch's refusal names the resolved internal IP (e.g.
+      // "...resolves to 169.254.169.254"); getLogs surfaces this error to the
+      // caller, so genericize it here at the single privileged-fetch boundary to
+      // avoid handing back a DNS/SSRF oracle. Other errors (HTTP status, a public
+      // host's network error) carry no internal detail and are kept for debugging.
+      if (isOutboundRefusal(error)) {
+        throw new Error(`Environment ${commandType} webhook destination is not permitted`);
       }
       throw error;
     } finally {
@@ -2994,11 +3038,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       };
     }
     const isDynamicHealth = dynamicHealthUrl !== undefined;
-    if (
-      isDynamicHealth
-        ? !isAllowedDynamicEnvironmentHealthUrl(healthUrl)
-        : !isAllowedHealthCheckUrl(healthUrl)
-    ) {
+    // Dynamic (provider-reported) health is always public-only. Static
+    // (branch-configured) health is public-only on isolated/multi-tenant
+    // deployments — where it is an attacker-controllable SSRF/port-scan oracle —
+    // but keeps probing loopback/private dev servers on a trusted-local
+    // single-tenant install, the documented use where no tenant boundary exists.
+    const requirePublicEgress =
+      isDynamicHealth || enforcesPublicHealthEgress(this.app.get('config'));
+    const urlAllowed = isDynamicHealth
+      ? isAllowedDynamicEnvironmentHealthUrl(healthUrl)
+      : requirePublicEgress
+        ? isPublicHttpUrl(healthUrl)
+        : isAllowedHealthCheckUrl(healthUrl);
+    if (!urlAllowed) {
       return {
         status: 'unhealthy',
         message: 'Health check URL blocked by security policy',
@@ -3018,32 +3070,41 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }, ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS);
     timeout.unref?.();
     try {
-      const response = await (isDynamicHealth ? this.fetchDynamicEnvironmentHealth : fetch)(
-        healthUrl,
-        {
-          signal: controller.signal,
-          method: 'GET',
-          // Do not follow redirects: an otherwise-allowed health URL could 302 to
-          // a link-local metadata endpoint (169.254.169.254), bypassing
-          // isAllowedHealthCheckUrl. A 3xx returns not-ok and is reported
-          // unhealthy. Mirrors the managed-env webhook fetch.
-          redirect: 'manual',
-        }
-      );
+      // On isolated/multi-tenant deployments the pinned, public-only fetch
+      // resolves the name and refuses any private/loopback/link-local/metadata
+      // answer at connect time (defeating wildcard-DNS and DNS rebinding) and
+      // never follows redirects. On a trusted-local single-tenant install a plain
+      // fetch reaches the branch's loopback/private dev server; redirects are
+      // still not followed, so a 302 to a metadata endpoint is reported unhealthy.
+      const response = requirePublicEgress
+        ? await this.fetchEnvironmentHealth(healthUrl, {
+            signal: controller.signal,
+            method: 'GET',
+          })
+        : await fetch(healthUrl, {
+            signal: controller.signal,
+            method: 'GET',
+            redirect: 'manual',
+          });
       return {
         status: response.ok ? 'healthy' : 'unhealthy',
         message: response.ok
           ? `HTTP ${response.status}`
-          : `HTTP ${response.status} ${response.statusText}`,
+          : `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`,
         recordWhileStarting: true,
       };
     } catch (error) {
       if (cancellationSignal?.aborted) return null;
       return {
         status: 'unhealthy',
+        // On public-egress paths the pinned fetch's refusal names the resolved
+        // address (e.g. "...resolves to 169.254.169.254"); surfacing it would
+        // hand an attacker the DNS/SSRF oracle this guard exists to close, so
+        // report a generic failure. Only a trusted-local probe (plain fetch, own
+        // network) surfaces the underlying error.
         message: timedOut
           ? 'Timeout'
-          : isDynamicHealth
+          : requirePublicEgress
             ? 'Health endpoint unreachable'
             : error instanceof Error
               ? error.message

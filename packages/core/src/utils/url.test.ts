@@ -166,6 +166,10 @@ describe('normalizeOptionalHttpUrl', () => {
   });
 });
 
+// This is the *trusted-local* validator: isolated/multi-tenant deployments
+// enforce public-only via isPublicHttpUrl + createPinnedFetch at the fetch site
+// (see fetchEnvironmentHealthObservation and enforcesPublicHealthEgress). Here it
+// legitimately allows localhost/private dev-server targets.
 describe('isAllowedHealthCheckUrl', () => {
   it('allows http localhost URLs', () => {
     expect(isAllowedHealthCheckUrl('http://localhost:3000/health')).toBe(true);

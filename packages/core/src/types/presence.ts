@@ -1,7 +1,7 @@
 // src/types/presence.ts
 
 import type { BoardID } from './id';
-import type { User } from './user';
+import type { DirectoryUser } from './user';
 
 /**
  * Native Socket.IO event names owned by the multiplayer-presence protocol.
@@ -114,7 +114,7 @@ export interface CursorLeaveEvent {
  */
 export interface RemoteCursor {
   userId: string;
-  user: User;
+  user: DirectoryUser;
   x: number;
   y: number;
   timestamp: number;
@@ -124,7 +124,7 @@ export interface RemoteCursor {
  * Active user for facepile display
  */
 export interface ActiveUser {
-  user: User;
+  user: DirectoryUser;
   lastSeen: number;
   boardId?: BoardID; // Which board the user is currently viewing
   cursor?: {

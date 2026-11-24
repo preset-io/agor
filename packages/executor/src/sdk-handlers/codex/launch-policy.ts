@@ -7,6 +7,41 @@ function isCodexConfigObject(value: unknown): value is CodexConfigObject {
 }
 
 /**
+ * Blank every env var that carries an MCP credential in the shells Codex runs.
+ *
+ * Codex reads `bearer_token_env_var` and `env_http_headers` from its own
+ * process env, which its shell tool would otherwise inherit. The names are
+ * derived from the server config Agor hands Codex — the only place these
+ * credentials live, since Agor never writes them to the executor's own
+ * `process.env`. `set` names exact variables and merges across config layers,
+ * so whatever exclude/filter form a user, project or system layer uses stays
+ * in effect.
+ */
+function mcpCredentialShellPolicy(config: CodexConfigObject | undefined): CodexConfigObject {
+  const names = new Set<string>();
+  const servers = config?.mcp_servers;
+  for (const server of isCodexConfigObject(servers) ? Object.values(servers) : []) {
+    if (!isCodexConfigObject(server)) continue;
+    if (typeof server.bearer_token_env_var === 'string') names.add(server.bearer_token_env_var);
+    const headers = server.env_http_headers;
+    for (const name of isCodexConfigObject(headers) ? Object.values(headers) : []) {
+      if (typeof name === 'string') names.add(name);
+    }
+  }
+  if (names.size === 0) return {};
+  const policy = isCodexConfigObject(config?.shell_environment_policy)
+    ? config.shell_environment_policy
+    : {};
+  const set = isCodexConfigObject(policy.set) ? policy.set : {};
+  return {
+    shell_environment_policy: {
+      ...policy,
+      set: { ...set, ...Object.fromEntries([...names].map((name) => [name, ''])) },
+    },
+  };
+}
+
+/**
  * Apply Agor-owned Codex process policy without changing the user's
  * `~/.codex/config.toml`.
  *
@@ -50,6 +85,7 @@ export function applyAgorCodexLaunchPolicy(
 
   return {
     ...config,
+    ...mcpCredentialShellPolicy(config),
     features: {
       ...features,
       // Agor sessions/subsessions are the supported, observable orchestration boundary.

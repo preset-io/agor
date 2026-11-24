@@ -50,7 +50,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
     'agor_users_list',
     {
       description:
-        'List users in the system with pagination and optional case-insensitive search across name, email, and execution home key. Returns compact rows by default; pass lean:false for detailed user payloads.',
+        'List users in the system with pagination and optional case-insensitive search across name, email, and (for admins) execution home key. Returns compact rows by default; pass lean:false for detailed user payloads. Role and execution home key of other users are returned to admins only.',
       annotations: { readOnlyHint: true },
       inputSchema: z.strictObject({
         limit: z
@@ -69,7 +69,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
           .describe('Number of results to skip'),
         search: mcpOptionalString(
           'search',
-          'Case-insensitive search across name, email, and execution home key'
+          'Case-insensitive search across name, email, and (admins only) execution home key'
         ),
         lean: z
           .boolean()
@@ -102,18 +102,18 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
     'agor_users_find',
     {
       description:
-        'Find users by name, email, or unix_username. Useful before admin updates: returns compact matching rows with user_id. Pass email when available; matching is case-insensitive substring.',
+        'Find users by name, email, or (for admins) unix_username. Useful before admin updates: returns compact matching rows with user_id. Pass email when available; matching is case-insensitive substring.',
       annotations: { readOnlyHint: true },
       inputSchema: z.strictObject({
         search: mcpOptionalString(
           'search',
-          'Case-insensitive search across name, email, and execution home key'
+          'Case-insensitive search across name, email, and (admins only) execution home key'
         ),
         email: mcpOptionalString('email', 'Email to search for (case-insensitive substring)'),
         name: mcpOptionalString('name', 'Name to search for (case-insensitive substring)'),
         unix_username: mcpOptionalString(
           'unix_username',
-          'Execution home key to search for (case-insensitive substring)'
+          'Execution home key to search for (case-insensitive substring; admins only)'
         ),
         limit: z
           .number({ error: 'limit must be a positive integer when provided.' })
@@ -178,7 +178,8 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
   server.registerTool(
     'agor_users_get',
     {
-      description: 'Get detailed information about a specific user',
+      description:
+        'Get a user. Returns the full profile for yourself (any user for admins); other users return their public directory entry.',
       annotations: { readOnlyHint: true },
       inputSchema: z.strictObject({
         userId: mcpRequiredId('userId', 'User', 'User ID (UUIDv7 or short ID)'),

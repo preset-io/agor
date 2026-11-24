@@ -65,9 +65,10 @@ export async function generateMetadata(props: PageProps) {
   const { metadata } = await importPage(params.mdxPath);
   const pathname = `/${params.mdxPath?.join('/') ?? ''}`;
   const pageTitle = metadata.title ?? 'agor';
-  const title = pageTitle === 'agor' ? DEFAULT_TITLE : `${pageTitle} – agor`;
-  const description = metadata.description || DEFAULT_DESCRIPTION;
   const frontMatter = metadata as FrontMatterLike;
+  const title =
+    frontMatter.metaTitle ?? (pageTitle === 'agor' ? DEFAULT_TITLE : `${pageTitle} – agor`);
+  const description = metadata.description || DEFAULT_DESCRIPTION;
   const image = getSocialImage(frontMatter);
 
   return {

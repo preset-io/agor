@@ -157,13 +157,14 @@ describe('the tool_permissions gate', () => {
 });
 
 /**
- * The config object is an intermediate. What the OpenCode process actually
- * obeys is `OPENCODE_CONFIG_CONTENT` on its own environment, so that string is
- * where a `deny` either binds or does not.
+ * The config object is an intermediate. The OpenCode process obeys
+ * `OPENCODE_CONFIG_CONTENT` on its own environment, which every tool it runs
+ * inherits, so MCP servers (and their bearers) are attached over its API.
  */
-describe('MCP servers reaching the OpenCode process environment', () => {
-  it('hands both servers to the process without leaking Agor-side state', async () => {
+describe('MCP servers reaching the OpenCode process', () => {
+  it('attaches both servers over the API and keeps bearers out of the environment', async () => {
     const spawnEnvs: Array<Record<string, string | undefined>> = [];
+    const added: Array<{ name: string; config: Record<string, unknown> }> = [];
     const child = Object.assign(new EventEmitter(), {
       stdout: new PassThrough(),
       stderr: new PassThrough(),
@@ -195,11 +196,16 @@ describe('MCP servers reaching the OpenCode process environment', () => {
         return child;
       },
       fetch: vi.fn(async () => new Response('{}', { status: 200 })),
-      // The turn is abandoned here: spawn has already been handed the config,
-      // which is the only thing under test.
-      createClient: () => {
-        throw new Error('stop after handoff');
-      },
+      // The fake client ends the turn right after the MCP handoff under test.
+      createClient: () =>
+        ({
+          mcp: {
+            add: async ({ body }: { body: (typeof added)[number] }) => {
+              added.push(body);
+              return { data: {} };
+            },
+          },
+        }) as never,
     });
 
     await expect(
@@ -220,15 +226,51 @@ describe('MCP servers reaching the OpenCode process environment', () => {
 
     expect(spawnEnvs).toHaveLength(1);
     const configContent = spawnEnvs[0].OPENCODE_CONFIG_CONTENT ?? '';
-    // Both servers now reach the process; the gated one is restrained at call
-    // time rather than by being kept out of the config.
-    expect(configContent).toContain(sanitized(GATED));
-    expect(configContent).toContain(sanitized(PLAIN));
-    // The permission map is Agor-side state and must never be serialised into
-    // the config the OpenCode process reads.
-    expect(configContent).not.toContain('mcpToolPermissions');
-    expect(configContent).not.toContain('mcpSignInNotice');
+    expect(JSON.stringify(spawnEnvs[0])).not.toContain('Bearer token');
+    expect(configContent).not.toContain('"mcp"');
+    // Both servers reach OpenCode; the gated one is restrained at call time.
+    const names = added.map(({ name }) => name).join(' ');
+    expect(names).toContain(sanitized(GATED));
+    expect(names).toContain(sanitized(PLAIN));
+    expect(added.find(({ name }) => name.startsWith('agor_'))?.config).toMatchObject({
+      headers: { Authorization: 'Bearer token' },
+    });
+    // The permission map is Agor-side state and must never reach OpenCode.
+    expect(JSON.stringify([configContent, added])).not.toContain('mcpToolPermissions');
+    expect(JSON.stringify([configContent, added])).not.toContain('mcpSignInNotice');
   });
+});
+
+it('skips an MCP server OpenCode refuses with a warning instead of failing the turn', async () => {
+  const tool = new OpenCodeTool({ getDaemonUrl: async () => 'http://localhost:3030' });
+  const added: string[] = [];
+  const client = {
+    mcp: {
+      add: async ({ body }: { body: { name: string } }) => {
+        if (body.name === 'refused') return { error: { name: 'BadRequest' } };
+        if (body.name === 'broken') throw new Error('socket hang up');
+        added.push(body.name);
+        return { data: {} };
+      },
+    },
+  };
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  try {
+    await expect(
+      (
+        tool as unknown as {
+          addMcpServers(c: unknown, d: string, s: Record<string, unknown>): Promise<void>;
+        }
+      ).addMcpServers(client, tmpdir(), { refused: {}, broken: {}, healthy: {} })
+    ).resolves.toBeUndefined();
+    expect(added).toEqual(['healthy']);
+    const warnings = warn.mock.calls.flat().join('\n');
+    expect(warnings).toContain('"refused"');
+    expect(warnings).toContain('"broken"');
+    expect(warnings).not.toContain('healthy');
+  } finally {
+    warn.mockRestore();
+  }
 });
 
 it('adds no client hint to an external OpenCode HTTP connection', async () => {

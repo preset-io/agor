@@ -22,9 +22,9 @@ import type {
   BoardComment,
   Branch,
   CardType,
+  DirectoryUser,
   Repo,
   Session,
-  User,
 } from '@agor-live/client';
 import {
   ARTIFACT_METADATA_LIST_FIELDS,
@@ -829,7 +829,7 @@ export function useAgorData(
         for (const repo of reposList) {
           reposMap.set(repo.repo_id, repo);
         }
-        const usersMap = new Map<string, User>();
+        const usersMap = new Map<string, DirectoryUser>();
         for (const user of usersList) {
           usersMap.set(user.user_id, user);
         }

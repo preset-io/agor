@@ -23,11 +23,14 @@ import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { setupQuery } from '../../../../packages/executor/src/sdk-handlers/claude/query-builder';
 import { SessionsService } from '../services/sessions';
 import { TasksService } from '../services/tasks';
-import { createSessionMcpTokenAfterHooks } from '../utils/session-mcp-token-hook';
+import { createSessionMcpTokenHook } from '../utils/session-mcp-token-hook';
 import { setupMCPRoutes } from './server';
 import { initMcpTokens, shutdownMcpTokens } from './tokens';
 
-const sdk = vi.hoisted(() => ({ query: vi.fn(() => ({})) }));
+const sdk = vi.hoisted(() => {
+  const setMcpServers = vi.fn(async () => ({ added: [], removed: [], errors: {} }));
+  return { setMcpServers, query: vi.fn(() => ({ setMcpServers })) };
+});
 vi.mock('@agor/core/agentic-integrations', async (original) => ({
   ...(await original<typeof import('@agor/core/agentic-integrations')>()),
   loadManagedAgenticToolSdk: vi.fn(async () => sdk),
@@ -77,8 +80,8 @@ dbTest(
     const sessions = new SessionsService(db, app as never, () => true);
     app.use('sessions', sessions);
     const queue = vi.spyOn(sessions, 'triggerQueueProcessing').mockResolvedValue(undefined);
-    const hooks = createSessionMcpTokenAfterHooks({ app: app as never, config: {} });
-    app.service('sessions').hooks({ after: { get: [hooks.get], create: [hooks.create] } });
+    const mcpTokenHook = createSessionMcpTokenHook({ app: app as never, config: {} });
+    app.service('sessions').hooks({ after: { get: [mcpTokenHook] } });
     initMcpTokens({ db, multiTenancy: resolveMultiTenancyConfig({}) });
     const tasks = new TaskRepository(db);
     const taskService = new TasksService(db, app as never);
@@ -105,9 +108,35 @@ dbTest(
     expect(fork.genealogy.forked_from_session_id).toBe(original.session_id);
     expect(fork.sdk_session_id).toBeUndefined();
 
+    // MCP tokens are issued only to a task executor, so each runtime gets a live task.
+    async function executorParams(session: Session) {
+      const task = await tasks.create({
+        session_id: session.session_id,
+        created_by: user.user_id,
+        status: 'running',
+        executor_connected_at: new Date().toISOString(),
+      });
+      return {
+        user,
+        provider: 'socketio',
+        authentication: {
+          strategy: 'jwt',
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-task',
+            session_id: session.session_id,
+            task_id: task.task_id,
+          },
+        },
+      };
+    }
+
     async function runtimeHeaders(session: Session, expectedResume?: string) {
+      const runtimeParams = await executorParams(session);
       const deps = {
-        sessionsRepo: { findById: (id: string) => app.service('sessions').get(id, params) },
+        sessionsRepo: {
+          findById: (id: string) => app.service('sessions').get(id, runtimeParams as never),
+        },
         branchesRepo: branches,
       } as unknown as Parameters<typeof setupQuery>[2];
       const result = await setupQuery(
@@ -115,19 +144,18 @@ dbTest(
         `Inherited example: callbackSessionId=${original.session_id}. Delegate work.`,
         deps
       );
+      const [{ options, prompt }] = sdk.query.mock.calls.at(-1) as unknown as [
+        {
+          options: { systemPrompt: { append: string }; resume?: string; forkSession?: boolean };
+          prompt: AsyncIterable<unknown>;
+        },
+      ];
+      // The Agor server is applied over the control channel before the first message.
+      await prompt[Symbol.asyncIterator]().next();
       result.query.releaseInput();
-      const options = (
-        sdk.query.mock.calls.at(-1) as unknown as [
-          {
-            options: {
-              systemPrompt: { append: string };
-              resume?: string;
-              forkSession?: boolean;
-              mcpServers: { agor: { headers: Record<string, string> } };
-            };
-          },
-        ]
-      )[0].options;
+      const [applied] = sdk.setMcpServers.mock.calls.at(-1) as unknown as [
+        { agor: { headers: Record<string, string> } },
+      ];
       expect(options.systemPrompt.append).toContain(
         `Current Agor session ID: ${session.session_id}`
       );
@@ -136,7 +164,7 @@ dbTest(
       );
       if (expectedResume)
         expect(options).toMatchObject({ resume: expectedResume, forkSession: true });
-      return options.mcpServers.agor.headers;
+      return applied.agor.headers;
     }
 
     const web = express();
@@ -183,8 +211,11 @@ dbTest(
         expect(payload.result?.isError, text).not.toBe(true);
         return JSON.parse(payload.result.content[0].text);
       };
-      const originalToken = (await app.service('sessions').get(original.session_id, params))
-        .mcp_token;
+      const originalToken = (
+        await app
+          .service('sessions')
+          .get(original.session_id, (await executorParams(original)) as never)
+      ).mcp_token;
       // Send A first, then reuse a stale transport/header hint with B's actual
       // runtime credentials. No request-local handler may keep A's identity.
       await call({ Authorization: `Bearer ${originalToken}` }, 'agor_users_get_current', {});

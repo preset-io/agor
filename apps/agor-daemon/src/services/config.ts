@@ -30,6 +30,7 @@ import type {
   TaskID,
   UserID,
 } from '@agor/core/types';
+import { isAgenticToolName } from '@agor/core/types';
 import {
   authenticatedTaskExecutorRuntimeAuthority,
   authenticatedTaskExecutorRuntimeScope,
@@ -88,16 +89,19 @@ export class ConfigService {
    * Called via: client.service('config/resolve-api-key').create({ taskId, keyName })
    */
   async resolveApiKey(
-    data: {
-      taskId: TaskID;
-      keyName: string;
-      /**
-       * Restrict the per-user lookup to this tool's credential bucket. Executors
-       * always pass this; absent it, the resolver falls back to a cross-tool
-       * sweep (legacy behavior preserved for non-SDK callers).
-       */
-      tool?: AgenticToolName;
-    },
+    data:
+      | {
+          taskId: TaskID;
+          keyName: string;
+          /**
+           * Restrict the per-user lookup to this tool's credential bucket. Executors
+           * always pass this; absent it, the resolver falls back to a cross-tool
+           * sweep (legacy behavior preserved for non-SDK callers).
+           */
+          tool?: AgenticToolName;
+        }
+      | null
+      | undefined,
     params?: Params
   ): Promise<{
     apiKey: string | null;
@@ -108,9 +112,32 @@ export class ConfigService {
     decryptionFailed?: boolean;
     credentialExpiresAt?: string;
   }> {
+    // Validate the request body before using it. This endpoint receives
+    // untrusted transport input; a null, missing, or non-object body (or a
+    // non-string taskId/keyName) is a client error. Destructuring it blind
+    // throws an uncoded TypeError that is misclassified as a server 5xx and
+    // pages on-call, so guard first and return a coded 400.
+    if (data === null || typeof data !== 'object') {
+      throw new BadRequest('A request body with taskId and keyName is required');
+    }
     const { taskId, keyName, tool } = data;
+    if (typeof taskId !== 'string' || taskId.trim().length === 0) {
+      throw new BadRequest('taskId is required');
+    }
+    if (typeof keyName !== 'string' || keyName.trim().length === 0) {
+      throw new BadRequest('keyName is required');
+    }
     if (!isResolvableApiKeyName(keyName)) {
       throw new BadRequest('Unsupported API key name');
+    }
+    // `tool` is optional: a nullish value (absent or JSON `null`) keeps the
+    // documented cross-tool sweep fallback for non-SDK callers. When a caller
+    // does supply one it comes from the same untrusted body and must be a known
+    // tool — an unvalidated value flows into TOOL_API_KEY_NAMES and the core
+    // resolver, where a malformed one could throw uncoded, the exact 500-mislabel
+    // this guard exists to prevent.
+    if (tool != null && !isAgenticToolName(tool)) {
+      throw new BadRequest('Unsupported tool');
     }
 
     // This method returns plaintext secret material and is only for trusted
@@ -234,7 +261,12 @@ export class ConfigService {
           await this.assertNativeAuthHomeMatchesSession(tool, userId, sessionId, internalParams);
         }
       };
-      const managed = await this.claudeBackendOAuth.resolve(authority.tenantId, userId, assertTask);
+      const managed = await this.claudeBackendOAuth.resolve(
+        authority.tenantId,
+        userId,
+        assertTask,
+        taskId
+      );
       result = { ...result, ...managed, apiKey: undefined, managedOAuth: undefined };
     }
     if (result.useNativeAuth && tool === 'claude-code') {

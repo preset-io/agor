@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { openSmokeState } from './gemini-live-state.mjs';
+import { openSmokeState, SMOKE_MCP_TOKEN } from './gemini-live-state.mjs';
 
 const worker = fileURLToPath(new URL('./gemini-live-worker.mjs', import.meta.url));
 export const visibleEnvMarker = 'agor-smoke-ordinary-variable';
@@ -184,7 +184,6 @@ export async function runSmoke({
         created_by: user.user_id,
         agentic_tool: 'gemini',
         permission_config: { mode },
-        mcp_token: 'smoke-fixture-token',
       });
     const a = await session('autoEdit');
     const b = await session('yolo');
@@ -197,10 +196,7 @@ export async function runSmoke({
     );
     let mcpCalls = 0;
     server = createServer(async (request, response) => {
-      if (
-        request.url !== '/mcp' ||
-        request.headers.authorization !== 'Bearer smoke-fixture-token'
-      ) {
+      if (request.url !== '/mcp' || request.headers.authorization !== `Bearer ${SMOKE_MCP_TOKEN}`) {
         response.writeHead(403).end();
         return;
       }

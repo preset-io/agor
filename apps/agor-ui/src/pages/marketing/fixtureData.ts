@@ -8,6 +8,7 @@ import type {
   Branch,
   BranchID,
   CardWithType,
+  DirectoryUser,
   Repo,
   Session,
   User,
@@ -610,7 +611,7 @@ export interface DemoStoreMaps {
   boardObjectById: Map<string, BoardEntityObject>;
   boardObjectsByBoardId: Map<string, BoardEntityObject[]>;
   cardById: Map<string, CardWithType>;
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   commentById: Map<string, BoardComment>;
 }
 
@@ -638,7 +639,7 @@ export const buildDemoStoreMaps = (): DemoStoreMaps => {
   );
   const boardObjectsByBoardId = new Map<string, BoardEntityObject[]>([[demoBoardId, boardObjects]]);
   const cardById = new Map<string, CardWithType>(demoCards.map((card) => [card.card_id, card]));
-  const userById = new Map<string, User>(demoUsers.map((user) => [user.user_id, user]));
+  const userById = new Map<string, DirectoryUser>(demoUsers.map((user) => [user.user_id, user]));
   const commentById = new Map<string, BoardComment>(
     demoComments.map((comment) => [comment.comment_id, comment])
   );

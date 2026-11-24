@@ -1,12 +1,10 @@
-import type { User } from '@agor-live/client';
+import type { DirectoryUser } from '@agor-live/client';
 import { Select, type SelectProps } from 'antd';
 
 /** Searchable Agor-user picker used by the gateway channel forms. */
-export const UserSelect: React.FC<SelectProps<string> & { userById: Map<string, User> }> = ({
-  userById,
-  placeholder = 'Select a user',
-  ...selectProps
-}) => (
+export const UserSelect: React.FC<
+  SelectProps<string> & { userById: Map<string, DirectoryUser> }
+> = ({ userById, placeholder = 'Select a user', ...selectProps }) => (
   <Select {...selectProps} placeholder={placeholder} showSearch optionFilterProp="children">
     {Array.from(userById.values())
       .sort((a, b) =>

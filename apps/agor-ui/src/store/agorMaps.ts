@@ -16,11 +16,11 @@ import type {
   Branch,
   CardType,
   CardWithType,
+  DirectoryUser,
   GatewayChannel,
   MCPServer,
   Repo,
   Session,
-  User,
 } from '@agor-live/client';
 import { shallowEqualEntity } from '../utils/shallowEqual';
 
@@ -49,7 +49,8 @@ export type DataMaps = {
   cardTypeById: Map<string, CardType>;
   repoById: Map<string, Repo>;
   branchById: Map<string, Branch>;
-  userById: Map<string, User>;
+  // Other users' rows are directory entries; only the signed-in user's (or an admin's view) is full.
+  userById: Map<string, DirectoryUser>;
   mcpServerById: Map<string, MCPServer>;
   gatewayChannelById: Map<string, GatewayChannel>;
   artifactById: Map<string, Artifact>;

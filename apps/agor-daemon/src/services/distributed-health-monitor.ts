@@ -26,7 +26,7 @@ import { isAllowedDynamicEnvironmentHealthUrl } from '@agor/core/environment/lif
 import type { Application } from '@agor/core/feathers';
 import type { Branch, BranchID, TenantID } from '@agor/core/types';
 import { createPinnedFetch } from '@agor/core/utils/pinned-fetch';
-import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
+import { isPublicHttpUrl } from '@agor/core/utils/url';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 
 export interface DistributedHealthMonitorOptions {
@@ -41,7 +41,8 @@ export interface DistributedHealthMonitorOptions {
   shutdownDrainTimeoutMs: number;
   random?: () => number;
   generateClaimToken?: () => string;
-  fetchHealth?: typeof fetch;
+  /** Test seam for branch-configured static health URLs. Production defaults to a pinned fetch. */
+  fetchHealth?: ReturnType<typeof createPinnedFetch>;
   /** Test seam for command/provider-reported public health URLs. */
   fetchDynamicHealth?: ReturnType<typeof createPinnedFetch>;
   /** Test seam; production always uses capability-scoped PostgreSQL discovery. */
@@ -92,7 +93,7 @@ export class DistributedHealthMonitor {
   private cursor: EnvironmentHealthRoutingCursor | undefined;
   private readonly random: () => number;
   private readonly generateClaimToken: () => string;
-  private readonly fetchHealth: typeof fetch;
+  private readonly fetchHealth: ReturnType<typeof createPinnedFetch>;
   private readonly fetchDynamicHealth: ReturnType<typeof createPinnedFetch>;
   private readonly activeClaims = new Map<
     string,
@@ -112,11 +113,27 @@ export class DistributedHealthMonitor {
   ) {
     this.random = options.random ?? Math.random;
     this.generateClaimToken = options.generateClaimToken ?? generateId;
-    this.fetchHealth = options.fetchHealth ?? fetch;
+    // Both health URLs are attacker-controllable branch configuration probed
+    // from the daemon's privileged position, so the static path uses the same
+    // pinned, public-only fetch as the dynamic path: it resolves the name and
+    // refuses any private/loopback/link-local/metadata answer at connect time,
+    // defeating the wildcard-DNS and DNS-rebinding SSRF oracle.
+    // Backstop only: fetchObservation's AbortController trips at httpTimeoutMs and
+    // owns the "Timeout" vs "unreachable" message, so the pinned fetch's own timer
+    // stays longer to not race it. The margin stays under MIN_CLAIM_WRITE_MARGIN_MS
+    // so a claim always keeps write headroom after the HTTP budget.
+    const healthFetchTimeoutMs = options.httpTimeoutMs + 2_000;
+    this.fetchHealth =
+      options.fetchHealth ??
+      createPinnedFetch({
+        timeoutMs: healthFetchTimeoutMs,
+        maxBytes: 64 * 1024,
+        isBodyComplete: () => true,
+      });
     this.fetchDynamicHealth =
       options.fetchDynamicHealth ??
       createPinnedFetch({
-        timeoutMs: options.httpTimeoutMs,
+        timeoutMs: healthFetchTimeoutMs,
         maxBytes: 64 * 1024,
         isBodyComplete: () => true,
       });
@@ -498,10 +515,13 @@ export class DistributedHealthMonitor {
       };
     }
     const isDynamicHealth = dynamicHealthUrl !== undefined;
+    // The distributed monitor only runs on HA (shared-Postgres, multi-pod)
+    // deployments, where the daemon is shared and localhost is never a branch's
+    // dev server, so both dynamic and static health are public-only here.
     if (
       isDynamicHealth
         ? !isAllowedDynamicEnvironmentHealthUrl(healthUrl)
-        : !isAllowedHealthCheckUrl(healthUrl)
+        : !isPublicHttpUrl(healthUrl)
     ) {
       return {
         status: 'unhealthy',
@@ -517,21 +537,21 @@ export class DistributedHealthMonitor {
         this.options.httpTimeoutMs
       );
       timeout.unref?.();
+      // The pinned fetch never follows redirects, so a 302 to a link-local
+      // metadata endpoint returns not-ok and is reported unhealthy rather than
+      // being chased — the distributed/managed path is where that matters most.
       const response = await (isDynamicHealth ? this.fetchDynamicHealth : this.fetchHealth)(
         healthUrl,
         {
           method: 'GET',
           signal: controller.signal,
-          // Do not follow redirects (see branches.ts): the distributed/managed
-          // path is where a 302 to a link-local metadata endpoint matters most.
-          redirect: 'manual',
         }
       );
       return {
         status: response.ok ? 'healthy' : 'unhealthy',
         message: response.ok
           ? `HTTP ${response.status}`
-          : `HTTP ${response.status} ${response.statusText}`,
+          : `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`,
         recordWhileStarting: true,
       };
     } catch {

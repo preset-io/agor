@@ -1,4 +1,11 @@
-import type { AgorClient, Artifact, ArtifactID, Board, Branch, User } from '@agor-live/client';
+import type {
+  AgorClient,
+  Artifact,
+  ArtifactID,
+  Board,
+  Branch,
+  DirectoryUser,
+} from '@agor-live/client';
 import { artifactFullscreenPath, shortId } from '@agor-live/client';
 import { AimOutlined, DeleteOutlined, EditOutlined, ExportOutlined } from '@ant-design/icons';
 import {
@@ -33,7 +40,7 @@ interface ArtifactsTableProps {
   artifactById: Map<string, Artifact>;
   branchById: Map<string, Branch>;
   boardById: Map<string, Board>;
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   onUpdate?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDelete?: (artifactId: string) => void;
   /** Close the parent Settings modal so the canvas isn't obscured by it

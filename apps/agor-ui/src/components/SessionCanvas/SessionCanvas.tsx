@@ -10,6 +10,7 @@ import type {
   BranchArchiveOrDeleteOptions,
   BranchID,
   CardWithType,
+  DirectoryUser,
   Repo,
   Session,
   SpawnConfig,
@@ -62,6 +63,7 @@ import {
   useNodesState,
   type Viewport,
 } from 'reactflow';
+import { getSignedInUserRow } from '@/utils/currentUserAuthority';
 import {
   type EntityPlacementIntent,
   EntityPlacementWrites,
@@ -222,7 +224,7 @@ export interface SessionCanvasRef {
 
 interface SessionNodeData {
   session: Session;
-  userById: Map<string, User>;
+  userById: Map<string, DirectoryUser>;
   currentUserId?: string;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: () => void;
@@ -574,7 +576,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const commentById = useAgorStore(selectCommentById);
     const cardById = useAgorStore(selectCardById);
     const userById = useAgorStore(selectUserById);
-    const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
+    const currentUser = getSignedInUserRow(userById, currentUserId);
     const canEditBoard = useCanManageBoard(client, board ?? undefined, currentUser) && !readOnly;
     // Until this board's partition is loaded (e.g. right after a reconnect
     // unloaded it), its cached placements may be stale and its record may be
@@ -4024,7 +4026,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             branch={branches.find((branch) => branch.branch_id === branchTriggerModal.branchId)}
             board={board}
             availableAgents={availableAgents}
-            currentUser={currentUserId ? userById.get(currentUserId) || null : null}
+            currentUser={getSignedInUserRow(userById, currentUserId) ?? null}
             onExecute={handleExecuteBranchTrigger}
           />
         )}

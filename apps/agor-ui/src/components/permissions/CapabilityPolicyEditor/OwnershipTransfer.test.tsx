@@ -72,6 +72,27 @@ describe('ownership transfer command', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(onTransferred).toHaveBeenCalledOnce();
   });
+  it('offers role-less directory entries to a member owner and leaves eligibility to the daemon', async () => {
+    const { role: _hidden, ...colleague } = { ...successor, user_id: 'colleague' as UserID };
+    const patch = vi.fn().mockResolvedValue({ scope: 'management_only' });
+    render(
+      <ConfigProvider theme={{ token: { motion: false } }}>
+        <OwnershipTransfer
+          kind="board"
+          resourceId="board-id"
+          ownerUserId={owner.user_id}
+          currentUser={owner}
+          users={[owner, { ...colleague, name: 'Colleague' } as User]}
+          client={{ service: () => ({ patch }) } as unknown as AgorClient}
+          onTransferred={vi.fn()}
+        />
+      </ConfigProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Transfer ownership' }));
+    expect(screen.getByText(/needs a member or admin role/)).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Successor owner' }));
+    expect(await screen.findByText('Colleague')).toBeInTheDocument();
+  });
   it('keeps a failed/conflicting transfer open without reporting success', async () => {
     const { onTransferred } = setup(owner, true);
     fireEvent.click(screen.getByRole('button', { name: 'Transfer ownership' }));

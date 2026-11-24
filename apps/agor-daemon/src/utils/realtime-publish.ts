@@ -36,6 +36,7 @@ import {
   type User,
   type UserID,
 } from '@agor/core/types';
+import { toUserDirectoryEntry } from '../auth/user-redaction.js';
 import {
   executorTaskRoomName,
   isExecutorTaskRoomName,
@@ -1174,28 +1175,21 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       taskData?.metadata?.mcp_recovery &&
       typeof taskData.session_id === 'string'
     ) {
-      const combined = combinePublishChannels(delivery);
-      const authorizedConnections = new Set(combined.connections);
       const ownerId = await accessCache.getSessionOwnerId(taskData.session_id).catch(() => null);
-      const full = tenantScoped
-        .filter((connection: unknown) => {
-          if (!authorizedConnections.has(connection)) return false;
-          if (isServiceConnection(connection) || isAdminConnection(connection, allowSuperadmin)) {
-            return true;
-          }
-          return ownerId !== null && userFromConnection(connection)?.user_id === ownerId;
-        })
-        .send(stripMcpSlackRecoveryNotice(taskData));
-      const redacted = tenantScoped
-        .filter((connection: unknown) => {
-          if (!authorizedConnections.has(connection)) return false;
-          if (isServiceConnection(connection) || isAdminConnection(connection, allowSuperadmin)) {
-            return false;
-          }
-          return ownerId === null || userFromConnection(connection)?.user_id !== ownerId;
-        })
-        .send(redactMcpRecoveryTopology(taskData));
-      delivery = [full, redacted];
+      delivery = splitOwnerAdminDelivery(tenantScoped, delivery, ownerId, allowSuperadmin, {
+        full: stripMcpSlackRecoveryNotice(taskData),
+        redacted: redactMcpRecoveryTopology(taskData),
+      });
+    }
+    if (context.path === 'users') {
+      // Same split as UsersService reads: full profile to its owner and admins, directory entry to others.
+      delivery = splitOwnerAdminDelivery(
+        tenantScoped,
+        delivery,
+        pickString(asRecord(data), 'user_id'),
+        allowSuperadmin,
+        { redacted: toUserDirectoryEntry(data as Partial<User>) }
+      );
     }
     if (context.path === 'branches' && context.event === 'removed') {
       const removedBranchId = extractBranchId(data, context);
@@ -1319,6 +1313,30 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       envelope.data
     );
   });
+}
+
+/** Re-split an authorized delivery: `full` (or the event payload) to services, admins and the owner; `redacted` to the rest. */
+function splitOwnerAdminDelivery(
+  tenantScoped: PublishChannel,
+  delivery: PublishChannel | PublishChannel[],
+  ownerId: string | null | undefined,
+  allowSuperadmin: boolean,
+  payloads: { full?: unknown; redacted: unknown }
+): PublishChannel[] {
+  const authorized = new Set(combinePublishChannels(delivery).connections);
+  const seesFull = (connection: unknown) =>
+    isServiceConnection(connection) ||
+    isAdminConnection(connection, allowSuperadmin) ||
+    (!!ownerId && userFromConnection(connection)?.user_id === ownerId);
+  const full = tenantScoped.filter(
+    (connection: unknown) => authorized.has(connection) && seesFull(connection)
+  );
+  return [
+    payloads.full === undefined ? full : full.send(payloads.full),
+    tenantScoped
+      .filter((connection: unknown) => authorized.has(connection) && !seesFull(connection))
+      .send(payloads.redacted),
+  ];
 }
 
 function combinePublishChannels(delivery: PublishChannel | PublishChannel[]) {

@@ -2,6 +2,7 @@ import type {
   AgorClient,
   BranchCapabilityPolicy,
   CapabilityPolicyWorkspacePreferences,
+  DirectoryUser,
   Group,
   Session,
   User,
@@ -21,7 +22,7 @@ interface PermissionsTabProps {
   client: AgorClient | null;
   error?: Error | null;
   sessions?: Session[];
-  permissionUsers?: User[];
+  permissionUsers?: DirectoryUser[];
   capabilityPolicy?: BranchCapabilityPolicy | null;
   onCapabilityPolicyChange?: (value: BranchCapabilityPolicy) => void;
   workspacePreferences?: CapabilityPolicyWorkspacePreferences;

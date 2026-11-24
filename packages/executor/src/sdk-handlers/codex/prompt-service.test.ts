@@ -66,6 +66,9 @@ let mockInstanceCount = 0;
 // Codex.Codex().
 let mockInstanceBaseUrls: Array<string | undefined> = [];
 let mockInstanceConfigs: Array<unknown> = [];
+// Captures the `env` each constructed instance saw. Proves MCP bearer tokens
+// reach the spawned Codex CLI child env and never the executor's process.env.
+let mockInstanceEnvs: Array<Record<string, string> | undefined> = [];
 let mockClosedInstanceIds: number[] = [];
 let mockStreamEvents: Array<Record<string, unknown>> = [];
 let mockStartThreadId: string | undefined = 'mock-thread-id';
@@ -105,12 +108,18 @@ vi.mock('@openai/codex-sdk', () => {
     baseUrl: string | undefined;
     instanceId: number;
 
-    constructor(options: { apiKey?: string; baseUrl?: string; config?: unknown }) {
+    constructor(options: {
+      apiKey?: string;
+      baseUrl?: string;
+      config?: unknown;
+      env?: Record<string, string>;
+    }) {
       this.apiKey = options.apiKey || '';
       this.baseUrl = options.baseUrl;
       this.instanceId = ++mockInstanceCount;
       mockInstanceBaseUrls.push(options.baseUrl);
       mockInstanceConfigs.push(options.config);
+      mockInstanceEnvs.push(options.env);
     }
 
     close() {
@@ -165,6 +174,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
     mockInstanceCount = 0;
     mockInstanceBaseUrls = [];
     mockInstanceConfigs = [];
+    mockInstanceEnvs = [];
     mockClosedInstanceIds = [];
     mockStreamEvents = [];
     mockStartThreadId = 'mock-thread-id';
@@ -253,6 +263,37 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
     expect(mockInstanceCount).toBe(countAfterInit + 2);
   });
 
+  it('rebuilds the Codex client when an MCP bearer rotates but the config is unchanged', async () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined, // reposRepo
+      'stable-key',
+      mockDb
+    );
+
+    const countAfterInit = mockInstanceCount;
+    const serviceWithPrivate = service as any;
+    const config = { model_instructions_file: '/tmp/a.md' };
+
+    // First build with a token value.
+    await serviceWithPrivate.ensureCodexClient(config, { AGOR_MCP_S1_AGOR: 'token-v1' });
+    expect(mockInstanceCount).toBe(countAfterInit + 1);
+
+    // Same config AND same token value — cache hit, no new instance.
+    await serviceWithPrivate.ensureCodexClient(config, { AGOR_MCP_S1_AGOR: 'token-v1' });
+    expect(mockInstanceCount).toBe(countAfterInit + 1);
+
+    // Identical config but a ROTATED token value must invalidate the cache.
+    await serviceWithPrivate.ensureCodexClient(config, { AGOR_MCP_S1_AGOR: 'token-v2' });
+    expect(mockInstanceCount).toBe(countAfterInit + 2);
+    // The rebuilt client received the rotated value on its child env only.
+    expect((mockInstanceEnvs.at(-1) as Record<string, string>).AGOR_MCP_S1_AGOR).toBe('token-v2');
+    expect(process.env.AGOR_MCP_S1_AGOR).toBeUndefined();
+  });
+
   it('should handle empty/undefined API keys correctly', async () => {
     const service = new CodexPromptService(
       mockMessagesRepo,
@@ -291,6 +332,7 @@ describe('CodexPromptService - OPENAI_BASE_URL handling', () => {
     mockInstanceCount = 0;
     mockInstanceBaseUrls = [];
     mockInstanceConfigs = [];
+    mockInstanceEnvs = [];
     mockClosedInstanceIds = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
@@ -361,6 +403,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     mockInstanceCount = 0;
     mockInstanceBaseUrls = [];
     mockInstanceConfigs = [];
+    mockInstanceEnvs = [];
     mockClosedInstanceIds = [];
     mockStreamEvents = [];
     mockStartThreadOptions = [];
@@ -372,6 +415,10 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     // itself may be inside an outer sandbox, which must not rewrite the policy
     // under test into danger-full-access.
     delete process.env.AGOR_OUTER_SANDBOX;
+    // Agor-exported MCP variables in the runner's env would otherwise join the shell policy.
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith('AGOR_MCP_')) delete process.env[key];
+    }
     vi.clearAllMocks();
   });
 
@@ -893,6 +940,7 @@ describe('CodexPromptService - forked sessions', () => {
     mockInstanceCount = 0;
     mockInstanceBaseUrls = [];
     mockInstanceConfigs = [];
+    mockInstanceEnvs = [];
     mockClosedInstanceIds = [];
     mockStreamEvents = [];
     mockStartThreadOptions = [];
@@ -983,7 +1031,14 @@ describe('CodexPromptService - forked sessions', () => {
           const config = mockInstanceConfigs.at(-1) as {
             model_instructions_file: string;
             mcp_servers: { agor: { url: string; bearer_token_env_var: string } };
+            shell_environment_policy: { set: Record<string, string> };
           };
+          // Config becomes Codex argv; the bearer rides only an env var hidden from shells.
+          expect(JSON.stringify(config)).not.toContain('child-test-token');
+          expect(config.mcp_servers.agor.bearer_token_env_var).toMatch(/^AGOR_MCP_/);
+          expect(
+            config.shell_environment_policy.set[config.mcp_servers.agor.bearer_token_env_var]
+          ).toBe('');
           expect(path.basename(config.model_instructions_file)).toBe(
             'agor-codex-instructions-child-session.md'
           );
@@ -994,9 +1049,11 @@ describe('CodexPromptService - forked sessions', () => {
           expect(config.mcp_servers.agor).toMatchObject({
             http_headers: { 'x-agor-mcp-client': 'codex' },
           });
-          expect(process.env[config.mcp_servers.agor.bearer_token_env_var]).toBe(
-            'child-test-token'
-          );
+          // The bearer reaches ONLY the spawned Codex CLI's own env (F26);
+          // it must never land on the executor's own process.env.
+          const childEnv = mockInstanceEnvs.at(-1) as Record<string, string>;
+          expect(childEnv[config.mcp_servers.agor.bearer_token_env_var]).toBe('child-test-token');
+          expect(process.env[config.mcp_servers.agor.bearer_token_env_var]).toBeUndefined();
           expect(emitted.find((event) => event.type === 'complete')).toMatchObject({
             threadId: 'forked-thread-id',
           });
@@ -1808,6 +1865,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     mockInstanceCount = 0;
     mockInstanceBaseUrls = [];
     mockInstanceConfigs = [];
+    mockInstanceEnvs = [];
     mockClosedInstanceIds = [];
     mockStreamEvents = [];
     mockStartThreadId = 'mock-thread-id';
@@ -2586,7 +2644,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     'runtime failure SENTINEL_RUNTIME',
   ])('keeps real message-only SDK failures unknown and generic: %s', async (message) => {
     const { service } = await makeInitializedStreamingService('existing-thread-id');
-    // 0.160.0 ThreadError has no status/code/context discriminator.
+    // 0.169.0 ThreadError has no status/code/context discriminator.
     const events: ThreadEvent[] = [
       { type: 'error', message },
       { type: 'turn.failed', error: { message } },
@@ -3191,33 +3249,27 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
     ]);
 
     const service = makeService();
-    try {
-      const { servers, total } = await (service as any).buildMcpServersConfig(
-        '019e3700-aaaa-bbbb-cccc-dddddddddddd',
-        undefined,
-        { sessionOwnerId }
-      );
+    const { servers, total, mcpEnv } = await (service as any).buildMcpServersConfig(
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      undefined,
+      { sessionOwnerId }
+    );
 
-      expect(total).toBe(1);
-      expect(servers.userguiding).toMatchObject({
-        url: 'https://example.com/mcp',
-        env_http_headers: {
-          'X-API-Key': 'AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_1',
-          'X-Workspace': 'AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_2',
-        },
-      });
-      expect(servers.userguiding).not.toHaveProperty('headers');
-      expect(servers.userguiding).not.toHaveProperty('http_headers');
-      expect(process.env.AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_1).toBe(
-        'secret-api-key'
-      );
-      expect(process.env.AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_2).toBe(
-        'workspace-123'
-      );
-    } finally {
-      delete process.env.AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_1;
-      delete process.env.AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_2;
-    }
+    expect(total).toBe(1);
+    expect(servers.userguiding).toMatchObject({
+      url: 'https://example.com/mcp',
+      env_http_headers: {
+        'X-API-Key': 'AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_1',
+        'X-Workspace': 'AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_2',
+      },
+    });
+    expect(servers.userguiding).not.toHaveProperty('headers');
+    expect(servers.userguiding).not.toHaveProperty('http_headers');
+    // Header values ride the returned child-env map, not the executor process.env (F26).
+    expect(mcpEnv.AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_1).toBe('secret-api-key');
+    expect(mcpEnv.AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_2).toBe('workspace-123');
+    expect(process.env.AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_1).toBeUndefined();
+    expect(process.env.AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_2).toBeUndefined();
   });
 
   it('sends vendor token headers through env_http_headers, never as a Bearer token', async () => {
@@ -3247,7 +3299,7 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const prefix = 'AGOR_MCP_019e3700aaaabbbbccccdddd';
     try {
-      const { servers } = await (makeService() as any).buildMcpServersConfig(
+      const { servers, mcpEnv } = await (makeService() as any).buildMcpServersConfig(
         '019e3700-aaaa-bbbb-cccc-dddddddddddd',
         undefined,
         { sessionOwnerId, requireMcpServers: true }
@@ -3262,8 +3314,11 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
         expect(server).not.toHaveProperty('bearer_token_env_var');
         expect(server.required).toBe(true);
       }
-      expect(process.env[`${prefix}_PAGERDUTY_HEADER_1`]).toBe('Token token=pd-key');
-      expect(process.env[`${prefix}_SIMILARWEB_HEADER_1`]).toBe('sw-key');
+      // Rendered header values ride the child-env map, not the executor process.env (F26).
+      expect(mcpEnv[`${prefix}_PAGERDUTY_HEADER_1`]).toBe('Token token=pd-key');
+      expect(mcpEnv[`${prefix}_SIMILARWEB_HEADER_1`]).toBe('sw-key');
+      expect(process.env[`${prefix}_PAGERDUTY_HEADER_1`]).toBeUndefined();
+      expect(process.env[`${prefix}_SIMILARWEB_HEADER_1`]).toBeUndefined();
       expect(JSON.stringify(warn.mock.calls)).not.toContain('credential_unavailable');
     } finally {
       warn.mockRestore();
@@ -3560,9 +3615,13 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
         remote('asana', { type: 'oauth', oauth_dcr_mode: 'disabled', oauth_client_id: 'app' }),
       ]);
       mcpAuthMocks.resolveMCPAuthHeaders.mockResolvedValue({ Authorization: 'Bearer token' });
-      const { servers, signInNotice } = await build();
+      const { servers, signInNotice, mcpEnv } = await build();
       expect(servers.asana.bearer_token_env_var).toBeDefined();
       expect(signInNotice).toBeUndefined();
+      // The per-server bearer value rides the returned child-env map, never the
+      // executor's own process.env (F26).
+      expect(mcpEnv[servers.asana.bearer_token_env_var]).toBe('token');
+      expect(process.env[servers.asana.bearer_token_env_var]).toBeUndefined();
     });
   });
 });

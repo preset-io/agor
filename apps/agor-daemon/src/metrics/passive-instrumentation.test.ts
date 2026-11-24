@@ -124,6 +124,139 @@ describe('Feathers metrics hook', () => {
     expect(operationalMetrics.finished).toEqual(['socketio']);
   });
 
+  it('buckets an uncoded throw as a real 500, not a non-numeric label that 5xx alerting cannot reconcile', async () => {
+    const metrics = new RecordingMetrics();
+    const hook = createFeathersMetricsHook(metrics);
+    // A raw TypeError from unvalidated input carries no `.code`. It must not be
+    // tagged `status_code: 'error'` (the old behavior), which downstream 5xx
+    // alerting could not line up with an HTTP status family.
+    const uncoded = new TypeError("Cannot destructure property 'taskId' of 'null'");
+    await expect(
+      hook(
+        {
+          path: 'config/resolve-api-key',
+          method: 'create',
+          params: { provider: 'socketio' },
+        } as unknown as HookContext,
+        async () => {
+          throw uncoded;
+        }
+      )
+    ).rejects.toBe(uncoded);
+    expect(metrics.calls[0]?.tags).toMatchObject({ outcome: 'error', status_code: 500 });
+    expect(metrics.calls[0]?.tags?.status_code).not.toBe('error');
+  });
+
+  it('buckets a thrown non-object value as a real 500', async () => {
+    const metrics = new RecordingMetrics();
+    const hook = createFeathersMetricsHook(metrics);
+    await expect(
+      hook(
+        {
+          path: 'sessions',
+          method: 'get',
+          params: { provider: 'rest' },
+        } as unknown as HookContext,
+        async () => {
+          throw 'kaboom';
+        }
+      )
+    ).rejects.toBe('kaboom');
+    expect(metrics.calls[0]?.tags).toMatchObject({ outcome: 'error', status_code: 500 });
+  });
+
+  it('keeps a coded 4xx in the client-error family (never promoted to 5xx)', async () => {
+    const metrics = new RecordingMetrics();
+    const hook = createFeathersMetricsHook(metrics);
+    const badRequest = Object.assign(new Error('bad input'), { code: 400 });
+    await expect(
+      hook(
+        {
+          path: 'config/resolve-api-key',
+          method: 'create',
+          params: { provider: 'socketio' },
+        } as unknown as HookContext,
+        async () => {
+          throw badRequest;
+        }
+      )
+    ).rejects.toBe(badRequest);
+    expect(metrics.calls[0]?.tags).toMatchObject({ outcome: 'error', status_code: 400 });
+  });
+
+  it('buckets a non-HTTP numeric code (e.g. a child-process exit code) as a real 500', async () => {
+    const metrics = new RecordingMetrics();
+    const hook = createFeathersMetricsHook(metrics);
+    // A child_process / exec failure carries its exit code in `.code` (here 1).
+    // That is not an HTTP status: tagging it verbatim lands the request outside
+    // the 4xx/5xx families and hides a genuine server fault from alerting.
+    const childProcessFailure = Object.assign(new Error('git exited with 1'), { code: 1 });
+    await expect(
+      hook(
+        {
+          path: 'repos',
+          method: 'create',
+          params: { provider: 'socketio' },
+        } as unknown as HookContext,
+        async () => {
+          throw childProcessFailure;
+        }
+      )
+    ).rejects.toBe(childProcessFailure);
+    expect(metrics.calls[0]?.tags).toMatchObject({ outcome: 'error', status_code: 500 });
+    expect(metrics.calls[0]?.tags?.status_code).not.toBe(1);
+  });
+
+  it('buckets an out-of-range numeric code as a real 500', async () => {
+    const metrics = new RecordingMetrics();
+    const hook = createFeathersMetricsHook(metrics);
+    // 600 is above the HTTP family; 300 (3xx) is below 400. Neither is a Feathers
+    // response status, so both collapse to 500 rather than a phantom bucket.
+    for (const code of [300, 600]) {
+      metrics.calls.length = 0;
+      const outOfRange = Object.assign(new Error('nonsense status'), { code });
+      await expect(
+        hook(
+          {
+            path: 'repos',
+            method: 'create',
+            params: { provider: 'socketio' },
+          } as unknown as HookContext,
+          async () => {
+            throw outOfRange;
+          }
+        )
+      ).rejects.toBe(outOfRange);
+      expect(metrics.calls[0]?.tags).toMatchObject({ outcome: 'error', status_code: 500 });
+    }
+  });
+
+  it('buckets shell/child-process exit codes (127, 128) as a real 500, not a phantom status', async () => {
+    const metrics = new RecordingMetrics();
+    const hook = createFeathersMetricsHook(metrics);
+    // 127 ("command not found") and 128 (git fatal) are ≤ 255 and would slip
+    // through a naive 100–599 window; they are not HTTP statuses, so the 400
+    // lower bound folds them to 500 instead of a phantom 127/128 bucket.
+    for (const code of [127, 128]) {
+      metrics.calls.length = 0;
+      const exitFailure = Object.assign(new Error(`exited with ${code}`), { code });
+      await expect(
+        hook(
+          {
+            path: 'repos',
+            method: 'create',
+            params: { provider: 'socketio' },
+          } as unknown as HookContext,
+          async () => {
+            throw exitFailure;
+          }
+        )
+      ).rejects.toBe(exitFailure);
+      expect(metrics.calls[0]?.tags).toMatchObject({ outcome: 'error', status_code: 500 });
+      expect(metrics.calls[0]?.tags?.status_code).not.toBe(code);
+    }
+  });
+
   it('preserves MCP as a distinct low-cardinality transport', async () => {
     const metrics = new RecordingMetrics();
     const hook = createFeathersMetricsHook(metrics);

@@ -5,10 +5,10 @@
  */
 
 /** Default Codex model */
-export const DEFAULT_CODEX_MODEL = 'gpt-6-astra';
+export const DEFAULT_CODEX_MODEL = 'gpt-6.2-astra';
 
 /** Codex Mini model for cost-effective usage */
-export const CODEX_MINI_MODEL = 'gpt-5.6-terra';
+export const CODEX_MINI_MODEL = 'gpt-6.1-terra';
 
 export type CodexModelStatus = 'current' | 'known';
 export type CodexModelAvailability = 'supported' | 'provider-dependent' | 'unsupported';
@@ -30,23 +30,37 @@ export type CodexModelLifecycleMetadata = {
  * Uses `as const satisfies` to preserve literal key types for CodexModel.
  */
 const _CODEX_MODEL_REGISTRY = {
-  'gpt-6-astra': {
-    name: 'GPT-6 Astra (Recommended)',
+  'gpt-6.2-astra': {
+    name: 'GPT-6.2 Astra (Recommended)',
     description: 'Most capable model for complex reasoning, coding, and end-to-end work',
+    status: 'current',
+    selectable: true,
+    availability: 'provider-dependent',
+  },
+  'gpt-6.2-sol': {
+    name: 'GPT-6.2 Sol',
+    description: 'Upgraded Sol model for agentic coding, computer use, and professional work',
+    status: 'current',
+    selectable: true,
+    availability: 'provider-dependent',
+  },
+  'gpt-6-astra': {
+    name: 'GPT-6 Astra',
+    description: 'Previous Astra model for complex reasoning, coding, and end-to-end work',
     status: 'current',
     selectable: true,
     availability: 'provider-dependent',
   },
   'gpt-6.1-sol': {
     name: 'GPT-6.1 Sol',
-    description: 'Upgraded Sol model for agentic coding, computer use, and professional work',
+    description: 'Previous Sol model for agentic coding, computer use, and professional work',
     status: 'current',
     selectable: true,
     availability: 'provider-dependent',
   },
   'gpt-6-sol': {
     name: 'GPT-6 Sol',
-    description: 'Previous Sol model for complex coding and agentic workflows',
+    description: 'Earlier Sol model for complex coding and agentic workflows',
     status: 'current',
     selectable: true,
     availability: 'provider-dependent',
@@ -58,10 +72,17 @@ const _CODEX_MODEL_REGISTRY = {
     selectable: true,
     availability: 'provider-dependent',
   },
+  'gpt-6.1-terra': {
+    name: 'GPT-6.1 Terra',
+    description: 'Balanced, lower-cost model for everyday coding, tool use, and computer use',
+    status: 'current',
+    selectable: true,
+    availability: 'provider-dependent',
+  },
   // GPT-5.6 models
   'gpt-5.6-terra': {
     name: 'GPT-5.6 Terra',
-    description: 'Balanced GPT-5.6 model for everyday reasoning and tool use',
+    description: 'Previous Terra model for everyday reasoning and tool use',
     status: 'current',
     selectable: true,
     availability: 'supported',
@@ -366,10 +387,13 @@ const DEFAULT_CODEX_CONTEXT_LIMIT = 200_000;
  * Unknown models fall back to 200k.
  */
 export const CODEX_CONTEXT_LIMITS: Record<string, number> = {
+  'gpt-6.2-astra': 1_050_000,
+  'gpt-6.2-sol': 1_050_000,
   'gpt-6-astra': 1_050_000,
   'gpt-6.1-sol': 1_050_000,
   'gpt-6-sol': 1_050_000,
   'gpt-6-luna': 1_050_000,
+  'gpt-6.1-terra': 1_050_000,
   // GPT-5.6 models
   'gpt-5.6-terra': 1_050_000,
   // GPT-5.5 models

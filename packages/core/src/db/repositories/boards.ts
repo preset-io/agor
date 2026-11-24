@@ -40,6 +40,7 @@ import * as yaml from 'js-yaml';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId, isValidUUID } from '../../lib/ids';
 import { generateSlug } from '../../lib/slugs';
+import { boardObjectStyleError } from '../../utils/board-object-style';
 import { normalizeExactEmojiShortcode } from '../../utils/emoji-shortcodes';
 import { getBoardUrl } from '../../utils/url';
 import { sanitizeZoneOrder, ZONE_LAYOUTS } from '../../utils/zone-layout';
@@ -88,6 +89,20 @@ function validateBoardPermissionDefaults(board: Partial<Board>): void {
     throw new RepositoryError(
       `Invalid board default_others_fs_access: ${board.default_others_fs_access}`
     );
+  }
+}
+
+/** A board object whose style fields are not plain values. */
+export class BoardObjectValidationError extends RepositoryError {}
+
+/** Reject written objects with unusable style fields; fields unchanged from `previous` pass. */
+function assertBoardObjectStyles(
+  objects: Record<string, unknown> | undefined,
+  previous?: Record<string, unknown>
+): void {
+  for (const [objectId, object] of Object.entries(objects ?? {})) {
+    const reason = boardObjectStyleError(object, previous?.[objectId]);
+    if (reason) throw new BoardObjectValidationError(`Board object ${objectId}: ${reason}`);
   }
 }
 
@@ -165,9 +180,9 @@ export function sanitizeImportedBoardObjects(objects: Record<string, unknown>): 
       });
       continue;
     }
-    const reason = BOARD_OBJECT_IMPORT_RULES[type as BoardObjectType](
-      object as Record<string, unknown>
-    );
+    const reason =
+      BOARD_OBJECT_IMPORT_RULES[type as BoardObjectType](object as Record<string, unknown>) ??
+      boardObjectStyleError(object);
     if (reason) {
       skipped.push({ object_id: id, type, reason: 'invalid', detail: reason });
       continue;
@@ -425,6 +440,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         }
       }
 
+      assertBoardObjectStyles(data.objects);
       const insertData = this.boardToInsert({
         ...data,
         board_id: boardId,
@@ -819,6 +835,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       if (!current) {
         throw new EntityNotFoundError('Board', id);
       }
+      assertBoardObjectStyles(updates.objects, current.objects);
 
       const slugUpdateProvided = Object.hasOwn(updates, 'slug');
       let nextSlug: string | undefined = current.slug;
@@ -1223,6 +1240,8 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     try {
       const fullId = await this.resolveId(boardId);
       const current = await this.findById(fullId);
+      // Check the whole batch first: objects are written one at a time.
+      assertBoardObjectStyles(objects, current?.objects);
       for (const [objectId, objectData] of Object.entries(objects)) {
         await this.upsertBoardObject(
           boardId,

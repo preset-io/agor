@@ -115,6 +115,25 @@ describe('MarkdownRenderer', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
+  it('renders raw HTML and script links in stored content inert', async () => {
+    const { container } = render(
+      <MarkdownRenderer
+        content={[
+          'Before <script>window.__xss = 1</script>',
+          '<img src="x" onerror="window.__xss = 1"> <iframe src="/"></iframe>',
+          '<b style="color: red" onclick="window.__xss = 1">bold</b> [link](javascript:window.__xss=1)',
+          'After',
+        ].join('\n\n')}
+      />
+    );
+
+    expect(await screen.findByText('After')).toBeInTheDocument();
+    expect(container.querySelector('script, iframe, [onerror], [onclick], [style]')).toBeNull();
+    for (const anchor of Array.from(container.querySelectorAll('a[href]'))) {
+      expect(anchor.getAttribute('href')).not.toMatch(/^\s*javascript:/i);
+    }
+  });
+
   it('renders internal upload links as authenticated preview and download actions', async () => {
     const fetchMock = vi
       .fn()

@@ -2,8 +2,19 @@
 import { GOLD_SHIMMER_BOARD_BACKGROUND } from '@agor/core/design/board-backgrounds';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { Form, type FormInstance } from 'antd';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { BoardBackgroundEditor, deriveBackgroundMode } from './BoardBackgroundEditor';
+
+const sanitizer = vi.hoisted(() => ({ dropAll: false }));
+vi.mock('../../utils/sanitizeCss', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/sanitizeCss')>();
+  return {
+    ...actual,
+    buildScopedBoardCss: (params: Parameters<typeof actual.buildScopedBoardCss>[0]) =>
+      sanitizer.dropAll ? '' : actual.buildScopedBoardCss(params),
+  };
+});
+
 import { BACKGROUND_PRESETS } from './boardBackgroundPresets';
 
 const CUSTOM_GRADIENT = 'linear-gradient(180deg, #101010, #202020)';
@@ -133,5 +144,22 @@ describe('BoardBackgroundEditor', () => {
     const textarea = screen.getByLabelText('Custom background CSS') as HTMLTextAreaElement;
     expect(textarea.value).toBe(CUSTOM_GRADIENT);
     expect(screen.queryByText(DEFAULT_TEXT)).not.toBeInTheDocument();
+  });
+
+  it('warns when the safety check would drop the board CSS entirely', () => {
+    const notApplied = /This CSS will not be applied/;
+    const { unmount } = render(
+      <Harness signal="a" initialValues={{ custom_css: '.x { color: red }' }} />
+    );
+    expect(screen.queryByText(notApplied)).not.toBeInTheDocument();
+    unmount();
+
+    sanitizer.dropAll = true;
+    try {
+      render(<Harness signal="a" initialValues={{ custom_css: '.x { color: red }' }} />);
+      expect(screen.getByText(notApplied)).toBeInTheDocument();
+    } finally {
+      sanitizer.dropAll = false;
+    }
   });
 });

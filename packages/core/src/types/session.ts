@@ -260,7 +260,7 @@ export interface Session {
   agentic_tool_version?: string;
   /** SDK session ID for maintaining conversation history (Claude Agent SDK, Codex SDK, etc.) */
   sdk_session_id?: string;
-  /** MCP authentication token for Agor self-access */
+  /** Response-only MCP bearer minted for the caller by `get`/`create`; never persisted. */
   mcp_token?: string;
   /** Server-owned: a complete MCP selection was supplied, including an empty set. */
   mcp_selection_explicit?: boolean;

@@ -30,6 +30,7 @@ import {
   attachHiddenTenant,
   BoardCommentsRepository,
   BoardObjectRepository,
+  BoardObjectValidationError,
   BoardRepository,
   type BranchRepository,
   CapabilityPolicyRepository,
@@ -236,7 +237,7 @@ import {
   recomputeNextRunAt,
   validateScheduleConfig,
 } from './utils/schedule-hooks.js';
-import { createSessionMcpTokenAfterHooks } from './utils/session-mcp-token-hook.js';
+import { createSessionMcpTokenHook } from './utils/session-mcp-token-hook.js';
 import { deferWithSessionQueueTenantScope } from './utils/session-queue-tenant-scope.js';
 import {
   isTerminalQueueProcessingSuppressed,
@@ -1251,6 +1252,14 @@ export function realtimeAuthorizationInvalidationSubject(
   return typeof userId === 'string' ? { userId } : {};
 }
 
+/** Board object style validation failures are the caller's input, not a server error. */
+function boardObjectValidationAsBadRequest(context: HookContext): HookContext {
+  if (context.error instanceof BoardObjectValidationError) {
+    context.error = new BadRequest(context.error.message);
+  }
+  return context;
+}
+
 export function registerHooks(ctx: RegisterHooksContext): void {
   const {
     db,
@@ -1445,13 +1454,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     jwtSecret,
   });
   const executionMode = resolveExecutionSecurityMode(config);
-  const sessionMcpTokenAfterHooks = createSessionMcpTokenAfterHooks({
+  const sessionMcpTokenGetHook = createSessionMcpTokenHook({
     app,
     config,
-    onGetAttached: (session) =>
+    onAttached: (session) =>
       mcpTokenDebug(`🔄 Resolved MCP token for session ${shortId(session.session_id)}`),
-    onCreateAttached: (session) =>
-      console.log(`🎫 MCP token issued for session ${shortId(session.session_id)}`),
   });
 
   const tenantOwnedServicePaths = TENANT_OWNED_SERVICE_PATHS;
@@ -2164,6 +2171,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       patch: [requireMinimumRole(ROLES.MEMBER, 'update artifacts'), ensureArtifactOwnerOrAdmin()],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete artifacts'), ensureArtifactOwnerOrAdmin()],
     },
+    // Publishing and moving an artifact write its board placement.
+    error: { all: [boardObjectValidationAsBadRequest] },
   } as never);
 
   // Custom REST routes for artifact payload and console
@@ -3476,7 +3485,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           return context;
         },
       ],
-      get: [sessionMcpTokenAfterHooks.get],
+      get: [sessionMcpTokenGetHook],
       create: [
         async (context) => {
           const session = context.result as Session;
@@ -3487,7 +3496,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           );
           return context;
         },
-        sessionMcpTokenAfterHooks.create,
         // TODO: OpenCode session creation moved to executor - implement via IPC if needed
       ],
       patch: [
@@ -3518,6 +3526,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 }
                 await gatewayService.updateProgress({
                   session_id: session.session_id,
+                  task_id: terminalTaskId,
                   state: 'done',
                 });
               } catch (error) {
@@ -4155,6 +4164,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
     },
+    error: { all: [boardObjectValidationAsBadRequest] },
     // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in default hook map
   } as any);
 

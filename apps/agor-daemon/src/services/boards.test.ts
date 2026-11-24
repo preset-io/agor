@@ -10,11 +10,15 @@ import {
   BoardObjectRepository,
   BoardRepository,
   BranchRepository,
+  boards,
   CapabilityPolicyRepository,
   type Database,
+  eq,
   generateId,
   RepoRepository,
+  select,
   UsersRepository,
+  update,
 } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
 import type { Board, BoardID, BranchID, UUID } from '@agor/core/types';
@@ -386,6 +390,26 @@ describe('BoardsService - Custom Methods', () => {
     expect(clonedPolicy.board_access.sharing_mode).toBe('private');
     expect(clonedPolicy.branch_template.access.sharing_mode).toBe('private');
   });
+
+  dbTest(
+    'clone leaves out stored objects whose style fields a write would reject',
+    async ({ db }) => {
+      await ensureTestUser(db);
+      const service = new BoardsService(db);
+      const original = (await service.create({ name: 'Legacy', created_by: TEST_USER })) as Board;
+      const zone = { type: 'zone', x: 0, y: 0, width: 400, height: 300, label: 'Z' } as const;
+      const legacy = { type: 'text', x: 0, y: 0, content: 'Hi', color: 'var(--legacy)' };
+      const row = await select(db).from(boards).where(eq(boards.board_id, original.board_id)).one();
+      await update(db, boards)
+        .set({ data: { ...(row?.data as Record<string, unknown>), objects: { zone, legacy } } })
+        .where(eq(boards.board_id, original.board_id))
+        .run();
+
+      const cloned = await service.clone(original.board_id, 'Legacy copy', TEST_PARAMS);
+
+      expect(Object.keys(cloned.objects ?? {})).toEqual(['zone']);
+    }
+  );
 
   dbTest('clone should accept slug identifiers', async ({ db }) => {
     await ensureTestUser(db);

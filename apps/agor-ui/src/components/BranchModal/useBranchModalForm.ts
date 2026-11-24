@@ -22,6 +22,7 @@ import type {
   Branch,
   BranchCapabilityPolicy,
   CapabilityPolicyWorkspacePreferences,
+  DirectoryUser,
   EffectiveBranchAccess,
   EffectiveCapabilityPolicyAccess,
   Group,
@@ -81,7 +82,7 @@ export interface BranchModalFormApi {
   setCapabilityPolicy: (value: BranchCapabilityPolicy) => void;
   workspacePreferences: CapabilityPolicyWorkspacePreferences;
 
-  allUsers: User[];
+  allUsers: DirectoryUser[];
   allGroups: Group[];
   permissionsLoading: boolean;
   canViewPermissions: boolean;
@@ -144,7 +145,7 @@ export function useBranchModalForm({
   currentUser,
   open,
 }: UseBranchModalFormOptions): BranchModalFormApi {
-  const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [allUsers, setAllUsers] = useState<DirectoryUser[]>([]);
   const [allGroups, setAllGroups] = useState<Group[]>([]);
   const [permissionsLoading, setPermissionsLoading] = useState<boolean>(true);
   const [effectiveAccess, setEffectiveAccess] = useState<EffectiveBranchAccess | null>(null);
@@ -260,7 +261,8 @@ export function useBranchModalForm({
             ? (accessResult.value as unknown as EffectiveBranchAccess)
             : null
         );
-        const users = usersResult.status === 'fulfilled' ? (usersResult.value as User[]) : [];
+        const users =
+          usersResult.status === 'fulfilled' ? (usersResult.value as DirectoryUser[]) : [];
         setAllUsers(users);
         setAllGroups(groupsResult.status === 'fulfilled' ? (groupsResult.value as Group[]) : []);
         setWorkspacePreferences(

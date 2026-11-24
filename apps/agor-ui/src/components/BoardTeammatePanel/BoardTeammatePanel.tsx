@@ -23,6 +23,7 @@ import {
 } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { getSignedInUserRow } from '@/utils/currentUserAuthority';
 import { useBoardPartition } from '../../hooks/useBoardPartition';
 import { useCanManageBoard } from '../../hooks/useCanManageBoard';
 import { type AgorState, useAgorStore } from '../../store/agorStore';
@@ -222,7 +223,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   const userById = useAgorStore(selectUserById);
   const commentById = useAgorStore(selectCommentById);
   const boardObjects = board?.objects;
-  const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
+  const currentUser = getSignedInUserRow(userById, currentUserId);
   const canEditBoard = useCanManageBoard(client, board ?? undefined, currentUser);
   const { lookup: teammateLookup, retry: retryTeammateLookup } = usePrimaryTeammateLookup(
     client,

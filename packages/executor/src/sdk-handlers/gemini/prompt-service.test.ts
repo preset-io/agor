@@ -256,6 +256,31 @@ describe('Gemini prompt boundary', () => {
     });
     expect(state.dispose).toHaveBeenCalledOnce();
   });
+  it('hands the Agor bearer to the in-process SDK without exporting it to tools', async () => {
+    vi.mocked(sessions.findById).mockResolvedValue({
+      branch_id: 'branch',
+      created_by: 'owner',
+      model_config: { model: 'gemini-3.8-flash' },
+      mcp_token: 'gemini-agor-token',
+    } as never);
+    state.events = [[event('content', 'answer'), event('finished', {})]];
+    await collect(
+      new GeminiPromptService(
+        messages,
+        sessions,
+        'fake-key',
+        branches,
+        undefined,
+        undefined,
+        undefined,
+        true
+      )
+    );
+    const { mcpServers } = state.config.mock.calls[0][0];
+    expect(mcpServers.agor.headers).toMatchObject({ Authorization: 'Bearer gemini-agor-token' });
+    // Gemini's shell tool runs from this process, whose env never carries the bearer.
+    expect(JSON.stringify(process.env)).not.toContain('gemini-agor-token');
+  });
   it('treats vendor token header recipes as resolved MCP auth', async () => {
     vi.mocked(getMcpServersForSession).mockResolvedValueOnce([
       {

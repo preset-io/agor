@@ -643,17 +643,22 @@ export function isPublicHttpUrl(rawUrl: string): boolean {
 }
 
 /**
- * Validates that a health check URL targets an allowed destination.
+ * Validates a **trusted-local** static health-check URL.
  *
- * Blocks:
- * - Non-HTTP(S) protocols (file://, gopher://, etc.) — via normalizeOptionalHttpUrl
- * - Cloud metadata endpoints (169.254.x.x link-local range, metadata.google.internal)
- * - IPv6 link-local addresses (fe80::) and AWS IPv6 metadata (fd00:ec2::254)
+ * Deliberately weaker than {@link isPublicHttpUrl}: a health check on a
+ * trusted-local single-tenant install legitimately targets localhost/private
+ * networks, because that is where a branch's dev server runs (see the
+ * environment-configuration guide's `health: http://localhost:.../health`
+ * example). It only string-blocks the obvious cloud-metadata/link-local
+ * literals.
  *
- * Deliberately weaker than {@link isPublicHttpUrl}: a health check legitimately
- * targets localhost and private networks, because that is where a branch's dev
- * server runs. Use `isPublicHttpUrl` for anything reached on behalf of
- * untrusted input.
+ * This is used ONLY on the permissive path. Isolated or multi-tenant
+ * deployments (`sandbox`/`delegated`/`required_from_auth`) and dynamic
+ * (provider-reported) health instead require {@link isPublicHttpUrl} and fetch
+ * through `createPinnedFetch`, which resolves the name and refuses any private
+ * answer at connect time (defeating wildcard-DNS and DNS rebinding). The caller
+ * chooses between the two via `enforcesPublicHealthEgress`; see
+ * `fetchEnvironmentHealthObservation` in `branches.ts`.
  */
 export function isAllowedHealthCheckUrl(urlString: string): boolean {
   // Reuse existing protocol validation (http/https only, rejects non-string/empty/non-http)

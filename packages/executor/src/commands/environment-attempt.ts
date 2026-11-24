@@ -15,14 +15,83 @@ import type { EnvironmentLifecyclePayload, ExecutorResult } from '../payload-typ
 import { EnvironmentCommandOutputCapture } from './environment-command-output.js';
 import { runBoundedEnvironmentShell } from './environment-shell.js';
 
-/** Each HTTP request authenticates independently and may reach any replica. */
-async function report(
+/** A rejected report. `status` carries the daemon's HTTP status when it answered. */
+export class EnvironmentReportError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number
+  ) {
+    super(message);
+    this.name = 'EnvironmentReportError';
+  }
+}
+
+/**
+ * The daemon's deliberate, deterministic report rejections: a malformed report
+ * (400), a credential/scope refusal (403), or a superseded/expired attempt (409).
+ * They are identical on every replica and never succeed on retry, so retrying only
+ * storms the daemon (and an uncoded 5xx-looking rejection would page on-call).
+ */
+const TERMINAL_REPORT_STATUSES = new Set([400, 403, 409]);
+
+/**
+ * Retry everything except those terminal rejections: server (5xx) errors, 408/429,
+ * an auth/route gap from a not-yet-ready replica during rollout (401/404), and
+ * status-less network/timeout faults are all transient and worth a backed-off retry.
+ */
+export function isRetryableReportError(error: unknown): boolean {
+  const status = error instanceof EnvironmentReportError ? error.status : undefined;
+  if (typeof status === 'number') return !TERMINAL_REPORT_STATUSES.has(status);
+  return true;
+}
+
+/** Why `deliverCompletionReport` stopped: accepted, authoritatively rejected, or out of time. */
+export type ReportDeliveryOutcome = 'delivered' | 'rejected' | 'exhausted';
+
+/**
+ * Deliver the final result, retrying only transient failures with exponential
+ * backoff until the deadline. Stops immediately on a terminal (4xx) rejection.
+ * Returns `'delivered'` once a report is durably accepted, `'rejected'` when the
+ * daemon authoritatively refuses it, or `'exhausted'` when the deadline passes
+ * first — the last two are distinguished so the caller can report the real cause.
+ */
+export async function deliverCompletionReport(
+  send: () => Promise<unknown>,
+  resultDeadline: number,
+  options: { now?: () => number; sleep?: (ms: number) => Promise<void> } = {}
+): Promise<ReportDeliveryOutcome> {
+  const now = options.now ?? Date.now;
+  const sleep =
+    options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let backoffMs = 1000;
+  while (now() < resultDeadline) {
+    try {
+      await send();
+      return 'delivered';
+    } catch (error) {
+      if (!isRetryableReportError(error)) return 'rejected';
+      const wait = Math.min(backoffMs, resultDeadline - now());
+      if (wait <= 0) return 'exhausted';
+      await sleep(wait);
+      backoffMs = Math.min(backoffMs * 2, 30000);
+    }
+  }
+  return 'exhausted';
+}
+
+/**
+ * POST a report and resolve once the daemon has durably received it (any 2xx).
+ * Each HTTP request authenticates independently and may reach any replica. The
+ * acknowledgement body is not read here: a 2xx means the report was recorded, so
+ * an unreadable body must never be mistaken for a delivery failure.
+ */
+async function sendReport(
   payload: EnvironmentLifecyclePayload,
   data: EnvironmentCommandReport,
   deadline: number
-) {
+): Promise<Response> {
   const remaining = deadline - Date.now();
-  if (remaining <= 0) throw new Error('Environment report deadline expired');
+  if (remaining <= 0) throw new EnvironmentReportError('Environment report deadline expired');
   const response = await fetch(
     `${payload.daemonUrl!.replace(/\/$/, '')}/${ENVIRONMENT_COMMAND_REPORT_SERVICE}`,
     {
@@ -36,7 +105,24 @@ async function report(
       body: JSON.stringify(data),
     }
   );
-  if (!response.ok) throw new Error(`Environment report rejected (HTTP ${response.status})`);
+  if (!response.ok) {
+    // Release the keep-alive socket; the error body is not needed.
+    await response.body?.cancel().catch(() => undefined);
+    throw new EnvironmentReportError(
+      `Environment report rejected (HTTP ${response.status})`,
+      response.status
+    );
+  }
+  return response;
+}
+
+/** Claim and progress reports need the daemon's refreshed deadlines from the ack body. */
+async function report(
+  payload: EnvironmentLifecyclePayload,
+  data: EnvironmentCommandReport,
+  deadline: number
+) {
+  const response = await sendReport(payload, data, deadline);
   return response.json() as Promise<{ command_deadline: string; result_deadline: string }>;
 }
 
@@ -164,20 +250,23 @@ export async function handleEnvironmentAttempt(
     ...(lifecycleResult ? { lifecycle_result: lifecycleResult } : {}),
   };
   // Retry only report delivery, never the command. First durable settlement wins.
-  while (Date.now() < resultDeadline) {
-    try {
-      await report(payload, completion, resultDeadline);
-      return { success: outcome === 'succeeded' };
-    } catch {
-      if (Date.now() < resultDeadline) await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-  }
+  // A terminal 4xx (stale/expired/superseded attempt) stops at once; transient
+  // failures back off instead of hammering the daemon once per second.
+  const delivery = await deliverCompletionReport(async () => {
+    // Any 2xx durably records the result; the ack body is irrelevant here, so an
+    // unreadable body must not re-trigger retries. Drain it to release the socket.
+    const response = await sendReport(payload, completion, resultDeadline);
+    await response.text().catch(() => undefined);
+  }, resultDeadline);
+  if (delivery === 'delivered') return { success: outcome === 'succeeded' };
   return {
     success: false,
     error: {
       code: 'ENVIRONMENT_REPORT_LOST',
       message:
-        'Command result could not be delivered before its deadline; outcome will be reported as unknown',
+        delivery === 'rejected'
+          ? 'Command result was rejected by the daemon (the attempt was superseded or expired); outcome will be reported as unknown. No retry.'
+          : 'Command result could not be delivered before its deadline; outcome will be reported as unknown.',
     },
   };
 }

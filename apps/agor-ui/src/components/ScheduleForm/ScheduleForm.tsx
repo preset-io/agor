@@ -29,6 +29,7 @@ import type {
   AgenticToolName,
   AgorClient,
   BranchID,
+  DirectoryUser,
   MCPServer,
   Schedule,
   ScheduleAgenticToolConfig,
@@ -122,7 +123,8 @@ export interface ScheduleFormProps {
   /** Feathers client. */
   client: AgorClient | null;
   /** Stable owner whose defaults resolve at each run. */
-  executionOwner?: User | null;
+  // Another user's row may be a directory entry without their agent defaults.
+  executionOwner?: DirectoryUser | null;
   /** Authenticated caller; model catalogs are caller-scoped. */
   currentUser?: User | null;
   /** Fires after a successful create OR patch with the saved schedule. */

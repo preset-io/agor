@@ -7,8 +7,9 @@ const years = year > FIRST_YEAR ? `${FIRST_YEAR}–${year}` : String(FIRST_YEAR)
 
 /**
  * The legal fine print every footer ends with (landing pages, /cloud, docs):
- * copyright, trademarks, the Community Edition license, and the third-party
- * disclaimer. Text only; each footer supplies its own wrapper and styling.
+ * copyright, trademarks (Preset's, plus the ASF's Apache marks), the Community
+ * Edition license, and the third-party disclaimer. Text only; each footer
+ * supplies its own wrapper and styling.
  */
 export function FinePrint() {
   return (
@@ -18,8 +19,14 @@ export function FinePrint() {
       <a href={`${GITHUB_REPO_URL}/blob/main/LICENSE`} target="_blank" rel="noopener noreferrer">
         Business Source License 1.1
       </a>
-      . Agor is not affiliated with or endorsed by the companies mentioned on this site; all other
-      product names, logos, and brands are property of their respective owners.
+      . Apache, Apache Airflow, Airflow, Apache Superset, Superset, and their logos are either
+      registered trademarks or trademarks of{' '}
+      <a href="https://www.apache.org/" target="_blank" rel="noopener noreferrer">
+        The Apache Software Foundation
+      </a>{' '}
+      in the United States and/or other countries. Agor is not affiliated with or endorsed by the
+      companies mentioned on this site; all other product names, logos, and brands are property of
+      their respective owners.
     </>
   );
 }
