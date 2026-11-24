@@ -76,6 +76,7 @@ import {
   tasks,
   users,
 } from '../schema';
+import { taskUsageTable } from '../task-usage';
 import { getCurrentTenantId } from '../tenant-context';
 import {
   AmbiguousIdError,
@@ -786,20 +787,23 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     };
   }
 
-  /** Aggregate in SQL: no prompt, response or tool payload leaves the database. */
+  /**
+   * Aggregate in SQL: no prompt, response or tool payload leaves the database.
+   * Per-task usage comes from `taskUsageTable`, which undoes the session
+   * running totals some agentic tools record on each Task.
+   */
   async getSessionUsage(sessionId: SessionID): Promise<SessionUsageSummary> {
-    const sum = (path: string) =>
-      sql<number>`COALESCE(SUM(CAST(${jsonExtract(this.db, tasks.data, `normalized_sdk_response.${path}`)} AS DOUBLE PRECISION)), 0)`;
+    const usage = taskUsageTable(this.db, { sessionId });
+    const sum = (column: unknown) => sql<number>`COALESCE(SUM(${column}), 0)`;
     const row = await select(this.db, {
-      total: sum('tokenUsage.totalTokens'),
-      input: sum('tokenUsage.inputTokens'),
-      output: sum('tokenUsage.outputTokens'),
-      cacheRead: sum('tokenUsage.cacheReadTokens'),
-      cacheCreation: sum('tokenUsage.cacheCreationTokens'),
-      cost: sum('costUsd'),
+      total: sum(usage.usage_total_tokens),
+      input: sum(usage.usage_input_tokens),
+      output: sum(usage.usage_output_tokens),
+      cacheRead: sum(usage.usage_cache_read_tokens),
+      cacheCreation: sum(usage.usage_cache_creation_tokens),
+      cost: sum(usage.usage_cost_usd),
     })
-      .from(tasks)
-      .where(eq(tasks.session_id, sessionId))
+      .from(usage)
       .one();
     return {
       total: Number(row?.total ?? 0),

@@ -91,7 +91,12 @@ async function seedRepoAndBranch(
 
 async function seedSession(
   db: Database,
-  opts: { sessionId: string; branchId: string; tool: 'claude-code' | 'codex' | 'gemini' }
+  opts: {
+    sessionId: string;
+    branchId: string;
+    tool: 'claude-code' | 'codex' | 'gemini' | 'copilot';
+    forkedFromSessionId?: string;
+  }
 ): Promise<void> {
   const now = new Date();
   await insert(db, sessions)
@@ -102,6 +107,7 @@ async function seedSession(
       status: 'idle',
       agentic_tool: opts.tool,
       branch_id: opts.branchId,
+      forked_from_session_id: opts.forkedFromSessionId,
       created_by: 'test-user',
       data: { genealogy: { children: [] }, contextFiles: [], tasks: [], git_state: {} },
     })
@@ -119,6 +125,9 @@ async function seedTask(
     outputTokens: number;
     costUsd?: number;
     durationMs?: number;
+    completedAt?: Date;
+    /** Omit normalized_sdk_response, as for a stopped task that reported no usage. */
+    noUsage?: boolean;
   }
 ): Promise<void> {
   const data = {
@@ -128,15 +137,19 @@ async function seedTask(
     git_state: { ref_at_start: 'main', sha_at_start: 'abc' },
     model: opts.model,
     duration_ms: opts.durationMs,
-    normalized_sdk_response: {
-      tokenUsage: {
-        inputTokens: opts.inputTokens,
-        outputTokens: opts.outputTokens,
-        totalTokens: opts.inputTokens + opts.outputTokens,
-      },
-      costUsd: opts.costUsd,
-      durationMs: opts.durationMs,
-    },
+    ...(opts.noUsage
+      ? {}
+      : {
+          normalized_sdk_response: {
+            tokenUsage: {
+              inputTokens: opts.inputTokens,
+              outputTokens: opts.outputTokens,
+              totalTokens: opts.inputTokens + opts.outputTokens,
+            },
+            costUsd: opts.costUsd,
+            durationMs: opts.durationMs,
+          },
+        }),
   };
 
   await insert(db, tasks)
@@ -144,6 +157,7 @@ async function seedTask(
       task_id: generateId(),
       session_id: opts.sessionId,
       created_at: opts.createdAt,
+      completed_at: opts.completedAt,
       status: TaskStatus.COMPLETED,
       created_by: opts.createdBy,
       data,
@@ -549,6 +563,229 @@ describe('LeaderboardService date filters', () => {
     await expect(service.find({ query: { startDate: 'not-a-date' } })).rejects.toThrow(
       /Invalid startDate/
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Session-cumulative usage
+// ---------------------------------------------------------------------------
+
+/**
+ * Claude Code stores the session's running cost on every task, and Codex its
+ * running cost and token counters, so summing them across a session's tasks
+ * over-counts. Gemini and Copilot store each task's own usage.
+ */
+describe('LeaderboardService session-cumulative usage', () => {
+  const userId = 'user-alice';
+  const branchId = 'wt-main';
+  const seeded = new WeakSet<Database>();
+
+  async function seedOneSession(
+    db: Database,
+    tool: 'claude-code' | 'codex' | 'gemini' | 'copilot',
+    sessionId = `sess-${tool}`,
+    forkedFromSessionId?: string
+  ): Promise<string> {
+    if (!seeded.has(db)) {
+      seeded.add(db);
+      await seedUser(db, userId, 'Alice', 'alice@example.com');
+      await seedRepoAndBranch(db, { slug: 'main', branchId, branchName: 'main-wt', uniqueId: 1 });
+    }
+    await seedSession(db, { sessionId, branchId, tool, forkedFromSessionId });
+    return sessionId;
+  }
+
+  async function seedSeries(
+    db: Database,
+    sessionId: string,
+    rows: Array<{ costUsd?: number; inputTokens?: number; outputTokens?: number } | 'no-usage'>,
+    model = 'claude-sonnet-4-6',
+    firstDay = 0
+  ): Promise<void> {
+    for (const [index, row] of rows.entries()) {
+      await seedTask(db, {
+        sessionId,
+        createdBy: userId,
+        createdAt: tsAt({ daysOffset: firstDay + index }),
+        completedAt: tsAt({ daysOffset: firstDay + index, hoursOffset: 1 }),
+        model,
+        inputTokens: row === 'no-usage' ? 0 : (row.inputTokens ?? 0),
+        outputTokens: row === 'no-usage' ? 0 : (row.outputTokens ?? 0),
+        costUsd: row === 'no-usage' ? undefined : row.costUsd,
+        noUsage: row === 'no-usage',
+      });
+    }
+  }
+
+  async function totals(db: Database, query: Record<string, unknown> = {}) {
+    const result = await new LeaderboardService(db).find({ query: { groupBy: 'tool', ...query } });
+    return result.data;
+  }
+
+  dbTest('claude-code cumulative cost 1, 2, 3 counts 3', async ({ db }) => {
+    const sessionId = await seedOneSession(db, 'claude-code');
+    await seedSeries(db, sessionId, [{ costUsd: 1 }, { costUsd: 2 }, { costUsd: 3 }]);
+
+    const [row] = await totals(db);
+    expect(row?.totalCost).toBeCloseTo(3, 10);
+    expect(row?.taskCount).toBe(3);
+  });
+
+  dbTest('a drop is a reset to a new baseline: 1, 2, 0.5 counts 2.5', async ({ db }) => {
+    const sessionId = await seedOneSession(db, 'claude-code');
+    await seedSeries(db, sessionId, [{ costUsd: 1 }, { costUsd: 2 }, { costUsd: 0.5 }]);
+
+    const [row] = await totals(db);
+    expect(row?.totalCost).toBeCloseTo(2.5, 10);
+  });
+
+  dbTest('a task without usage does not reset the baseline', async ({ db }) => {
+    const sessionId = await seedOneSession(db, 'claude-code');
+    await seedSeries(db, sessionId, [{ costUsd: 1 }, 'no-usage', { costUsd: 0 }, { costUsd: 3 }]);
+
+    const [row] = await totals(db);
+    expect(row?.totalCost).toBeCloseTo(3, 10);
+    expect(row?.taskCount).toBe(4);
+  });
+
+  dbTest('each session keeps its own baseline', async ({ db }) => {
+    const first = await seedOneSession(db, 'claude-code', 'sess-claude-1');
+    const second = await seedOneSession(db, 'claude-code', 'sess-claude-2');
+    await seedSeries(db, first, [{ costUsd: 1 }, { costUsd: 4 }]);
+    await seedSeries(db, second, [{ costUsd: 2 }, { costUsd: 3 }]);
+
+    const [row] = await totals(db);
+    expect(row?.totalCost).toBeCloseTo(7, 10);
+    expect(row?.sessionCount).toBe(2);
+  });
+
+  dbTest('a fork starts from the parent total at the time it ran', async ({ db }) => {
+    const parent = await seedOneSession(db, 'claude-code', 'sess-parent');
+    const fork = await seedOneSession(db, 'claude-code', 'sess-fork', parent);
+    // Parent: days 0-1 reach 2, day 3 reaches 4.
+    await seedSeries(db, parent, [{ costUsd: 1 }, { costUsd: 2 }]);
+    await seedSeries(db, parent, [{ costUsd: 4 }], 'claude-sonnet-4-6', 3);
+    // Fork runs on day 2, so it inherits the parent's 2 and adds 0.5, then 0.5.
+    await seedSeries(db, fork, [{ costUsd: 2.5 }, { costUsd: 3 }], 'claude-sonnet-4-6', 2);
+
+    const [row] = await totals(db);
+    // Parent 4 + fork 1.
+    expect(row?.totalCost).toBeCloseTo(5, 10);
+  });
+
+  dbTest('a fork that starts below the parent total counts in full', async ({ db }) => {
+    const parent = await seedOneSession(db, 'claude-code', 'sess-parent');
+    const fork = await seedOneSession(db, 'claude-code', 'sess-fork', parent);
+    await seedSeries(db, parent, [{ costUsd: 5 }]);
+    await seedSeries(db, fork, [{ costUsd: 0.3 }, { costUsd: 0.4 }], 'claude-sonnet-4-6', 1);
+
+    const [row] = await totals(db);
+    expect(row?.totalCost).toBeCloseTo(5.4, 10);
+  });
+
+  dbTest('tasks are ordered by completion, not by queue admission', async ({ db }) => {
+    const sessionId = await seedOneSession(db, 'claude-code');
+    // Admitted in one order, run in the other (the queue was reordered).
+    await seedTask(db, {
+      sessionId,
+      createdBy: userId,
+      createdAt: tsAt({ hoursOffset: 0 }),
+      completedAt: tsAt({ hoursOffset: 3 }),
+      model: 'claude-sonnet-4-6',
+      inputTokens: 0,
+      outputTokens: 0,
+      costUsd: 5,
+    });
+    await seedTask(db, {
+      sessionId,
+      createdBy: userId,
+      createdAt: tsAt({ hoursOffset: 1 }),
+      completedAt: tsAt({ hoursOffset: 2 }),
+      model: 'claude-sonnet-4-6',
+      inputTokens: 0,
+      outputTokens: 0,
+      costUsd: 2,
+    });
+
+    const [row] = await totals(db);
+    expect(row?.totalCost).toBeCloseTo(5, 10);
+  });
+
+  dbTest('a date window counts only the spend inside it', async ({ db }) => {
+    const sessionId = await seedOneSession(db, 'claude-code');
+    await seedSeries(db, sessionId, [{ costUsd: 1 }, { costUsd: 2 }, { costUsd: 3.5 }]);
+
+    const [row] = await totals(db, { startDate: tsAt({ daysOffset: 1 }).toISOString() });
+    // Day 1 adds 1 (2 - 1) and day 2 adds 1.5 (3.5 - 2); day 0 is outside.
+    expect(row?.totalCost).toBeCloseTo(2.5, 10);
+    expect(row?.taskCount).toBe(2);
+  });
+
+  dbTest('claude-code tokens are per task and stay summed', async ({ db }) => {
+    const sessionId = await seedOneSession(db, 'claude-code');
+    await seedSeries(db, sessionId, [
+      { costUsd: 1, inputTokens: 100, outputTokens: 10 },
+      { costUsd: 2, inputTokens: 50, outputTokens: 5 },
+    ]);
+
+    const [row] = await totals(db);
+    expect(row?.totalInputTokens).toBe(150);
+    expect(row?.totalOutputTokens).toBe(15);
+    expect(row?.totalTokens).toBe(165);
+    expect(row?.totalCost).toBeCloseTo(2, 10);
+  });
+
+  dbTest('codex cumulative tokens and cost follow the same rule', async ({ db }) => {
+    const sessionId = await seedOneSession(db, 'codex');
+    await seedSeries(
+      db,
+      sessionId,
+      [
+        { costUsd: 1, inputTokens: 100, outputTokens: 10 },
+        { costUsd: 2, inputTokens: 250, outputTokens: 30 },
+        { costUsd: 3, inputTokens: 400, outputTokens: 40 },
+        // Reset: a fresh Codex thread starts a new running total.
+        { costUsd: 0.5, inputTokens: 60, outputTokens: 6 },
+      ],
+      'gpt-5'
+    );
+
+    const [row] = await totals(db);
+    expect(row?.totalInputTokens).toBe(460);
+    expect(row?.totalOutputTokens).toBe(46);
+    expect(row?.totalTokens).toBe(506);
+    expect(row?.totalCost).toBeCloseTo(3.5, 10);
+  });
+
+  dbTest('a per-task tool (gemini, copilot) stays summed', async ({ db }) => {
+    const gemini = await seedOneSession(db, 'gemini');
+    const copilot = await seedOneSession(db, 'copilot');
+    const perTask = [
+      { costUsd: 1, inputTokens: 100, outputTokens: 10 },
+      { costUsd: 2, inputTokens: 50, outputTokens: 5 },
+      { costUsd: 3, inputTokens: 200, outputTokens: 20 },
+    ];
+    await seedSeries(db, gemini, perTask, 'gemini-2.5-pro');
+    await seedSeries(db, copilot, perTask, 'gpt-5');
+
+    for (const tool of ['gemini', 'copilot']) {
+      const row = (await totals(db)).find((r) => r.tool === tool);
+      expect(row?.totalCost).toBeCloseTo(6, 10);
+      expect(row?.totalInputTokens).toBe(350);
+      expect(row?.totalOutputTokens).toBe(35);
+      expect(row?.totalTokens).toBe(385);
+    }
+  });
+
+  dbTest('sorting by cost uses the corrected totals', async ({ db }) => {
+    const claude = await seedOneSession(db, 'claude-code');
+    const gemini = await seedOneSession(db, 'gemini');
+    // Summed, claude would be 1 + 2 + 3 = 6 and sort above gemini's 4.
+    await seedSeries(db, claude, [{ costUsd: 1 }, { costUsd: 2 }, { costUsd: 3 }]);
+    await seedSeries(db, gemini, [{ costUsd: 2 }, { costUsd: 2 }], 'gemini-2.5-pro');
+
+    const rows = await totals(db, { sortBy: 'cost', sortOrder: 'desc' });
+    expect(rows.map((r) => r.tool)).toEqual(['gemini', 'claude-code']);
   });
 });
 

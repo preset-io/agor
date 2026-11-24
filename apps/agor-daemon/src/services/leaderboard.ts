@@ -23,6 +23,7 @@ import {
   sql,
   type TenantScopeAwareDatabase,
   tasks,
+  taskUsageTable,
   users,
 } from '@agor/core/db';
 
@@ -280,27 +281,14 @@ export class LeaderboardService {
 
     // Build dynamic SELECT clause.
     //
-    // Metrics are sourced from `normalized_sdk_response` (written by the executor,
-    // agent-agnostic). For duration we prefer the normalized value; if unset we fall
-    // back to the top-level `tasks.data.duration_ms`. Tasks without either field
-    // (legacy / in-flight) contribute 0 duration, which is the same behaviour as
-    // tokens/cost today.
-    const inputTokensExpr = jsonExtract(
-      this.db,
-      tasks.data,
-      'normalized_sdk_response.tokenUsage.inputTokens'
-    );
-    const outputTokensExpr = jsonExtract(
-      this.db,
-      tasks.data,
-      'normalized_sdk_response.tokenUsage.outputTokens'
-    );
-    const totalTokensExpr = jsonExtract(
-      this.db,
-      tasks.data,
-      'normalized_sdk_response.tokenUsage.totalTokens'
-    );
-    const costExpr = jsonExtract(this.db, tasks.data, 'normalized_sdk_response.costUsd');
+    // Token and cost metrics come from `taskUsageTable`, which turns the
+    // session running totals some tools record on each task back into each
+    // task's own usage. Its baseline spans every task of a session, so it is
+    // joined and the filters above apply to this outer query only. For
+    // duration we prefer the normalized value; if unset we fall back to the
+    // top-level `tasks.data.duration_ms`. Tasks without either field (legacy /
+    // in-flight) contribute 0.
+    const taskUsage = taskUsageTable(this.db);
     const normalizedDurationExpr = jsonExtract(
       this.db,
       tasks.data,
@@ -310,18 +298,16 @@ export class LeaderboardService {
 
     // biome-ignore lint/suspicious/noExplicitAny: Dynamic SQL fields require any
     const selectFields: Record<string, any> = {
-      totalInputTokens: sql<number>`COALESCE(SUM(
-        CAST(${inputTokensExpr} AS INTEGER)
-      ), 0)`.as('total_input_tokens'),
-      totalOutputTokens: sql<number>`COALESCE(SUM(
-        CAST(${outputTokensExpr} AS INTEGER)
-      ), 0)`.as('total_output_tokens'),
-      totalTokens: sql<number>`COALESCE(SUM(
-        CAST(${totalTokensExpr} AS INTEGER)
-      ), 0)`.as('total_tokens'),
-      totalCost: sql<number>`COALESCE(SUM(
-        CAST(${costExpr} AS REAL)
-      ), 0.0)`.as('total_cost'),
+      totalInputTokens: sql<number>`COALESCE(SUM(${taskUsage.usage_input_tokens}), 0)`.as(
+        'total_input_tokens'
+      ),
+      totalOutputTokens: sql<number>`COALESCE(SUM(${taskUsage.usage_output_tokens}), 0)`.as(
+        'total_output_tokens'
+      ),
+      totalTokens: sql<number>`COALESCE(SUM(${taskUsage.usage_total_tokens}), 0)`.as(
+        'total_tokens'
+      ),
+      totalCost: sql<number>`COALESCE(SUM(${taskUsage.usage_cost_usd}), 0.0)`.as('total_cost'),
       taskCount: sql<number>`COUNT(DISTINCT ${tasks.task_id})`.as('task_count'),
       sessionCount: sql<number>`COUNT(DISTINCT ${tasks.session_id})`.as('session_count'),
       totalDurationMs: sql<number>`COALESCE(SUM(
@@ -389,7 +375,8 @@ export class LeaderboardService {
     let qb = (this.db as any)
       .select(selectFields)
       .from(tasks)
-      .innerJoin(sessions, eq(tasks.session_id, sessions.session_id));
+      .innerJoin(sessions, eq(tasks.session_id, sessions.session_id))
+      .innerJoin(taskUsage, eq(tasks.task_id, taskUsage.task_id));
 
     if (needsBranchesJoin) {
       qb = qb.innerJoin(branches, eq(sessions.branch_id, branches.branch_id));

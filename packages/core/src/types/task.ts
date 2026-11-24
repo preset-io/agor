@@ -573,6 +573,8 @@ export interface Task {
   // then projected again by the daemon before persistence/realtime.
   // Stored here so UI doesn't need SDK-specific normalization logic
   // Will be empty for legacy tasks (pre-normalization)
+  // Some tools record session running totals here, not this task's own usage;
+  // aggregate through `taskUsageTable` (`@agor/core/db`), never a plain SUM.
   normalized_sdk_response?: {
     tokenUsage: {
       inputTokens: number;
