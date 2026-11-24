@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../../contexts/ConnectionContext';
 import { CommentNode, ZoneNode } from './BoardObjectNodes';
 
+const nodeToolbarRenderSpy = vi.hoisted(() => vi.fn());
 const zoneConfigModalRenderSpy = vi.hoisted(() => vi.fn());
 const { copySpy } = vi.hoisted(() => ({ copySpy: vi.fn(async (_text: string) => true) }));
 vi.mock('../../../utils/clipboard', async (importOriginal) => ({
@@ -19,8 +20,10 @@ vi.mock('../../../utils/clipboard', async (importOriginal) => ({
 // ZoneToolbar.stacking.browser.test.tsx.
 vi.mock('reactflow', async (importOriginal) => ({
   ...(await importOriginal<typeof import('reactflow')>()),
-  NodeToolbar: ({ isVisible, children }: { isVisible?: boolean; children?: ReactNode }) =>
-    isVisible ? <>{children}</> : null,
+  NodeToolbar: ({ isVisible, children }: { isVisible?: boolean; children?: ReactNode }) => {
+    nodeToolbarRenderSpy();
+    return isVisible ? children : null;
+  },
 }));
 
 vi.mock('./ZoneConfigModal', () => ({
@@ -93,6 +96,22 @@ async function openArrangeMenu() {
 }
 
 describe('ZoneNode compact toolbar', () => {
+  it('does not mount NodeToolbar for an unselected zone', () => {
+    nodeToolbarRenderSpy.mockClear();
+    renderZone(vi.fn(), CONNECTED, { selected: false });
+
+    expect(nodeToolbarRenderSpy).not.toHaveBeenCalled();
+    expect(screen.queryByRole('toolbar', { name: 'Zone actions' })).not.toBeInTheDocument();
+  });
+
+  it('does not mount NodeToolbar for a read-only zone', () => {
+    nodeToolbarRenderSpy.mockClear();
+    renderZone(vi.fn(), CONNECTED, { canEdit: false });
+
+    expect(nodeToolbarRenderSpy).not.toHaveBeenCalled();
+    expect(screen.queryByRole('toolbar', { name: 'Zone actions' })).not.toBeInTheDocument();
+  });
+
   it('keeps common actions top-level and buries layer controls in More', () => {
     renderZone(vi.fn(), CONNECTED);
 

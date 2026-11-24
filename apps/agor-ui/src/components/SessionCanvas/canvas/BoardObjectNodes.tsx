@@ -503,288 +503,290 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             so higher-layer board objects (markdown, apps, artifacts) can never
             paint over the selected zone's actions. It also positions in screen
             space, so the toolbar keeps a constant size at any zoom. */}
-        <NodeToolbar isVisible={selected && !mutationDisabled} position={Position.Top} offset={12}>
-          <div
-            className="nodrag nopan"
-            role="toolbar"
-            aria-label="Zone actions"
-            onPointerDown={(event) => event.stopPropagation()}
-            onPointerUp={(event) => event.stopPropagation()}
-            onClick={(event) => event.stopPropagation()}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: token.marginXXS,
-              padding: token.paddingXXS,
-              background: token.colorBgElevated,
-              border: `1px solid ${token.colorBorder}`,
-              borderRadius: token.borderRadiusLG,
-              boxShadow: token.boxShadowSecondary,
-              userSelect: 'none',
-              whiteSpace: 'nowrap',
-              pointerEvents: 'auto',
-            }}
-          >
-            <Button
-              type="text"
-              size="small"
-              aria-label="Rename zone"
-              title="Rename zone"
-              icon={<EditOutlined />}
-              disabled={mutationDisabled}
-              onClick={() => {
-                // An open editor (or a refused draft) keeps its ticket.
-                if (isEditingLabel) return;
-                beginEdit();
-                setIsEditingLabel(true);
+        {selected && !mutationDisabled && (
+          <NodeToolbar isVisible position={Position.Top} offset={12}>
+            <div
+              className="nodrag nopan"
+              role="toolbar"
+              aria-label="Zone actions"
+              onPointerDown={(event) => event.stopPropagation()}
+              onPointerUp={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: token.marginXXS,
+                padding: token.paddingXXS,
+                background: token.colorBgElevated,
+                border: `1px solid ${token.colorBorder}`,
+                borderRadius: token.borderRadiusLG,
+                boxShadow: token.boxShadowSecondary,
+                userSelect: 'none',
+                whiteSpace: 'nowrap',
+                pointerEvents: 'auto',
               }}
-              style={{ width: 32, height: 32 }}
-            />
-
-            <Popover
-              trigger="click"
-              placement="bottom"
-              title="Appearance"
-              content={
-                <Space orientation="vertical" size="middle" style={{ width: 240 }}>
-                  <Flex justify="space-between" align="center" gap="middle">
-                    <Typography.Text>Border</Typography.Text>
-                    <ColorPicker
-                      value={borderColor}
-                      onChangeComplete={handleBorderColorChange}
-                      trigger="click"
-                      showText
-                      format="hex"
-                      presets={[
-                        { label: 'Presets', colors },
-                        ...(recentColors.length > 0
-                          ? [{ label: 'Recent', colors: recentColors }]
-                          : []),
-                      ]}
-                    >
-                      <Button
-                        aria-label="Zone border color"
-                        icon={
-                          <span
-                            aria-hidden="true"
-                            style={{
-                              width: 14,
-                              height: 14,
-                              borderRadius: token.borderRadiusSM,
-                              backgroundColor: borderColor,
-                              display: 'inline-block',
-                            }}
-                          />
-                        }
-                      >
-                        {borderColor.toUpperCase()}
-                      </Button>
-                    </ColorPicker>
-                  </Flex>
-                  <Flex justify="space-between" align="center" gap="middle">
-                    <Typography.Text>Fill</Typography.Text>
-                    <ColorPicker
-                      value={backgroundColor}
-                      onChangeComplete={handleBackgroundColorChange}
-                      trigger="click"
-                      showText
-                      format="hex"
-                      presets={[
-                        {
-                          label: 'Presets',
-                          colors: colors.map(
-                            (color) =>
-                              `${color}${Math.round(ZONE_CONTENT_OPACITY * 255)
-                                .toString(16)
-                                .padStart(2, '0')}`
-                          ),
-                        },
-                        ...(recentColors.length > 0
-                          ? [{ label: 'Recent', colors: recentColors }]
-                          : []),
-                      ]}
-                    >
-                      <Button
-                        aria-label="Zone fill color"
-                        icon={
-                          <span
-                            aria-hidden="true"
-                            style={{
-                              width: 14,
-                              height: 14,
-                              borderRadius: token.borderRadiusSM,
-                              border: `1px solid ${token.colorBorder}`,
-                              backgroundColor,
-                              display: 'inline-block',
-                            }}
-                          />
-                        }
-                      >
-                        {backgroundColor.toUpperCase()}
-                      </Button>
-                    </ColorPicker>
-                  </Flex>
-                  <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                    Label size and theme defaults are in Zone settings.
-                  </Typography.Text>
-                </Space>
-              }
             >
               <Button
                 type="text"
                 size="small"
-                aria-label="Zone appearance"
-                title="Zone appearance"
+                aria-label="Rename zone"
+                title="Rename zone"
+                icon={<EditOutlined />}
                 disabled={mutationDisabled}
-                icon={
-                  <span
-                    aria-hidden="true"
-                    style={{
-                      position: 'relative',
-                      display: 'inline-flex',
-                      fontSize: token.fontSizeLG,
-                    }}
-                  >
-                    <BgColorsOutlined />
-                    <span
-                      style={{
-                        position: 'absolute',
-                        right: -4,
-                        bottom: -2,
-                        width: 9,
-                        height: 9,
-                        borderRadius: '50%',
-                        border: `1px solid ${token.colorBorder}`,
-                        backgroundColor,
-                      }}
-                    />
-                  </span>
-                }
+                onClick={() => {
+                  // An open editor (or a refused draft) keeps its ticket.
+                  if (isEditingLabel) return;
+                  beginEdit();
+                  setIsEditingLabel(true);
+                }}
                 style={{ width: 32, height: 32 }}
               />
-            </Popover>
 
-            <Button
-              type={data.locked ? 'default' : 'text'}
-              size="small"
-              aria-label={data.locked ? 'Unlock position and size' : 'Lock position and size'}
-              title={data.locked ? 'Unlock position and size' : 'Lock position and size'}
-              icon={data.locked ? <LockOutlined /> : <UnlockOutlined />}
-              disabled={mutationDisabled}
-              onClick={handleToggleLock}
-              style={{
-                width: 32,
-                height: 32,
-                ...(data.locked
-                  ? { color: token.colorWarning, borderColor: token.colorWarning }
-                  : {}),
-              }}
-            />
-
-            {data.onLayoutChange && (
-              <Dropdown trigger={['click']} placement="bottom" menu={layoutMenu}>
+              <Popover
+                trigger="click"
+                placement="bottom"
+                title="Appearance"
+                content={
+                  <Space orientation="vertical" size="middle" style={{ width: 240 }}>
+                    <Flex justify="space-between" align="center" gap="middle">
+                      <Typography.Text>Border</Typography.Text>
+                      <ColorPicker
+                        value={borderColor}
+                        onChangeComplete={handleBorderColorChange}
+                        trigger="click"
+                        showText
+                        format="hex"
+                        presets={[
+                          { label: 'Presets', colors },
+                          ...(recentColors.length > 0
+                            ? [{ label: 'Recent', colors: recentColors }]
+                            : []),
+                        ]}
+                      >
+                        <Button
+                          aria-label="Zone border color"
+                          icon={
+                            <span
+                              aria-hidden="true"
+                              style={{
+                                width: 14,
+                                height: 14,
+                                borderRadius: token.borderRadiusSM,
+                                backgroundColor: borderColor,
+                                display: 'inline-block',
+                              }}
+                            />
+                          }
+                        >
+                          {borderColor.toUpperCase()}
+                        </Button>
+                      </ColorPicker>
+                    </Flex>
+                    <Flex justify="space-between" align="center" gap="middle">
+                      <Typography.Text>Fill</Typography.Text>
+                      <ColorPicker
+                        value={backgroundColor}
+                        onChangeComplete={handleBackgroundColorChange}
+                        trigger="click"
+                        showText
+                        format="hex"
+                        presets={[
+                          {
+                            label: 'Presets',
+                            colors: colors.map(
+                              (color) =>
+                                `${color}${Math.round(ZONE_CONTENT_OPACITY * 255)
+                                  .toString(16)
+                                  .padStart(2, '0')}`
+                            ),
+                          },
+                          ...(recentColors.length > 0
+                            ? [{ label: 'Recent', colors: recentColors }]
+                            : []),
+                        ]}
+                      >
+                        <Button
+                          aria-label="Zone fill color"
+                          icon={
+                            <span
+                              aria-hidden="true"
+                              style={{
+                                width: 14,
+                                height: 14,
+                                borderRadius: token.borderRadiusSM,
+                                border: `1px solid ${token.colorBorder}`,
+                                backgroundColor,
+                                display: 'inline-block',
+                              }}
+                            />
+                          }
+                        >
+                          {backgroundColor.toUpperCase()}
+                        </Button>
+                      </ColorPicker>
+                    </Flex>
+                    <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                      Label size and theme defaults are in Zone settings.
+                    </Typography.Text>
+                  </Space>
+                }
+              >
                 <Button
                   type="text"
                   size="small"
-                  aria-label={`Zone layout: ${layoutOption.label}`}
-                  title={`Zone layout: ${layoutOption.label}`}
-                  // One icon for every layout, so the control is easy to find; the menu marks the current one.
-                  icon={<LayoutOutlined />}
+                  aria-label="Zone appearance"
+                  title="Zone appearance"
+                  disabled={mutationDisabled}
+                  icon={
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        position: 'relative',
+                        display: 'inline-flex',
+                        fontSize: token.fontSizeLG,
+                      }}
+                    >
+                      <BgColorsOutlined />
+                      <span
+                        style={{
+                          position: 'absolute',
+                          right: -4,
+                          bottom: -2,
+                          width: 9,
+                          height: 9,
+                          borderRadius: '50%',
+                          border: `1px solid ${token.colorBorder}`,
+                          backgroundColor,
+                        }}
+                      />
+                    </span>
+                  }
+                  style={{ width: 32, height: 32 }}
+                />
+              </Popover>
+
+              <Button
+                type={data.locked ? 'default' : 'text'}
+                size="small"
+                aria-label={data.locked ? 'Unlock position and size' : 'Lock position and size'}
+                title={data.locked ? 'Unlock position and size' : 'Lock position and size'}
+                icon={data.locked ? <LockOutlined /> : <UnlockOutlined />}
+                disabled={mutationDisabled}
+                onClick={handleToggleLock}
+                style={{
+                  width: 32,
+                  height: 32,
+                  ...(data.locked
+                    ? { color: token.colorWarning, borderColor: token.colorWarning }
+                    : {}),
+                }}
+              />
+
+              {data.onLayoutChange && (
+                <Dropdown trigger={['click']} placement="bottom" menu={layoutMenu}>
+                  <Button
+                    type="text"
+                    size="small"
+                    aria-label={`Zone layout: ${layoutOption.label}`}
+                    title={`Zone layout: ${layoutOption.label}`}
+                    // One icon for every layout, so the control is easy to find; the menu marks the current one.
+                    icon={<LayoutOutlined />}
+                    disabled={mutationDisabled}
+                    style={{ width: 32, height: 32 }}
+                  />
+                </Dropdown>
+              )}
+
+              <Button
+                type="text"
+                size="small"
+                aria-label="Zone settings"
+                title="Zone settings"
+                icon={<SettingOutlined />}
+                disabled={mutationDisabled}
+                onClick={() => {
+                  if (zoneDialogOpen) return;
+                  beginEdit();
+                  setConfigModalOpen(true);
+                }}
+                style={{ width: 32, height: 32 }}
+              />
+
+              <Dropdown
+                trigger={['click']}
+                placement="bottomRight"
+                menu={{
+                  items: [
+                    {
+                      key: 'arrange',
+                      label:
+                        data.overlappingZoneCount && data.overlappingZoneCount > 0
+                          ? `Arrange (${data.overlappingZoneCount} overlapping)`
+                          : 'Arrange',
+                      icon: <VerticalAlignTopOutlined />,
+                      children: [
+                        {
+                          key: 'front',
+                          label: 'Bring to front',
+                          icon: <VerticalAlignTopOutlined />,
+                          disabled: data.layerAvailability?.front === false,
+                        },
+                        {
+                          key: 'forward',
+                          label: 'Bring forward',
+                          icon: <CaretUpOutlined />,
+                          disabled: data.layerAvailability?.forward === false,
+                        },
+                        {
+                          key: 'backward',
+                          label: 'Send backward',
+                          icon: <CaretDownOutlined />,
+                          disabled: data.layerAvailability?.backward === false,
+                        },
+                        {
+                          key: 'back',
+                          label: 'Send to back',
+                          icon: <VerticalAlignBottomOutlined />,
+                          disabled: data.layerAvailability?.back === false,
+                        },
+                      ],
+                    },
+                    { type: 'divider' },
+                    { key: 'delete', label: 'Delete zone', icon: <DeleteOutlined />, danger: true },
+                  ],
+                  onClick: ({ key, domEvent }) => {
+                    domEvent.stopPropagation();
+                    if (mutationDisabled) return;
+                    if (key === 'delete') {
+                      if (zoneDialogOpen) return;
+                      beginEdit();
+                      setDeleteModalOpen(true);
+                      return;
+                    }
+                    if (
+                      key === 'front' ||
+                      key === 'forward' ||
+                      key === 'backward' ||
+                      key === 'back'
+                    ) {
+                      handleReorder(key);
+                    }
+                  },
+                }}
+              >
+                <Button
+                  type="text"
+                  size="small"
+                  aria-label="More zone actions"
+                  title="More zone actions"
+                  icon={<MoreOutlined />}
                   disabled={mutationDisabled}
                   style={{ width: 32, height: 32 }}
                 />
               </Dropdown>
-            )}
-
-            <Button
-              type="text"
-              size="small"
-              aria-label="Zone settings"
-              title="Zone settings"
-              icon={<SettingOutlined />}
-              disabled={mutationDisabled}
-              onClick={() => {
-                if (zoneDialogOpen) return;
-                beginEdit();
-                setConfigModalOpen(true);
-              }}
-              style={{ width: 32, height: 32 }}
-            />
-
-            <Dropdown
-              trigger={['click']}
-              placement="bottomRight"
-              menu={{
-                items: [
-                  {
-                    key: 'arrange',
-                    label:
-                      data.overlappingZoneCount && data.overlappingZoneCount > 0
-                        ? `Arrange (${data.overlappingZoneCount} overlapping)`
-                        : 'Arrange',
-                    icon: <VerticalAlignTopOutlined />,
-                    children: [
-                      {
-                        key: 'front',
-                        label: 'Bring to front',
-                        icon: <VerticalAlignTopOutlined />,
-                        disabled: data.layerAvailability?.front === false,
-                      },
-                      {
-                        key: 'forward',
-                        label: 'Bring forward',
-                        icon: <CaretUpOutlined />,
-                        disabled: data.layerAvailability?.forward === false,
-                      },
-                      {
-                        key: 'backward',
-                        label: 'Send backward',
-                        icon: <CaretDownOutlined />,
-                        disabled: data.layerAvailability?.backward === false,
-                      },
-                      {
-                        key: 'back',
-                        label: 'Send to back',
-                        icon: <VerticalAlignBottomOutlined />,
-                        disabled: data.layerAvailability?.back === false,
-                      },
-                    ],
-                  },
-                  { type: 'divider' },
-                  { key: 'delete', label: 'Delete zone', icon: <DeleteOutlined />, danger: true },
-                ],
-                onClick: ({ key, domEvent }) => {
-                  domEvent.stopPropagation();
-                  if (mutationDisabled) return;
-                  if (key === 'delete') {
-                    if (zoneDialogOpen) return;
-                    beginEdit();
-                    setDeleteModalOpen(true);
-                    return;
-                  }
-                  if (
-                    key === 'front' ||
-                    key === 'forward' ||
-                    key === 'backward' ||
-                    key === 'back'
-                  ) {
-                    handleReorder(key);
-                  }
-                },
-              }}
-            >
-              <Button
-                type="text"
-                size="small"
-                aria-label="More zone actions"
-                title="More zone actions"
-                icon={<MoreOutlined />}
-                disabled={mutationDisabled}
-                style={{ width: 32, height: 32 }}
-              />
-            </Dropdown>
-          </div>
-        </NodeToolbar>
+            </div>
+          </NodeToolbar>
+        )}
         <div
           style={{
             pointerEvents: 'auto',
