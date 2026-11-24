@@ -13,18 +13,20 @@ import styles from './CookieConsent.module.css';
 
 /*
  * The cookie banner, and the loader for the optional trackers that must not
- * run without consent (HubSpot's tracking code and Microsoft Clarity). Google
+ * run without consent (HubSpot's tracking code, RB2B, and Microsoft Clarity). Google
  * tags load from app/layout.tsx and follow Consent Mode instead. See
  * lib/consent.ts for how the default is decided.
  */
 
 const HUBSPOT_SRC = 'https://js-na2.hs-scripts.com/246818610.js';
 const CLARITY_ID = 'xroxavynkf';
+const RB2B_KEY = 'GOYPYH4X3QOX';
 
 declare global {
   interface Window {
     _hsq?: unknown[][];
     clarity?: (...args: unknown[]) => void;
+    reb2b?: { loaded: boolean };
   }
 }
 
@@ -52,6 +54,11 @@ function loadAnalytics() {
 
 function loadMarketing() {
   loadScript('hs-script-loader', HUBSPOT_SRC);
+  // RB2B visitor identification; same loader as their install snippet.
+  if (!window.reb2b) {
+    window.reb2b = { loaded: true };
+    loadScript('rb2b', `https://ddwl4m2hdecbv.cloudfront.net/b/${RB2B_KEY}/${RB2B_KEY}.js.gz`);
+  }
 }
 
 // First-party cookies each category sets, cleared when consent is withdrawn.
