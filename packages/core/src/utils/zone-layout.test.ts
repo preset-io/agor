@@ -33,13 +33,21 @@ describe('zoneGridColumns', () => {
   });
 
   it('never shows more grid columns than cards, so a few cards stretch instead', () => {
-    expect(zoneGridColumns('grid', 2600, 3)).toEqual({ count: 3, width: 560 });
+    expect(zoneGridColumns('grid', 2600, 3)).toEqual({ count: 2, width: 560 });
   });
 
-  it('keeps at least two grid columns, at no less than the minimum width', () => {
-    expect(zoneGridColumns('grid', 400)).toEqual({ count: 2, width: 320 });
-    // The second column overflows the 400px zone rather than widening it.
-    expect(planZoneGrid('grid', 400, items([100, 100])).positions.get('b1')?.x).toBe(360);
+  it('fits a single grid column at the arranged resize minimum', () => {
+    expect(zoneGridColumns('grid', 360, 4)).toEqual({ count: 1, width: 320 });
+    expect(planZoneGrid('grid', 360, items([100, 100])).positions.get('b1')).toEqual({
+      x: 20,
+      y: 200,
+    });
+    expect(zoneGridColumns('grid', 699, 4).count).toBe(1);
+    expect(zoneGridColumns('grid', 700, 4)).toEqual({ count: 2, width: 320 });
+  });
+
+  it('wraps cards even when a former row is wide enough for every card', () => {
+    expect(zoneGridColumns('grid', 2360, 4)).toEqual({ count: 2, width: 560 });
   });
 
   it('fits a column to a narrow zone instead of widening it', () => {

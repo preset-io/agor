@@ -4,6 +4,8 @@ import {
   orderZoneEntities,
   planZoneGrid,
   sanitizeZoneOrder,
+  ZONE_GRID_HEADER,
+  ZONE_GRID_PADDING,
   zoneLayoutOf,
 } from '@agor/core/utils/zone-layout';
 import type { BoardPosition } from '@agor-live/client';
@@ -170,4 +172,40 @@ export function applyZoneGridLayouts(nodes: Node[], inputs: ZoneGridLayoutInputs
     return node;
   });
   return changed ? next : nodes;
+}
+
+/**
+ * Saved bounds plus the arranged slots, including overflow. Replan rather than
+ * following a dragged node: dragging out must not extend its own drop target.
+ * This is interaction geometry only, never the rendered zone size.
+ */
+export function occupiedZoneSize(
+  zone: Node,
+  children: readonly Node[],
+  inputs: ZoneGridLayoutInputs
+): MeasuredNodeSize {
+  const layout = autoLayoutOfZoneNode(zone);
+  const width = Number(zone.style?.width) || Number(zone.data?.width) || 0;
+  const height = Number(zone.style?.height) || Number(zone.data?.height) || 0;
+  if (!layout || children.length === 0) return { width, height };
+  const ordered = zoneGridOrder(zone, children, inputs);
+  const heights = ordered.map((child) => ({
+    id: child.id,
+    height: inputs.measuredSizes.get(child.id)?.height ?? FALLBACK_HEIGHT[child.type ?? ''] ?? 200,
+  }));
+  const plan = planZoneGrid(layout, zoneWidthOf(zone), heights);
+  let right = width;
+  let bottom = Math.max(height, ZONE_GRID_HEADER);
+  for (const child of heights) {
+    const position = plan.positions.get(child.id);
+    if (!position) continue;
+    right = Math.max(
+      right,
+      position.x +
+        Math.max(plan.columnWidth, inputs.measuredSizes.get(child.id)?.width ?? 0) +
+        ZONE_GRID_PADDING
+    );
+    bottom = Math.max(bottom, position.y + child.height + ZONE_GRID_PADDING);
+  }
+  return { width: right, height: bottom };
 }

@@ -41,8 +41,8 @@ export function isAutoZoneLayout(layout: ZoneLayout): layout is AutoZoneLayout {
 
 const snapUp = (value: number) => Math.ceil(value / ZONE_GRID_STEP) * ZONE_GRID_STEP;
 
-/** Fewest columns a grid shows; in a narrower zone they overflow it. */
-export const ZONE_GRID_MIN_COLUMNS = 2;
+/** A narrow grid can stack cards in a single column. */
+export const ZONE_GRID_MIN_COLUMNS = 1;
 
 /** Fewest grid columns that fill this width without any exceeding the maximum. */
 function gridColumnsToFill(zoneWidth: number): number {
@@ -59,8 +59,9 @@ export interface ZoneGridColumns {
 /**
  * The columns an arranged zone shows, sized to fill its width. A row has one
  * per card and a column one; a grid has the fewest that keep each within the
- * maximum width, no more than it has cards, and at least two. Widths stay within the bounds, so cards
- * overflow a zone too narrow for them; the zone itself keeps the size people set.
+ * maximum width, limited to those that fit at the minimum width and capped at a
+ * balanced square so switching from a wide row wraps. Cards can overflow zones
+ * narrower than one minimum-width column; zones keep the size people set.
  */
 export function zoneGridColumns(
   layout: AutoZoneLayout,
@@ -73,7 +74,14 @@ export function zoneGridColumns(
       ? Math.max(1, itemCount)
       : layout === 'column'
         ? 1
-        : Math.max(ZONE_GRID_MIN_COLUMNS, Math.min(gridColumnsToFill(zoneWidth), itemCount));
+        : Math.max(
+            ZONE_GRID_MIN_COLUMNS,
+            Math.min(
+              gridColumnsToFill(zoneWidth),
+              Math.ceil(Math.sqrt(itemCount)),
+              Math.floor((usable + ZONE_GRID_GAP) / (ZONE_GRID_MIN_COLUMN_WIDTH + ZONE_GRID_GAP))
+            )
+          );
   const fill = Math.floor((usable - (count - 1) * ZONE_GRID_GAP) / count);
   return {
     count,
