@@ -102,7 +102,7 @@
     "multer": "^2.5.0",
     "postgres": "^3.4.9",
     "proper-lockfile": "4.1.2",
-    "simple-git": "^4.0.2",
+    "simple-git": "^4.1.0",
     "slackify-markdown": "^5.0.0",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
