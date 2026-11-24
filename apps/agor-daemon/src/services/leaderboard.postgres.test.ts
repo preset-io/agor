@@ -97,6 +97,31 @@ describePostgres('LeaderboardService session-cumulative usage on PostgreSQL', ()
     await initializeDatabase(db);
   });
 
+  it('keeps the fork baseline when the first task has no usage', async () => {
+    await runWithTenantDatabaseScope(db, `leaderboard-${generateId()}`, async (scoped) => {
+      const base = await seedBranch(scoped);
+      const parent = await seedSession(scoped, base, 'claude-code');
+      await seedTasks(scoped, parent, base.ownerId, [{ hour: 0, costUsd: 2 }]);
+      const fork = await seedSession(scoped, base, 'claude-code', parent);
+      const repository = new TaskRepository(scoped);
+      const first = await repository.create({
+        session_id: fork,
+        created_by: base.ownerId,
+        status: TaskStatus.COMPLETED,
+      });
+      const at = '2026-01-01T01:00:00.000Z';
+      await repository.update(first.task_id, { started_at: at, completed_at: at });
+      await seedTasks(scoped, parent, base.ownerId, [{ hour: 2, costUsd: 4 }]);
+      await seedTasks(scoped, fork, base.ownerId, [
+        { hour: 3, costUsd: 2.5 },
+        { hour: 4, costUsd: 3 },
+      ]);
+      const { data } = await new LeaderboardService(scoped).find({ query: { groupBy: 'tool' } });
+      expect.soft(data[0]?.totalCost).toBeCloseTo(5, 6);
+      expect.soft((await repository.getSessionUsage(fork)).cost).toBeCloseTo(1, 6);
+    });
+  });
+
   it('counts running totals once, forks from the parent baseline, per tenant', async () => {
     const tenantA = `leaderboard-a-${generateId()}`;
     const tenantB = `leaderboard-b-${generateId()}`;

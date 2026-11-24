@@ -21,7 +21,7 @@
  */
 
 import { and, eq, inArray, type SQL, sql } from 'drizzle-orm';
-import type { AgenticToolName, SessionID } from '../types';
+import { type AgenticToolName, type SessionID, TaskStatus } from '../types';
 import type { Database } from './client';
 import { jsonExtract } from './database-wrapper';
 import { sessions, tasks } from './schema';
@@ -73,6 +73,15 @@ function perTaskUsage(db: Database, metric: TaskUsageMetric): SQL {
     PARTITION BY ${tasks.session_id}, CASE WHEN ${value} > 0 THEN 1 ELSE 0 END
     ORDER BY COALESCE(${tasks.completed_at}, ${tasks.created_at}), ${tasks.task_id}
   )`;
+  // Freeze the inherited baseline at the fork's first execution, even when
+  // that Task reports no metric (or only zero counters). A later report must
+  // not inherit parent activity that happened after the fork began. Queued
+  // tasks can predate execution by arbitrarily long periods.
+  const forkStartedAt = sql`(
+    SELECT MIN(COALESCE(fork_task.started_at, fork_task.created_at)) FROM ${tasks} fork_task
+    WHERE fork_task.session_id = ${tasks.session_id}
+      AND fork_task.status NOT IN (${TaskStatus.CREATED}, ${TaskStatus.QUEUED})
+  )`;
   // A fork resumes its parent's SDK session, so its first reported value
   // includes the parent's running total as of the parent's last completed Task.
   const parentValue = reportedValue(db, sql.raw('fork_parent.data'), metric);
@@ -81,7 +90,7 @@ function perTaskUsage(db: Database, metric: TaskUsageMetric): SQL {
     WHERE fork_parent.session_id = ${sessions.forked_from_session_id}
       AND ${parentValue} > 0
       AND COALESCE(fork_parent.completed_at, fork_parent.created_at)
-        <= COALESCE(${tasks.started_at}, ${tasks.created_at})
+        <= ${forkStartedAt}
     ORDER BY COALESCE(fork_parent.completed_at, fork_parent.created_at) DESC, fork_parent.task_id DESC
     LIMIT 1
   )`;

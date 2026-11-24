@@ -14,10 +14,11 @@ import {
   insert,
   RepoRepository,
   sessions,
+  TaskRepository,
   tasks,
   users,
 } from '@agor/core/db';
-import { TaskStatus } from '@agor/core/types';
+import { type SessionID, TaskStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { LeaderboardService } from './leaderboard';
@@ -128,6 +129,7 @@ async function seedTask(
     completedAt?: Date;
     /** Omit normalized_sdk_response, as for a stopped task that reported no usage. */
     noUsage?: boolean;
+    status?: TaskStatus;
   }
 ): Promise<void> {
   const data = {
@@ -158,7 +160,7 @@ async function seedTask(
       session_id: opts.sessionId,
       created_at: opts.createdAt,
       completed_at: opts.completedAt,
-      status: TaskStatus.COMPLETED,
+      status: opts.status ?? TaskStatus.COMPLETED,
       created_by: opts.createdBy,
       data,
     })
@@ -576,7 +578,7 @@ describe('LeaderboardService date filters', () => {
  * over-counts. Gemini and Copilot store each task's own usage.
  */
 describe('LeaderboardService session-cumulative usage', () => {
-  const userId = 'user-alice';
+  const userId = 'usage-user';
   const branchId = 'wt-main';
   const seeded = new WeakSet<Database>();
 
@@ -588,7 +590,7 @@ describe('LeaderboardService session-cumulative usage', () => {
   ): Promise<string> {
     if (!seeded.has(db)) {
       seeded.add(db);
-      await seedUser(db, userId, 'Alice', 'alice@example.com');
+      await seedUser(db, userId, 'Usage user', 'usage@example.invalid');
       await seedRepoAndBranch(db, { slug: 'main', branchId, branchName: 'main-wt', uniqueId: 1 });
     }
     await seedSession(db, { sessionId, branchId, tool, forkedFromSessionId });
@@ -672,6 +674,43 @@ describe('LeaderboardService session-cumulative usage', () => {
     // Parent 4 + fork 1.
     expect(row?.totalCost).toBeCloseTo(5, 10);
   });
+
+  for (const tool of ['claude-code', 'codex'] as const) {
+    dbTest(
+      `${tool}: a fork keeps its first execution baseline across missing usage`,
+      async ({ db }) => {
+        const parent = await seedOneSession(db, tool, 'sess-parent');
+        const fork = await seedOneSession(db, tool, 'sess-fork', parent);
+        await seedSeries(db, parent, [{ costUsd: 2, inputTokens: 200 }]);
+        await seedTask(db, {
+          sessionId: fork,
+          createdBy: userId,
+          createdAt: tsAt({ daysOffset: -1 }),
+          model: 'model',
+          inputTokens: 0,
+          outputTokens: 0,
+          noUsage: true,
+          status: TaskStatus.QUEUED,
+        });
+        await seedSeries(db, fork, ['no-usage'], 'model', 1);
+        await seedSeries(db, parent, [{ costUsd: 4, inputTokens: 400 }], 'model', 2);
+        await seedSeries(
+          db,
+          fork,
+          [
+            { costUsd: 2.5, inputTokens: 250 },
+            { costUsd: 3, inputTokens: 300 },
+          ],
+          'model',
+          3
+        );
+        expect.soft((await totals(db))[0]?.totalCost).toBeCloseTo(5, 10);
+        const usage = await new TaskRepository(db).getSessionUsage(fork as SessionID);
+        expect.soft(usage.cost).toBeCloseTo(1, 10);
+        expect.soft(usage.input).toBe(tool === 'codex' ? 100 : 550);
+      }
+    );
+  }
 
   dbTest('a fork that starts below the parent total counts in full', async ({ db }) => {
     const parent = await seedOneSession(db, 'claude-code', 'sess-parent');
