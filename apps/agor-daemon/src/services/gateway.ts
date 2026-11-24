@@ -5778,7 +5778,7 @@ export class GatewayService {
       stage = 'reply';
       const reply = formatGatewayCommandReply(applied.receipt, stop);
       if (reply) await this.sendSystemMessage(channel, data.thread_id, reply);
-      if (stop?.success || applied.receipt.outcome === 'idle') {
+      if (applied.receipt.outcome === 'idle') {
         await (
           this.getActiveListener(channel.id) ??
           getConnector(channel.channel_type as ChannelType, channel.config)
