@@ -5778,9 +5778,12 @@ export class GatewayService {
       stage = 'reply';
       const reply = formatGatewayCommandReply(applied.receipt, stop);
       if (reply) await this.sendSystemMessage(channel, data.thread_id, reply);
-      if (stop || applied.receipt.outcome === 'idle') {
-        await this.getActiveListener(channel.id)
-          ?.setThreadStatus?.({ threadId: data.thread_id, status: '', done: true })
+      if (stop?.success || applied.receipt.outcome === 'idle') {
+        await (
+          this.getActiveListener(channel.id) ??
+          getConnector(channel.channel_type as ChannelType, channel.config)
+        )
+          .setThreadStatus?.({ threadId: data.thread_id, status: '', done: true })
           .catch((error) => this.warnSlackAssistantStatusFailed(data.thread_id, error));
       }
     } catch (error) {

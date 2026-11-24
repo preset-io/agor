@@ -2580,18 +2580,24 @@ export class SlackConnector implements GatewayConnector {
       ...(req.loadingMessages?.length ? { loading_messages: req.loadingMessages } : {}),
       ...(req.iconEmoji ? { icon_emoji: req.iconEmoji } : {}),
     };
-    const result = web.assistant?.threads?.setStatus
-      ? await web.assistant.threads.setStatus(args)
-      : await web.apiCall?.('assistant.threads.setStatus', args);
-    if (!result?.ok) {
-      throw slackProviderFailure('Slack assistant status error', result?.error ?? 'unknown error');
+    try {
+      const result = web.assistant?.threads?.setStatus
+        ? await web.assistant.threads.setStatus(args)
+        : await web.apiCall?.('assistant.threads.setStatus', args);
+      if (!result?.ok) {
+        throw slackProviderFailure(
+          'Slack assistant status error',
+          result?.error ?? 'unknown error'
+        );
+      }
+    } finally {
+      // The legacy status carries the text; only an agent session shows Slack's Stop button.
+      await web.apiCall?.('agents.sessions.setStatus', {
+        channel_id: channel,
+        thread_ts,
+        status: req.done ? 'active' : 'processing',
+      });
     }
-    // The legacy status carries the text; only an agent session shows Slack's Stop button.
-    await web.apiCall?.('agents.sessions.setStatus', {
-      channel_id: channel,
-      thread_ts,
-      status: req.done ? 'active' : 'processing',
-    });
   }
 
   /**
@@ -2736,33 +2742,39 @@ export class SlackConnector implements GatewayConnector {
         const ackFirst = !options.durableEventIdempotency;
         if (ackFirst) await ack();
         const event = body.event;
-        let routed = false;
-        try {
-          if (typeof event.channel !== 'string' || typeof event.user !== 'string') return;
-          const profile = await this.lookupUserProfile(event.user, options.durableEventIdempotency);
-          const slackTeamId = body.team_id ?? body.authorizations?.[0]?.team_id;
-          routed = true;
-          // Slack shows Stop only on this app's own session, so the click counts as a mention.
-          await callback({
-            providerEventId: `slack:agent_session_stopped:${slackTeamId ?? 'unknown'}:${event.channel}:${event.event_ts}`,
-            threadId: `${event.channel}-${event.thread_ts}`,
-            text: '!stop',
-            userId: event.user,
-            timestamp: event.event_ts,
-            metadata: {
-              channel: event.channel,
-              slack_user_id: event.user,
-              ...(slackTeamId ? { slack_team_id: slackTeamId } : {}),
-              slack_message_ts: event.event_ts,
-              slack_has_mention: true,
-              ...(profile.email ? { slack_user_email: profile.email } : {}),
-              ...(this.config.align_slack_users ? { align_slack_users: true } : {}),
-            },
-          });
+        if (
+          typeof event.channel !== 'string' ||
+          typeof event.user !== 'string' ||
+          !isSlackInboundSurfaceAllowed(
+            await this.resolveChannelType(event.channel, undefined),
+            event.channel,
+            { enableChannels, enableGroups, enableMpim, allowedChannelIds }
+          )
+        ) {
           if (!ackFirst) await ack();
-        } finally {
-          if (!routed && !ackFirst) await ack();
+          return;
         }
+        const profile = await this.lookupUserProfile(event.user, options.durableEventIdempotency);
+        const slackTeamId = body.team_id ?? body.authorizations?.[0]?.team_id;
+        // Slack shows Stop only on this app's own session, so the click counts as a mention.
+        // `!skip` stops the current task like `!stop`, and also when prompts are queued.
+        await callback({
+          providerEventId: `slack:agent_session_stopped:${slackTeamId ?? 'unknown'}:${event.channel}:${event.event_ts}`,
+          threadId: `${event.channel}-${event.thread_ts}`,
+          text: '!skip',
+          userId: event.user,
+          timestamp: event.event_ts,
+          metadata: {
+            channel: event.channel,
+            slack_user_id: event.user,
+            ...(slackTeamId ? { slack_team_id: slackTeamId } : {}),
+            slack_message_ts: event.event_ts,
+            slack_has_mention: true,
+            ...(profile.email ? { slack_user_email: profile.email } : {}),
+            ...(this.config.align_slack_users ? { align_slack_users: true } : {}),
+          },
+        });
+        if (!ackFirst) await ack();
         return;
       }
       if (eventType !== 'message' && eventType !== 'app_mention') {
