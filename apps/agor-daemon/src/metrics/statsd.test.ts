@@ -141,6 +141,9 @@ describe('StatsD daemon metrics', () => {
         method: 'GET',
         outcome: 'success',
         disconnect_reason: 'transport_error',
+        fallback_kind: 'zero_turn',
+        surface: 'gateway',
+        tool_chain: 'short',
         reason: 'caller-controlled',
         session_id: 'forbidden',
         tenant: 'forbidden',
@@ -151,6 +154,9 @@ describe('StatsD daemon metrics', () => {
       method: 'GET',
       outcome: 'success',
       disconnect_reason: 'transport_error',
+      fallback_kind: 'zero_turn',
+      surface: 'gateway',
+      tool_chain: 'short',
       service: 'sessions',
     });
   });

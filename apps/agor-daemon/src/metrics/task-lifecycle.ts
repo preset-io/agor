@@ -1,9 +1,34 @@
+import { classifyProviderFallback } from '@agor/core';
 import type { TaskDispatchClaimResult } from '@agor/core/db';
 import type { Task } from '@agor/core/types';
 import type { DaemonMetrics } from './types.js';
 
 function executorMode(task: Task): 'local' | 'templated' {
   return task.executor_mode === 'templated' ? 'templated' : 'local';
+}
+
+function taskSurface(task: Task): 'gateway' | 'ui' | 'unknown' {
+  if (task.metadata?.gateway_task_source || task.metadata?.source === 'gateway') {
+    return 'gateway';
+  }
+  if (task.metadata?.source === 'agor') {
+    return 'ui';
+  }
+  return 'unknown';
+}
+
+// 0 -> none, 1-4 -> short, >=5 -> long, non-finite/null -> unknown
+function toolChainLength(task: Task): 'none' | 'short' | 'long' | 'unknown' {
+  if (task.recorded_tool_count == null || !Number.isFinite(task.recorded_tool_count)) {
+    return 'unknown';
+  }
+  if (task.recorded_tool_count === 0) {
+    return 'none';
+  }
+  if (task.recorded_tool_count <= 4) {
+    return 'short';
+  }
+  return 'long';
 }
 
 function durationBetween(start: string | undefined, end: string | undefined): number | undefined {
@@ -37,7 +62,14 @@ export function recordExecutorConnected(metrics: DaemonMetrics, task: Task): voi
   }
 }
 
+const settledTasks = new WeakSet<object>();
+
 export function recordTaskSettlement(metrics: DaemonMetrics, task: Task): void {
+  if (settledTasks.has(task)) {
+    return;
+  }
+  settledTasks.add(task);
+
   const tags = { status: task.status, mode: executorMode(task) } as const;
   metrics.increment('task.settlements', 1, tags);
 
@@ -48,5 +80,15 @@ export function recordTaskSettlement(metrics: DaemonMetrics, task: Task): void {
   const connectedDuration = durationBetween(task.executor_connected_at, task.completed_at);
   if (connectedDuration !== undefined) {
     metrics.distribution('task.connected_to_settlement.duration_ms', connectedDuration, tags);
+  }
+
+  const fallbackKind = classifyProviderFallback(task);
+  if (fallbackKind) {
+    metrics.increment('task.provider_fallback', 1, {
+      fallback_kind: fallbackKind,
+      surface: taskSurface(task),
+      tool_chain: toolChainLength(task),
+      mode: executorMode(task),
+    });
   }
 }

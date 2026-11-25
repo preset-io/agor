@@ -8,11 +8,59 @@
 import type { ContextUsageSnapshot, Task } from './types/task.js';
 
 import {
+  failureMessageBase,
+  LEGACY_SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
+  PROVIDER_DETAIL_SEPARATOR,
+  type ProviderFallbackKind,
   SAFE_MISSING_PROVIDER_RESULT_MESSAGE,
   SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
 } from './types/turn-failure-messages.js';
 
-export { SAFE_MISSING_PROVIDER_RESULT_MESSAGE, SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE };
+export {
+  LEGACY_SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
+  type ProviderFallbackKind,
+  SAFE_MISSING_PROVIDER_RESULT_MESSAGE,
+  SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
+};
+
+/**
+ * Classify a failed Task's provider fallback outcome for operational telemetry.
+ *
+ * Distinguishes:
+ * - 'zero_turn': Successful provider result, but no assistant response was confirmed for the conversational turn.
+ * - 'provider_error': Provider result reports an unsuccessful subtype or error flag.
+ * - 'missing_result': The stream ended without a terminal SDK result.
+ *
+ * Returns undefined for non-fallback failures, normal completions, or non-terminal tasks.
+ */
+export function classifyProviderFallback(task: {
+  status?: string;
+  error_message?: string | null;
+  raw_sdk_response?: unknown;
+}): ProviderFallbackKind | undefined {
+  if (task.status !== 'failed' || !task.error_message) return undefined;
+
+  const base = failureMessageBase(task.error_message);
+  if (base === SAFE_MISSING_PROVIDER_RESULT_MESSAGE) {
+    return 'missing_result';
+  }
+
+  if (
+    base === SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE ||
+    base === LEGACY_SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE
+  ) {
+    const raw = projectClaudeResultResponse(task.raw_sdk_response);
+    if (raw && (raw.subtype !== 'success' || raw.is_error === true)) {
+      return 'provider_error';
+    }
+    if (task.error_message.includes(PROVIDER_DETAIL_SEPARATOR)) {
+      return 'provider_error';
+    }
+    return 'zero_turn';
+  }
+
+  return undefined;
+}
 
 export type SafeNormalizedSdkResponse = NonNullable<Task['normalized_sdk_response']>;
 
