@@ -56,6 +56,8 @@ export function BranchSessionTree({
 
   const tree = (
     <Tree
+      // Rows are buttons with their own focus; Tree's active-node shade would mark another row.
+      activeKey={null}
       {...props}
       height={fillAvailableHeight ? height : BRANCH_SESSION_VIEWPORT_HEIGHT}
       virtual

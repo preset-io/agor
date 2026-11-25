@@ -42,7 +42,12 @@ const RecentBoardPill: React.FC<{
       <Typography.Text ellipsis style={{ minWidth: 0 }}>
         {board.name}
       </Typography.Text>
-      {status && <Badge status={activity.hasReady ? 'warning' : 'success'} />}
+      {status && (
+        <Badge
+          status={activity.hasReady ? 'warning' : 'success'}
+          styles={{ root: { flexShrink: 0 } }}
+        />
+      )}
     </Button>
   );
 };

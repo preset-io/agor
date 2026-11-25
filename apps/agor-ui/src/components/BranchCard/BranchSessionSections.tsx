@@ -65,6 +65,7 @@ import {
 } from '../../utils/sessionSearch';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { ArchiveActionButton } from '../ArchiveButton';
+import { FadeText } from '../FadeText';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
 import { HighlightMatch } from '../HighlightMatch';
 import { OverflowTooltip } from '../OverflowTooltip';
@@ -214,6 +215,7 @@ const SessionItemWithActions: React.FC<{
 
   return (
     <div
+      data-fade-row
       style={{
         position: 'relative',
         minWidth: 0,
@@ -243,6 +245,7 @@ const SessionItemWithActions: React.FC<{
       {children}
       {actionsRevealed && (
         <div
+          data-fade-row-actions
           style={{
             position: 'absolute',
             right: 4,
@@ -910,21 +913,17 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   ) => {
     const titleText = getSessionDisplayTitle(session, { includeAgentFallback: true });
     return (
-      <OverflowTooltip
-        title={titleText}
-        placement="topLeft"
-        mouseEnterDelay={TITLE_TOOLTIP_DELAY_S}
+      <FadeText
+        fullText={titleText}
+        tooltipProps={{ placement: 'topLeft', mouseEnterDelay: TITLE_TOOLTIP_DELAY_S }}
+        style={getSessionRowTitleStyle(token, {
+          read: isSessionRowRead(session, session.session_id === selectedSessionId),
+          parent: options.parent,
+          hug: options.hug,
+        })}
       >
-        <Typography.Text
-          style={getSessionRowTitleStyle(token, {
-            read: isSessionRowRead(session, session.session_id === selectedSessionId),
-            parent: options.parent,
-            hug: options.hug,
-          })}
-        >
-          <HighlightMatch text={titleText} query={options.query ?? ''} />
-        </Typography.Text>
-      </OverflowTooltip>
+        <HighlightMatch text={titleText} query={options.query ?? ''} />
+      </FadeText>
     );
   };
 

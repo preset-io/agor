@@ -71,6 +71,12 @@ root, not an inner indicator. AntD `Typography.Text` with
 `ellipsis={{ tooltip: fullValue }}` supplies the label clamp and a hover tooltip only when the text
 is clipped, but it does not constrain those ancestors for you.
 
+Long user-authored titles (session, branch and board names, Home rows) use `FadeText` instead: on
+hover-capable screens a clipped label fades out over its last 24px (12px with `dense`) rather than
+ending in "…", and touch keeps the ellipsis. It shows the full text in a tooltip on hover and on
+keyboard focus of the enclosing control. In a row with hover actions, mark the row `data-fade-row`
+and the actions `data-fade-row-actions`: the fade then ends where the actions begin. Keep the ellipsis for tables, code, IDs and paths.
+
 Keep the full value in the control's accessible name. Do not add a nested tab stop merely to make
 a tooltip keyboard-triggerable; interactive library surfaces need a component-level focus pattern
 that has been tested with the library's own keyboard behavior.
