@@ -14,14 +14,23 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
-import { getMcpServersForSession, resolveEffectiveSessionMcpServers } from '@agor/core/mcp';
+import { activeSessionMcpServers, getMcpServersForSession } from '@agor/core/mcp';
 import { resolveSessionMcpServerIds } from '@agor/core/sessions';
 import type { CreateSessionInput, MCPServer, Session } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { afterEach, describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { generateId } from '../../../../packages/core/src/lib/ids';
+import { resolveSessionMcpViewForSession } from './session-mcp-effective';
 import { type SessionParams, SessionsService } from './sessions';
+
+/** The runtime set the session route hands the executor. */
+async function runtimeSet(db: Database, sessionId: string, userId: string) {
+  const session = await new SessionRepository(db).findById(sessionId);
+  return activeSessionMcpServers(
+    await resolveSessionMcpViewForSession(db as never, session!, userId)
+  );
+}
 
 // Regression coverage for #2629: the create-time MCP selection was persisted by
 // a best-effort follow-up loop that could silently drop servers. It now attaches
@@ -124,21 +133,13 @@ describe('SessionsService create-time MCP attachment', () => {
       } as never);
       const stored = await new SessionRepository(db).findById(created.session_id);
       expect(stored?.mcp_selection_explicit).toBe(true);
-      const links = new SessionMCPServerRepository(db);
-      const global = vi.fn(async () => [gmail, sharedServer]);
       const auth = vi.fn();
       const resolved = await getMcpServersForSession(
         created.session_id,
         {
           sessionMCPRepo: {
-            listServers: (id, enabled) => links.listServers(id, enabled),
-            listEffectiveServers: async (id, enabled, caller) =>
-              resolveEffectiveSessionMcpServers(
-                (await new SessionRepository(db).findById(id))!,
-                await links.listServers(id, enabled),
-                global,
-                caller
-              ),
+            listServers: () => Promise.resolve([]),
+            listEffectiveServers: (id, _enabled, caller) => runtimeSet(db, id, caller!),
           },
           mcpServerRepo: servers,
           mcpOAuthAuthHeadersRepo: { getAuthHeaders: auth },
@@ -161,24 +162,15 @@ describe('SessionsService create-time MCP attachment', () => {
       ).buildInvocationConfig(created.session_id, 'fictional-agor-token');
       expect(Object.keys(config.mcp)).toHaveLength(1);
       expect(Object.keys(config.mcp)[0]).toMatch(/^agor_/);
-      expect(global).not.toHaveBeenCalled();
       expect(auth).not.toHaveBeenCalled();
-      expect(
-        await resolveEffectiveSessionMcpServers(stored!, [gmail], global, user.user_id)
-      ).toEqual([gmail]);
-      expect(global).not.toHaveBeenCalled();
       await expect(
         service.patch(created.session_id, { mcp_selection_explicit: false })
       ).rejects.toThrow('mcp_selection_explicit is server-managed');
       const omitted = await service.create(base, { _agenticConfigResolved: true } as never);
       expect(omitted.mcp_selection_explicit).toBeUndefined();
-      expect(await resolveEffectiveSessionMcpServers(omitted, [], global, user.user_id)).toEqual([
-        gmail,
-        sharedServer,
-      ]);
-      expect(
-        await resolveEffectiveSessionMcpServers(omitted, [], global, 'different-caller')
-      ).toEqual([sharedServer]);
+      // An unconnected per-user OAuth global server is a connect row, not loaded.
+      expect(await runtimeSet(db, omitted.session_id, user.user_id)).toEqual([sharedServer]);
+      expect(await runtimeSet(db, omitted.session_id, 'different-caller')).toEqual([sharedServer]);
     }
   );
 
@@ -463,14 +455,8 @@ describe('SessionsService child MCP selection intent', () => {
     };
   }
 
-  async function effective(db: Database, session: Session, global: MCPServer, userId: string) {
-    const stored = await new SessionRepository(db).findById(session.session_id);
-    return resolveEffectiveSessionMcpServers(
-      stored!,
-      await new SessionMCPServerRepository(db).listServers(session.session_id, true),
-      async () => [global],
-      userId
-    );
+  async function effective(db: Database, session: Session, _global: MCPServer, userId: string) {
+    return runtimeSet(db, session.session_id, userId);
   }
 
   async function childFixture(db: Database) {
@@ -521,6 +507,33 @@ describe('SessionsService child MCP selection intent', () => {
       }
     }
   );
+
+  dbTest('fork and spawn keep a parent opt-out of a global server', async ({ db }) => {
+    const { user, branch, sharedServer, attached } = await childFixture(db);
+    const service = childService(db, user.user_id);
+    const parent = await service.create(parentInput(branch.branch_id, user.user_id), {
+      _agenticConfigResolved: true,
+    } as never);
+    await new SessionMCPServerRepository(db).setServerEnabled(
+      parent.session_id,
+      sharedServer.mcp_server_id,
+      false
+    );
+    expect(await effective(db, parent, sharedServer, user.user_id)).toEqual([attached]);
+
+    for (const child of [
+      await service.fork(parent.session_id),
+      await service.spawn(parent.session_id),
+    ]) {
+      expect(await new SessionMCPServerRepository(db).listLinks(child.session_id)).toContainEqual({
+        mcp_server_id: sharedServer.mcp_server_id,
+        enabled: false,
+      });
+      expect(
+        (await effective(db, child, sharedServer, user.user_id)).map((s) => s.mcp_server_id)
+      ).toEqual([attached.mcp_server_id]);
+    }
+  });
 
   dbTest('explicit parent intent propagates to fork and inheriting spawn', async ({ db }) => {
     const { user, branch, sharedServer } = await childFixture(db);

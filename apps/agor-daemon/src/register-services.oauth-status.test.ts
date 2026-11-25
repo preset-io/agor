@@ -27,9 +27,12 @@ describe('register-services durable OAuth status authority', () => {
   // `services/mcp-oauth-status.test.ts`. All this file still owes is that the
   // route asks it rather than deciding for itself.
   it('resolves durable status through the one place that decides it', () => {
-    expect(statusBlock).toContain('resolveAuthenticatedServerIds');
-    expect(statusBlock).toContain('requireGrantBinding: true');
-    expect(statusBlock).toContain('isMCPOAuthGrantAuthorizedForServer(');
+    // The route and the session effective MCP set share one loader.
+    expect(statusBlock).toContain('loadAuthenticatedMcpServerIds(db');
+    const loader = readFileSync(join(__dirname, 'services', 'session-mcp-effective.ts'), 'utf8');
+    expect(loader).toContain('resolveAuthenticatedServerIds');
+    expect(loader).toContain('requireGrantBinding: true');
+    expect(loader).toContain('isMCPOAuthGrantAuthorizedForServer(');
   });
 
   it('gives the refresh owner and observer the same retryable known-failure response', () => {

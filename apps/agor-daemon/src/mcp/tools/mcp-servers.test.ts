@@ -198,15 +198,30 @@ describe('listAttachedMcpServers prompt identity', () => {
         },
       ],
     ]);
+    const toConnect = {
+      mcp_server_id: 'to-connect',
+      name: 'To connect',
+      transport: 'http',
+      enabled: true,
+      scope: 'global',
+      auth: { type: 'none' },
+    };
+    const findCalls: unknown[] = [];
     const app = makeFakeApp({
-      sessions: { get: async () => ({ session_id: 'sess-1', created_by: 'session-owner' }) },
-      'session-mcp-servers': {
-        find: async () => ({
-          data: [...servers.keys()].map((mcp_server_id) => ({ mcp_server_id })),
-        }),
-      },
-      'mcp-servers': {
-        get: async (id: unknown) => servers.get(String(id)),
+      '/sessions/:id/mcp-servers': {
+        find: async (params: unknown) => {
+          findCalls.push(params);
+          return {
+            entries: [
+              ...[...servers.values()].map((server) => ({
+                source: server.mcp_server_id === 'shared' ? 'global' : 'session',
+                state: 'active',
+                server,
+              })),
+              { source: 'global', state: 'needs_connect', server: toConnect },
+            ],
+          };
+        },
       },
     });
     const { listAttachedMcpServers } = await import('./mcp-servers.js');
@@ -223,7 +238,15 @@ describe('listAttachedMcpServers prompt identity', () => {
       'sess-1'
     );
 
-    expect(result.map((server) => server.mcp_server_id)).toEqual(['actor-private', 'shared']);
+    // The effective set plus servers one Connect away, global ones tagged.
+    expect(result.map((server) => [server.mcp_server_id, server.source, server.state])).toEqual([
+      ['actor-private', 'session', 'active'],
+      ['shared', 'global', 'active'],
+      ['to-connect', 'global', 'needs_connect'],
+    ]);
+    expect(findCalls).toEqual([
+      expect.objectContaining({ route: { id: 'sess-1' }, query: { effective: true } }),
+    ]);
   });
 });
 
@@ -883,6 +906,7 @@ describe('agor_mcp_servers_create/update/attach', () => {
   it('removes a session-specific MCP server link', async () => {
     const removeCalls: Array<{ id: string; params: any }> = [];
     const app = makeFakeApp({
+      'mcp-servers': { get: async (id: string) => ({ mcp_server_id: id, scope: 'session' }) },
       '/sessions/:id/mcp-servers': {
         remove: async (id: string, params: any) => {
           removeCalls.push({ id, params });
@@ -905,6 +929,30 @@ describe('agor_mcp_servers_create/update/attach', () => {
       session_id: 'sess-current',
       mcp_server_id: 'full-linear1',
     });
+  });
+
+  it('switches a global MCP server off for just this session', async () => {
+    const patchCalls: Array<{ id: string; data: unknown; params: any }> = [];
+    const app = makeFakeApp({
+      'mcp-servers': { get: async (id: string) => ({ mcp_server_id: id, scope: 'global' }) },
+      '/sessions/:id/mcp-servers': {
+        patch: async (id: string, data: unknown, params: any) => {
+          patchCalls.push({ id, data, params });
+          return { session_id: params.route.id, mcp_server_id: id, enabled: false };
+        },
+      },
+    });
+
+    const remove = await captureTool(
+      { app, userId: 'user-1', sessionId: 'sess-current' },
+      'agor_sessions_remove_mcp_server'
+    );
+    await remove({ mcpServerId: 'linear1' });
+
+    expect(patchCalls).toHaveLength(1);
+    expect(patchCalls[0].id).toBe('full-linear1');
+    expect(patchCalls[0].data).toEqual({ enabled: false });
+    expect(patchCalls[0].params.route.id).toBe('sess-current');
   });
 
   it('sets session-specific MCP server links with one atomic replacement', async () => {

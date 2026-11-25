@@ -124,11 +124,23 @@ export class SessionMCPServerRepository {
   }
 
   /**
-   * Toggle MCP server enabled state for session
+   * Switch a server on or off for one session, creating the link if needed.
+   * A link with `enabled: false` on a global server is the per-session
+   * opt-out (`mcp/effective-set.ts`); `enabled: true` is the same link
+   * `addServer` writes.
    */
-  async toggleServer(sessionId: SessionID, serverId: MCPServerID, enabled: boolean): Promise<void> {
+  async setServerEnabled(
+    sessionId: SessionID,
+    serverId: MCPServerID,
+    enabled: boolean
+  ): Promise<void> {
     try {
-      const result = await update(this.db, sessionMcpServers)
+      await this.resolveUsablePair(sessionId, serverId);
+      await insert(this.db, sessionMcpServers)
+        .values({ session_id: sessionId, mcp_server_id: serverId, enabled, added_at: new Date() })
+        .onConflictDoNothing()
+        .run();
+      await update(this.db, sessionMcpServers)
         .set({ enabled })
         .where(
           and(
@@ -137,17 +149,28 @@ export class SessionMCPServerRepository {
           )
         )
         .run();
-
-      if (result.rowsAffected === 0) {
-        throw new EntityNotFoundError('SessionMCPServer', `${sessionId}/${serverId}`);
-      }
     } catch (error) {
       if (error instanceof EntityNotFoundError) throw error;
+      if (error instanceof MCPServerNotUsableError) throw error;
       throw new RepositoryError(
-        `Failed to toggle MCP server: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to switch MCP server for session: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
+  }
+
+  /** Every link of a session with its enabled flag, opt-outs included. */
+  async listLinks(
+    sessionId: SessionID
+  ): Promise<Array<{ mcp_server_id: MCPServerID; enabled: boolean }>> {
+    const rows = await select(this.db)
+      .from(sessionMcpServers)
+      .where(eq(sessionMcpServers.session_id, sessionId))
+      .all();
+    return rows.map((row: { mcp_server_id: string; enabled: unknown }) => ({
+      mcp_server_id: row.mcp_server_id as MCPServerID,
+      enabled: Boolean(row.enabled),
+    }));
   }
 
   /**
@@ -234,7 +257,8 @@ export class SessionMCPServerRepository {
 
   /**
    * Set MCP servers for a session (bulk operation)
-   * Replaces existing relationships with new ones
+   * Replaces the enabled links. Per-session opt-outs of global servers
+   * (disabled links) are kept.
    */
   async setServers(
     sessionId: SessionID,
@@ -246,6 +270,14 @@ export class SessionMCPServerRepository {
       // in the MCP tool. This protects callers that use the repository/service
       // directly from duplicate-key failures during the atomic insert.
       const uniqueServerIds = [...new Set(serverIds)];
+      const enabledIds = new Set(uniqueServerIds);
+      // Opt-outs of global servers survive a link replacement.
+      const disabledIds: MCPServerID[] = [];
+      for (const link of await this.listLinks(sessionId)) {
+        if (link.enabled || enabledIds.has(link.mcp_server_id)) continue;
+        const server = await this.mcpServerRepo.findById(link.mcp_server_id);
+        if (server?.scope === 'global') disabledIds.push(link.mcp_server_id);
+      }
 
       // Validate the complete replacement before deleting anything, so one
       // private/foreign server cannot partially alter the existing set.
@@ -277,11 +309,14 @@ export class SessionMCPServerRepository {
             .where(eq(sessionMcpServers.session_id, sessionId))
             .run();
 
-          if (uniqueServerIds.length > 0) {
-            const inserts: SessionMCPServerInsert[] = uniqueServerIds.map((serverId) => ({
+          if (uniqueServerIds.length > 0 || disabledIds.length > 0) {
+            const inserts: SessionMCPServerInsert[] = [
+              ...uniqueServerIds.map((serverId) => ({ serverId, enabled: true })),
+              ...disabledIds.map((serverId) => ({ serverId, enabled: false })),
+            ].map(({ serverId, enabled }) => ({
               session_id: sessionId,
               mcp_server_id: serverId,
-              enabled: true,
+              enabled,
               added_at: new Date(),
             }));
 

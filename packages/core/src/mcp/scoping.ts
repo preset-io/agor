@@ -4,10 +4,8 @@
  * Shared logic for determining which MCP servers should be attached to a session.
  * Used by agentic-tool runtime adapters to ensure consistent behavior.
  *
- * Scoping Rules:
- * - ALL shared global-scoped MCPs are included in every session
- * - PLUS any session-scoped MCPs that are explicitly assigned to this session
- * - MINUS any server private to a user other than the current prompt actor
+ * Scoping Rules: see `effective-set.ts` (enabled session links, plus enabled
+ * global servers that work for the prompt actor, minus per-session opt-outs).
  *
  * Template Resolution:
  * MCP server env vars can contain Handlebars templates like {{ user.env.GITHUB_TOKEN }}.
@@ -20,7 +18,7 @@
  */
 
 import { resolveMCPAuthHeaders } from '../tools/mcp/jwt-auth';
-import type { MCPServer, MCPServerFilters, MCPServerID, Session, SessionID } from '../types';
+import type { MCPServer, MCPServerFilters, MCPServerID, SessionID } from '../types';
 import { isMCPServerUsableBy } from './ownership';
 import {
   buildMCPTemplateContextFromEnv,
@@ -40,7 +38,8 @@ export interface MCPScopingServerRepository {
 
 export interface MCPScopingSessionRepository {
   listServers(sessionId: SessionID, enabledOnly?: boolean): Promise<MCPServer[]>;
-  listEffectiveServers?(
+  /** The runtime set: `active` entries of `resolveSessionMcpEntries`. */
+  listEffectiveServers(
     sessionId: SessionID,
     enabledOnly?: boolean,
     forUserId?: string
@@ -51,19 +50,6 @@ export interface MCPAuthHeadersRepository {
   getAuthHeaders(
     mcpServerIds: MCPServerID[]
   ): Promise<Record<string, { authorization?: string; error?: string }>>;
-}
-
-/** Runtime set, not just the junction-table inventory shown by attachment UIs. */
-export async function resolveEffectiveSessionMcpServers(
-  session: Pick<Session, 'mcp_selection_explicit'>,
-  attached: MCPServer[],
-  loadGlobal: () => Promise<MCPServer[]>,
-  forUserId: string | undefined
-): Promise<MCPServer[]> {
-  const global = session.mcp_selection_explicit ? [] : await loadGlobal();
-  return [
-    ...new Map([...global, ...attached].map((server) => [server.mcp_server_id, server])).values(),
-  ].filter((server) => isMCPServerUsableBy(server, forUserId));
 }
 
 const DEBUG_MCP_SCOPING =
@@ -197,7 +183,7 @@ export const AGOR_MCP_SERVER_NAME = 'agor';
  *   mcpServerRepo
  * });
  *
- * // Always returns: ALL global MCPs + session-assigned MCPs (deduplicated)
+ * // Returns the session's effective set (`effective-set.ts`), deduplicated
  * // => [
  * //   { server: { name: "filesystem", scope: "global", ... }, source: "global" },
  * //   { server: { name: "preset sdx", scope: "session", ... }, source: "session-assigned" }
@@ -212,7 +198,7 @@ export async function getMcpServersForSession(
   const servers: MCPServerWithSource[] = [];
 
   // Early return if dependencies not available
-  if (!deps.sessionMCPRepo || !deps.mcpServerRepo) {
+  if (!deps.sessionMCPRepo) {
     console.warn('⚠️  MCP repository dependencies not available - skipping MCP configuration');
     return servers;
   }
@@ -249,42 +235,15 @@ export async function getMcpServersForSession(
       );
     };
 
-    if (typeof deps.sessionMCPRepo.listEffectiveServers === 'function') {
-      const effectiveServers = await deps.sessionMCPRepo.listEffectiveServers(
-        sessionId,
-        true,
-        deps.forUserId
-      );
-      mcpDebug(`   📍 Effective session scope: ${effectiveServers.length} server(s)`);
+    const effectiveServers = await deps.sessionMCPRepo.listEffectiveServers(
+      sessionId,
+      true,
+      deps.forUserId
+    );
+    mcpDebug(`   📍 Effective session scope: ${effectiveServers.length} server(s)`);
 
-      for (const server of effectiveServers) {
-        addServer(server, server.scope === 'global' ? 'global' : 'session-assigned');
-      }
-    } else {
-      // STEP 1: Get all usable global definitions for the prompt actor. OAuth
-      // credentials are hydrated later through the executor-only auth-header
-      // capability. A shared prompt must never import the session owner's
-      // private MCP definitions or credentials.
-      const globalServers = await deps.mcpServerRepo.findAll({
-        scope: 'global',
-        enabled: true,
-        ...(deps.forUserId ? { usableByUserId: deps.forUserId } : {}),
-      });
-
-      mcpDebug(`   📍 Global scope: ${globalServers?.length ?? 0} server(s)`);
-
-      for (const server of globalServers ?? []) {
-        addServer(server, 'global');
-      }
-
-      // STEP 2: Get session-scoped MCP servers assigned to this specific session
-      const sessionServers = await deps.sessionMCPRepo.listServers(sessionId, true); // enabledOnly
-
-      mcpDebug(`   📍 Session-assigned: ${sessionServers.length} server(s)`);
-
-      for (const server of sessionServers) {
-        addServer(server, 'session-assigned');
-      }
+    for (const server of effectiveServers) {
+      addServer(server, server.scope === 'global' ? 'global' : 'session-assigned');
     }
 
     // Log summary (before template resolution)

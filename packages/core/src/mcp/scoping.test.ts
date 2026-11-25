@@ -150,27 +150,6 @@ describe('getMcpServersForSession', () => {
     }
   });
 
-  it('passes the prompt actor to global repository filtering', async () => {
-    const findAll = vi.fn().mockResolvedValue([makeServer('shared', 'global')]);
-    const listServers = vi.fn().mockResolvedValue([]);
-
-    await getMcpServersForSession(
-      'session-a' as SessionID,
-      {
-        mcpServerRepo: { findAll } as never,
-        sessionMCPRepo: { listServers } as never,
-        forUserId: 'prompt-user',
-      },
-      ENFORCING
-    );
-
-    expect(findAll).toHaveBeenCalledWith({
-      scope: 'global',
-      enabled: true,
-      usableByUserId: 'prompt-user',
-    });
-  });
-
   it('resolves an OAuth server whose only template is oauth_client_secret', async () => {
     const prevKeys = process.env.AGOR_USER_ENV_KEYS;
     const prevSecret = process.env.OAUTH_CLIENT_SECRET;
