@@ -2170,8 +2170,14 @@ export class SlackConnector implements GatewayConnector {
    *
    * Cast to a minimal local shape because `@slack/web-api`'s `uploadV2`
    * argument type is a discriminated union that doesn't narrow cleanly over
-   * a conditionally-spread object; the runtime response carries `files[0]`
-   * with the uploaded file's id/permalink/name.
+   * a conditionally-spread object, and its declared result is a bare
+   * `WebAPICallResult`. At runtime `uploadV2` runs getUploadURLExternal →
+   * upload → completeUploadExternal and returns `{ ok, files: completion }`,
+   * where each `completion` entry is a whole `files.completeUploadExternal`
+   * response: the uploaded files sit one level down, at `files[i].files[j]`.
+   * completeUploadExternal returns only id and title, so `permalink` is
+   * usually null (fetching it would need `files:read`, which `file_upload`
+   * does not grant).
    */
   async uploadFile(req: {
     channel: string;
@@ -2180,11 +2186,12 @@ export class SlackConnector implements GatewayConnector {
     filename: string;
     comment?: string;
   }): Promise<{ id: string; permalink: string | null; name: string }> {
+    type UploadedFile = { id?: string; permalink?: string; name?: string; title?: string };
     const files = this.web.files as unknown as {
       uploadV2: (args: Record<string, unknown>) => Promise<{
         ok?: boolean;
         error?: string;
-        files?: Array<{ id?: string; permalink?: string; name?: string }>;
+        files?: Array<{ files?: UploadedFile[] }>;
       }>;
     };
     const result = await files.uploadV2({
@@ -2197,14 +2204,14 @@ export class SlackConnector implements GatewayConnector {
     if (!result.ok) {
       throw slackProviderFailure('Slack API error', result.error ?? 'unknown error');
     }
-    const uploaded = result.files?.[0];
+    const uploaded = result.files?.[0]?.files?.[0];
     if (!uploaded?.id) {
       throw new Error('Slack API error: upload response missing file id');
     }
     return {
       id: uploaded.id,
       permalink: uploaded.permalink ?? null,
-      name: uploaded.name ?? req.filename,
+      name: uploaded.name ?? uploaded.title ?? req.filename,
     };
   }
 

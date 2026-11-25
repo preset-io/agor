@@ -52,7 +52,11 @@ export async function handleBranchSlackFileUpload(
       } as RequestInit & { duplex: 'half' }
     );
     if (!response.ok) {
-      throw new Error(`Slack upload failed with HTTP ${response.status}`);
+      // The daemon route answers `{ error }` with the connector's message
+      // (e.g. a Slack API error code); surface it instead of a bare status.
+      const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+      const detail = typeof body?.error === 'string' && body.error ? `: ${body.error}` : '';
+      throw new Error(`Slack upload failed with HTTP ${response.status}${detail}`);
     }
     const result = (await response.json()) as { uploaded?: unknown };
     return { success: true, data: { uploaded: result.uploaded } };
