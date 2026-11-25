@@ -13,6 +13,7 @@ import {
   generateId,
   insert,
   RepoRepository,
+  runWithTenantDatabaseScope,
   sessions,
   TaskRepository,
   tasks,
@@ -760,6 +761,25 @@ describe('LeaderboardService session-cumulative usage', () => {
     expect(row?.taskCount).toBe(2);
   });
 
+  for (const filter of ['user', 'model'] as const) {
+    dbTest(`${filter} filters preserve earlier tasks in the session baseline`, async ({ db }) => {
+      const sessionId = await seedOneSession(db, 'claude-code');
+      await seedTask(db, {
+        sessionId,
+        createdBy: 'test-user',
+        createdAt: tsAt(),
+        model: 'earlier-model',
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: 2,
+      });
+      await seedSeries(db, sessionId, [{ costUsd: 3 }], 'selected-model', 1);
+      const [row] = await totals(db, filter === 'user' ? { userId } : { model: 'selected-model' });
+      expect(row?.totalCost).toBeCloseTo(1, 10);
+      expect(row?.taskCount).toBe(1);
+    });
+  }
+
   dbTest('claude-code tokens are per task and stay summed', async ({ db }) => {
     const sessionId = await seedOneSession(db, 'claude-code');
     await seedSeries(db, sessionId, [
@@ -908,3 +928,13 @@ describe('LeaderboardService input validation', () => {
     expect(result.offset).toBe(1);
   });
 });
+
+// Explicit opt-in: keep a 30k-row timing regression out of ordinary unit runs.
+dbTest.skipIf(process.env.AGOR_RUN_LEADERBOARD_BENCHMARK !== '1')(
+  'a last-day filter reduces work on 30k tasks',
+  async ({ db }) => {
+    const { benchmarkLeaderboard } = await import('./leaderboard.benchmark-fixture');
+    await runWithTenantDatabaseScope(db, `benchmark-${generateId()}`, benchmarkLeaderboard);
+  },
+  180_000
+);

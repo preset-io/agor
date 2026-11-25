@@ -284,11 +284,24 @@ export class LeaderboardService {
     // Token and cost metrics come from `taskUsageTable`, which turns the
     // session running totals some tools record on each task back into each
     // task's own usage. Its baseline spans every task of a session, so it is
-    // joined and the filters above apply to this outer query only. For
-    // duration we prefer the normalized value; if unset we fall back to the
+    // joined and task filters still apply to this outer query. Limit window
+    // work to sessions with a matching task, without truncating their history.
+    // For duration we prefer the normalized value; if unset we fall back to the
     // top-level `tasks.data.duration_ms`. Tasks without either field (legacy /
     // in-flight) contribute 0.
-    const taskUsage = taskUsageTable(this.db);
+    let matchingSessionIds: SQL | undefined;
+    if (whereClause) {
+      // biome-ignore lint/suspicious/noExplicitAny: Database union type prevents calling .select() with dynamic fields
+      let matching = (this.db as any)
+        .select({ session_id: tasks.session_id })
+        .from(tasks)
+        .innerJoin(sessions, eq(tasks.session_id, sessions.session_id));
+      if (repoFilter) {
+        matching = matching.innerJoin(branches, eq(sessions.branch_id, branches.branch_id));
+      }
+      matchingSessionIds = matching.where(whereClause).getSQL();
+    }
+    const taskUsage = taskUsageTable(this.db, { matchingSessionIds });
     const normalizedDurationExpr = jsonExtract(
       this.db,
       tasks.data,

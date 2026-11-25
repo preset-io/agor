@@ -97,6 +97,15 @@ describePostgres('LeaderboardService session-cumulative usage on PostgreSQL', ()
     await initializeDatabase(db);
   });
 
+  it.skipIf(process.env.AGOR_RUN_LEADERBOARD_BENCHMARK !== '1')(
+    'a last-day filter reduces work on 30k tasks',
+    async () => {
+      const { benchmarkLeaderboard } = await import('./leaderboard.benchmark-fixture');
+      await runWithTenantDatabaseScope(db, `benchmark-${generateId()}`, benchmarkLeaderboard);
+    },
+    180_000
+  );
+
   it('keeps the fork baseline when the first task has no usage', async () => {
     await runWithTenantDatabaseScope(db, `leaderboard-${generateId()}`, async (scoped) => {
       const base = await seedBranch(scoped);
@@ -126,9 +135,11 @@ describePostgres('LeaderboardService session-cumulative usage on PostgreSQL', ()
     const tenantA = `leaderboard-a-${generateId()}`;
     const tenantB = `leaderboard-b-${generateId()}`;
     let forkId: SessionID | undefined;
+    let tenantABranchId: string | undefined;
 
     await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
       const base = await seedBranch(scoped);
+      tenantABranchId = base.branchId;
       const parent = await seedSession(scoped, base, 'claude-code');
       await seedTasks(scoped, parent, base.ownerId, [
         { hour: 0, costUsd: 1 },
@@ -151,6 +162,11 @@ describePostgres('LeaderboardService session-cumulative usage on PostgreSQL', ()
       ]);
 
       const { data } = await new LeaderboardService(scoped).find({ query: { groupBy: 'tool' } });
+      const filtered = await new LeaderboardService(scoped).find({
+        query: { groupBy: 'tool', branchId: base.branchId },
+      });
+      expect(filtered.data).toHaveLength(data.length);
+      expect(filtered.data).toEqual(expect.arrayContaining(data));
       const byTool = Object.fromEntries(data.map((row) => [row.tool, row]));
       // Parent 2, fork 1 on top of the parent's 2.
       expect(byTool['claude-code']?.totalCost).toBeCloseTo(3, 6);
@@ -177,6 +193,10 @@ describePostgres('LeaderboardService session-cumulative usage on PostgreSQL', ()
       expect(data).toHaveLength(1);
       expect(data[0]).toMatchObject({ tool: 'claude-code', taskCount: 3, sessionCount: 1 });
       expect(data[0]?.totalCost).toBeCloseTo(3, 6);
+      const inaccessible = await new LeaderboardService(scoped).find({
+        query: { groupBy: 'tool', branchId: tenantABranchId },
+      });
+      expect(inaccessible.data).toEqual([]);
       // Tenant A's fork is not visible here.
       expect((await new TaskRepository(scoped).getSessionUsage(forkId!)).cost).toBe(0);
     });
