@@ -37,6 +37,7 @@ import {
   type Session,
   type SessionID,
   type TenantContext,
+  type UserAuthMetadata,
   type UserID,
 } from '@agor/core/types';
 import { isNotFoundError } from '@agor/core/utils/errors';
@@ -786,7 +787,7 @@ export function setupMCPRoutes(
         });
         if (membership === 'rejected') {
           logAuthRejection(
-            'session_missing',
+            'membership_refused',
             req.method,
             credentialSource,
             req.body,
@@ -808,6 +809,26 @@ export function setupMCPRoutes(
             });
           }
           throw error;
+        }
+
+        // Durable across replicas, unlike the membership check: a task connected before a removal stays fenced.
+        const refusedAt = (authenticatedUser as AuthenticatedUser & UserAuthMetadata)
+          .membership_refused_at;
+        // An unparseable marker yields NaN, which fails closed.
+        if (
+          refusedAt !== undefined &&
+          !(context.taskConnectedAtMs > new Date(refusedAt).getTime())
+        ) {
+          logAuthRejection(
+            'membership_fenced',
+            req.method,
+            credentialSource,
+            req.body,
+            req.headers[MCP_CLIENT_HINT_HEADER]
+          );
+          return res.status(401).json({
+            ...jsonRpcError(req, -32001, 'Invalid or expired session token'),
+          });
         }
       }
 

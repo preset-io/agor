@@ -614,6 +614,8 @@ export type UserAuthMetadata = object & {
    * login or refresh against an older credential snapshot is fail-closed.
    */
   credential_generation?: number;
+  /** Set (never cleared) when the issuer refused tenant membership; fences MCP tokens of earlier tasks. */
+  membership_refused_at?: Date;
   /** Backend-only tenant id used while issuing/validating runtime tokens. */
   tenant_id?: string;
 };

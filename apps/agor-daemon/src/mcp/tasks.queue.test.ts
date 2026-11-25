@@ -18,15 +18,18 @@ dbTest(
       db: guardedDb,
       multiTenancy: resolveMultiTenancyConfig(server.app.get('config')),
     });
+    // Both tokens ride the session's connected task, as executor-minted tokens do.
     const token = await generateSessionToken(
       server.app,
       seed.session.session_id,
-      seed.owner.user_id
+      seed.owner.user_id,
+      seed.active.task_id
     );
     const restrictedToken = await generateSessionToken(
       server.app,
       seed.session.session_id,
-      seed.stranger.user_id
+      seed.stranger.user_id,
+      seed.active.task_id
     );
     const call = async (name: string, args: Record<string, unknown>, credential = token) => {
       const response = await fetch(`${server.url}/mcp`, {

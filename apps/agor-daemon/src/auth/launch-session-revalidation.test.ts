@@ -9,9 +9,11 @@ import {
   eq,
   executeRaw,
   initializeDatabase,
+  jsonSetString,
   select,
   sql,
   UserApiKeysRepository,
+  update,
   userExternalIdentities,
   users,
 } from '@agor/core/db';
@@ -327,6 +329,10 @@ describe('refresh-time launch membership revalidation', () => {
           authentication: { strategy: 'api-key' },
         });
         expect(issuerCalls()).toBe(1);
+        await update(db, users)
+          .set({ data: jsonSetString(db, users.data, 'avatar_url', 'https://avatar.example.test') })
+          .where(eq(users.user_id, signedIn.user.user_id))
+          .run();
 
         state.revalidate = refused;
         // Inside the interval the key still works, and the issuer isn't asked again.
@@ -347,6 +353,11 @@ describe('refresh-time launch membership revalidation', () => {
           .where(eq(users.user_id, signedIn.user.user_id))
           .one();
         expect(row?.credential_generation).toBe(1);
+        // The removal marker that fences MCP tokens joins the same write without dropping sibling keys.
+        expect(row?.data).toMatchObject({
+          membership_refused_at: new Date('2026-06-01T10:15:00Z').toISOString(),
+          avatar_url: 'https://avatar.example.test',
+        });
         await expect(signIn(rawKey)).rejects.toThrow(/Invalid API key/);
       } finally {
         vi.useRealTimers();
@@ -627,6 +638,7 @@ describe('refresh-time launch membership revalidation', () => {
       .where(eq(users.user_id, signedIn.user.user_id))
       .one();
     expect(fencedRow?.credential_generation).toBe(1);
+    expect(fencedRow?.data).toHaveProperty('membership_refused_at', expect.any(String));
     const racedAfterFence = issueRuntimeToken(
       {
         sub: signedIn.user.user_id,

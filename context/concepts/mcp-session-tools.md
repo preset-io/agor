@@ -17,6 +17,9 @@ Map/timer, and returns 405 for authenticated GET and DELETE requests
 (authentication runs first).
 User-configured external MCP servers are a separate capability passed to
 executors and are not proxied by this endpoint.
+Session tokens must carry a task (`tsk`); after a membership refusal they are
+fenced by comparing the task's immutable `executor_connected_at` with the
+user's `data.membership_refused_at`, never the re-mintable `iat`.
 
 One SDK handler serves both protocol eras from the same server factory:
 

@@ -12,7 +12,7 @@
  * - `iat`  — unix seconds, standard JWT "issued at"
  * - `exp`  — unix seconds, enforced by `jsonwebtoken.verify`
  * - `jti`  — per-issuance UUID (useful for log correlation)
- * - `tsk`  — the executor's task; the sessions hook mints only these, older tokens may lack it
+ * - `tsk`  — the executor's task (required; taskless tokens are rejected)
  *
  * No denylist or generation counter. Tokens are minted lazily and cached
  * briefly per `(tenant,session,user,task)` so high-frequency `session.get`
@@ -22,9 +22,12 @@
  * rather than extending this.
  *
  * Validation revokes by server-side state: a token is rejected once its
- * session is deleted, and a task-bound token once its task's executor no
- * longer owns a live, unstopped task. The MCP route separately re-checks the
- * user, membership, and branch access on every request.
+ * session is deleted, or once its task's executor no longer owns a live,
+ * unstopped task. The MCP route separately re-checks the user, membership, and
+ * branch access on every request, and refuses tokens whose task connected at
+ * or before the user's durable `membership_refused_at` marker. The fence uses
+ * the immutable task connection time rather than `iat`, because a live
+ * executor can mint a fresh token at any time.
  */
 
 import {
@@ -87,7 +90,12 @@ export interface McpTokenContext {
   userId: UserID;
   tenantId: TenantID;
   jti: string;
-  taskId?: TaskID;
+  taskId: TaskID;
+}
+
+/** A token whose session and task state were confirmed; carries the task's connection time for fencing. */
+export interface ValidatedMcpTokenContext extends McpTokenContext {
+  taskConnectedAtMs: number;
 }
 
 export interface McpTokenInitOptions {
@@ -210,8 +218,7 @@ function resolveIssuanceTenantId(state: ModuleState): TenantID {
 }
 
 /**
- * Mint or reuse an MCP token for a session. A `taskId` binds the token to
- * that task's executor lifetime.
+ * Mint or reuse an MCP token for a session, bound to `taskId`'s executor lifetime.
  *
  * @throws if the module isn't initialized, the session doesn't exist, or the
  *   app lacks a JWT secret.
@@ -220,7 +227,7 @@ export async function generateSessionToken(
   app: Application,
   sessionId: SessionID,
   userId: UserID,
-  taskId?: TaskID
+  taskId: TaskID
 ): Promise<string> {
   const s = requireState();
   const jwtSecret = app.settings.authentication?.secret;
@@ -239,7 +246,7 @@ export async function generateSessionToken(
     s.lastCachePruneAtMs = nowMs;
   }
 
-  const cacheKey = `${tenantId}:${sessionId}:${userId}:${taskId ?? ''}`;
+  const cacheKey = `${tenantId}:${sessionId}:${userId}:${taskId}`;
   const cached = s.tokenCache.get(cacheKey);
   // Keep a buffer so callers never receive a token that is about to expire.
   const refreshBufferMs = Math.min(5 * 60 * 1000, Math.max(30 * 1000, s.expirationMs * 0.1));
@@ -272,7 +279,7 @@ export async function generateSessionToken(
     iat: nowSec,
     exp: expSec,
     jti,
-    ...(taskId ? { tsk: taskId } : {}),
+    tsk: taskId,
   };
 
   const token = jwt.sign(payload, jwtSecret, { algorithm: 'HS256' });
@@ -300,6 +307,7 @@ export const getTokenForSession = generateSessionToken;
  * Rejection reasons:
  *  - bad signature / wrong audience / wrong issuer / expired (`jsonwebtoken.verify`)
  *  - missing `tid`/`jti`/`exp` claims (pre-rollout tokens are rejected outright)
+ *  - missing `tsk` claim (taskless tokens cannot be fenced by task connection time)
  *
  * Verification returns a safe failure category; compatibility helpers return null.
  */
@@ -315,10 +323,15 @@ export type McpTokenRejectionReason =
   | 'invalid_jwt'
   | 'verify_error'
   | 'missing_identity'
-  | 'missing_lifetime';
+  | 'missing_lifetime'
+  | 'missing_task';
 
 /** Server-state rejections, decided after the token itself verified. */
-export type McpTokenStateRejection = 'session_missing' | 'task_not_live';
+export type McpTokenStateRejection =
+  | 'session_missing'
+  | 'task_not_live'
+  | 'membership_refused'
+  | 'membership_fenced';
 
 type McpTokenVerification =
   | { context: McpTokenContext; reason?: never }
@@ -379,7 +392,10 @@ export function verifySessionTokenDetailed(app: Application, token: string): Mcp
   if (!payload.jti || payload.exp === undefined) {
     return { context: null, reason: 'missing_lifetime' };
   }
-  if (payload.tsk !== undefined && (typeof payload.tsk !== 'string' || !payload.tsk)) {
+  if (payload.tsk === undefined) {
+    return { context: null, reason: 'missing_task' };
+  }
+  if (typeof payload.tsk !== 'string' || !payload.tsk) {
     return { context: null, reason: 'missing_identity' };
   }
 
@@ -389,7 +405,7 @@ export function verifySessionTokenDetailed(app: Application, token: string): Mcp
       userId,
       tenantId: tenantId.trim() as TenantID,
       jti: payload.jti,
-      ...(payload.tsk ? { taskId: payload.tsk } : {}),
+      taskId: payload.tsk,
     },
   };
 }
@@ -401,27 +417,27 @@ export function verifySessionToken(app: Application, token: string): McpTokenCon
 
 /**
  * Validate the tenant-owned state referenced by an already verified token.
- * The signed tenant is entered before the session (and bound task) lookup,
+ * The signed tenant is entered before the session and bound task lookups,
  * and the transaction lasts only for those lookups.
  */
 export async function validateVerifiedSessionToken(
   context: McpTokenContext
 ): Promise<
-  { context: McpTokenContext; reason?: never } | { context: null; reason: McpTokenStateRejection }
+  | { context: ValidatedMcpTokenContext; reason?: never }
+  | { context: null; reason: McpTokenStateRejection }
 > {
   const s = requireState();
   const { sessionId, taskId } = context;
-  const reason = await runWithTenantContext(context.tenantId, () =>
+  const result = await runWithTenantContext(context.tenantId, () =>
     runWithTenantDatabaseScope(s.db, context.tenantId, async () => {
       if (!(await s.sessionRepo.exists(sessionId))) return 'session_missing' as const;
-      // Tokens from older releases carry no task and keep their exp-bounded lifetime.
-      if (taskId && !(await s.taskRepo.isOwnedByLiveExecutor(taskId, sessionId))) {
-        return 'task_not_live' as const;
-      }
-      return undefined;
+      const connectedAt = await s.taskRepo.liveExecutorConnectedAt(taskId, sessionId);
+      return connectedAt ?? ('task_not_live' as const);
     })
   );
-  return reason ? { context: null, reason } : { context };
+  return result instanceof Date
+    ? { context: { ...context, taskConnectedAtMs: result.getTime() } }
+    : { context: null, reason: result };
 }
 
 /**
@@ -433,7 +449,7 @@ export async function validateSessionToken(
   app: Application,
   token: string,
   expectedTenantId?: TenantID | string
-): Promise<McpTokenContext | null> {
+): Promise<ValidatedMcpTokenContext | null> {
   const context = verifySessionToken(app, token);
   if (!context) return null;
   if (expectedTenantId && expectedTenantId !== context.tenantId) {

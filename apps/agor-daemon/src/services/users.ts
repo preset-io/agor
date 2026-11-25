@@ -2003,6 +2003,7 @@ export class UsersService {
       default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
       default_agentic_selection?: import('@agor/core/types').UserAgenticDefaultSelections;
       default_mcp_server_ids?: string[];
+      membership_refused_at?: string;
     };
 
     const normalizedEnvVars = normalizeStoredEnvMap(data.env_vars);
@@ -2060,6 +2061,9 @@ export class UsersService {
       (user as InternalUser).credential_generation = row.credential_generation;
       if (row.tokens_valid_after) {
         (user as InternalUser).tokens_valid_after = new Date(row.tokens_valid_after);
+      }
+      if (typeof data.membership_refused_at === 'string') {
+        (user as InternalUser).membership_refused_at = new Date(data.membership_refused_at);
       }
     }
     if (includeAuthMetadata && 'tenant_id' in row) {
