@@ -1,4 +1,5 @@
 import {
+  BoardRepository,
   BranchMaintenanceRepository,
   BranchRepository,
   BranchWorkspaceOperationRepository,
@@ -18,6 +19,7 @@ import {
 } from '@agor/core/types';
 import { z } from 'zod';
 import { matchesExecutorCommandRuntimeScope } from '../auth/executor-runtime-scope.js';
+import { isWorkspaceAdminOnBoard } from '../utils/board-route-authorization.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 
@@ -72,15 +74,21 @@ export class BranchCleanupStepsService {
           const branch = await repository.findById(claim.branch_id);
           if (!branch || branch.workspace_operation?.requested_by !== params.user!.user_id)
             throw new Forbidden('Workspace operation actor changed');
-          await ensureBranchWorkspaceAccess(
-            repository,
-            branch,
-            params.user!.user_id,
-            params.user!.role as UserRole,
-            'all',
-            'write',
-            this.app.get('config').execution?.allow_superadmin === true
-          );
+          const boardAuthorizedArchive =
+            branch.workspace_operation?.action === 'archive' &&
+            branch.board_id &&
+            (await isWorkspaceAdminOnBoard(new BoardRepository(tx), params.user, branch.board_id));
+          if (!boardAuthorizedArchive) {
+            await ensureBranchWorkspaceAccess(
+              repository,
+              branch,
+              params.user!.user_id,
+              params.user!.role as UserRole,
+              'all',
+              'write',
+              this.app.get('config').execution?.allow_superadmin === true
+            );
+          }
           await cleanup.validateLaunch(tx, claim);
         });
         await cleanup.started(claim, execution);

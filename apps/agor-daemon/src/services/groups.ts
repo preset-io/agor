@@ -4,10 +4,13 @@
  * Admin-managed groups and memberships used by group-aware Branch RBAC.
  */
 
-import type { BoardRepository, BranchRepository } from '@agor/core/db';
 import {
+  BoardRepository,
+  BranchRepository,
+  CapabilityPolicyRepository,
   eq,
   GroupRepository,
+  RepoRepository,
   runWithTenantDatabaseTransaction,
   select,
   type TenantScopeAwareDatabase,
@@ -19,6 +22,7 @@ import type {
   AuthenticatedParams,
   BoardID,
   Branch,
+  BranchArchiveEligibility,
   BranchID,
   EffectiveBranchAccess,
   EffectiveCapabilityPolicyAccess,
@@ -36,6 +40,7 @@ import {
   hasRoleAuthorityOver,
   ROLES,
 } from '@agor/core/types';
+import { resolveBranchArchiveEligibility } from '../utils/branch-archive-delete-authorization.js';
 import { isSuperAdmin, PERMISSION_RANK } from '../utils/branch-authorization.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import {
@@ -329,7 +334,7 @@ export function setupBoardEffectiveAccessService(
         const board = await boardRepo.findById(boardId);
         if (!board) throw new BadRequest(`Board not found: ${boardId}`);
 
-        if (isSuperAdmin(user.role, options.allowSuperadmin ?? true)) {
+        if (hasMinimumRole(user.role, ROLES.ADMIN)) {
           return SUPERADMIN_BOARD_ACCESS;
         }
 
@@ -341,6 +346,50 @@ export function setupBoardEffectiveAccessService(
         }
 
         return effective;
+      },
+    },
+    { methods: ['find'] }
+  );
+}
+
+/**
+ * Authoritative query route for the archive/delete modal and MCP tooling.
+ * Evaluates branch + board archive, cleanup, delete, retirement, and board-primary
+ * capabilities server-side without requiring `branches.get` visibility on private
+ * board branches.
+ */
+export function setupBranchArchiveEligibilityService(
+  app: import('@agor/core/feathers').Application,
+  db: TenantScopeAwareDatabase,
+  options: { allowSuperadmin?: boolean } = {}
+) {
+  const branchRepo = new BranchRepository(db);
+  const boardRepo = new BoardRepository(db);
+  const capabilityPolicyRepo = new CapabilityPolicyRepository(db);
+  const repoRepo = new RepoRepository(db);
+  app.use(
+    'branches/:id/archive-eligibility',
+    {
+      async find(params?: Params): Promise<BranchArchiveEligibility> {
+        const authParams = params as
+          | (Params & { user?: { user_id?: string; role?: string; _isServiceAccount?: boolean } })
+          | undefined;
+        const user = authParams?.user;
+        if (!user) throw new NotAuthenticated('Authentication required');
+
+        const branchId = paramsRoute(params)?.id;
+        if (!branchId) throw new BadRequest('Branch ID is required');
+
+        return resolveBranchArchiveEligibility({
+          branchRepository: branchRepo,
+          boardRepository: boardRepo,
+          capabilityPolicyRepository: capabilityPolicyRepo,
+          repoRepository: repoRepo,
+          branchId,
+          user,
+          config: app.get('config'),
+          allowSuperadmin: options.allowSuperadmin,
+        });
       },
     },
     { methods: ['find'] }

@@ -503,6 +503,7 @@ export const AUTHENTICATED_RBAC_SERVICE_PATHS = [
   'group-memberships',
   'branches/:id/permissions',
   'branches/:id/effective-access',
+  'branches/:id/archive-eligibility',
   'branches/:id/fs-access-users',
   'boards/:id/permissions',
   'boards/:id/effective-access',

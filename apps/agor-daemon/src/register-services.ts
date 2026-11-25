@@ -271,6 +271,7 @@ import {
   GROUPS_SERVICE_TRANSPORT_METHODS,
   setupBoardAlignedBranchesService,
   setupBoardEffectiveAccessService,
+  setupBranchArchiveEligibilityService,
   setupBranchEffectiveAccessService,
   setupBranchFsAccessUsersService,
 } from './services/groups.js';
@@ -825,6 +826,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     methods: [...GROUP_MEMBERSHIPS_SERVICE_TRANSPORT_METHODS],
   });
   setupBranchEffectiveAccessService(app, new BranchRepository(db), { allowSuperadmin });
+  setupBranchArchiveEligibilityService(app, db, { allowSuperadmin });
   setupBoardEffectiveAccessService(app, new BoardRepository(db), { allowSuperadmin });
   setupBoardAlignedBranchesService(app, new BranchRepository(db));
   setupBranchFsAccessUsersService(app, new BranchRepository(db));
