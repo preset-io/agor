@@ -1,0 +1,62 @@
+{
+  "databot": {
+    "question": 1.267,
+    "sent": 4.967,
+    "answered": 11.8,
+    "stills": {
+      "rect": {
+        "x": 907.0703125,
+        "y": 820,
+        "w": 760,
+        "h": 260
+      },
+      "scale": 8,
+      "count": 22
+    }
+  },
+  "engbot": {
+    "question": 1.3,
+    "sent": 6.133,
+    "answered": 12.833,
+    "stills": {
+      "rect": {
+        "x": 907.0703125,
+        "y": 820,
+        "w": 760,
+        "h": 260
+      },
+      "scale": 8,
+      "count": 38
+    }
+  },
+  "legalbot": {
+    "question": 1.3,
+    "sent": 9.8,
+    "answered": 19.4,
+    "stills": {
+      "rect": {
+        "x": 907.0703125,
+        "y": 820,
+        "w": 760,
+        "h": 260
+      },
+      "scale": 8,
+      "count": 60
+    }
+  },
+  "opsbot": {
+    "question": 1.267,
+    "sent": 6.5,
+    "answered": 12.5,
+    "stills": {
+      "rect": {
+        "x": 907.0703125,
+        "y": 820,
+        "w": 760,
+        "h": 260
+      },
+      "scale": 8,
+      "count": 46
+    }
+  }
+}
