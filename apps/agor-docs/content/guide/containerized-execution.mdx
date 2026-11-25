@@ -397,6 +397,16 @@ The next prompt can consequently be refused even though the session accepts
 prompts. Prefer **Retry cleanup**; operators must resolve the old workload
 rather than bypass admission limits.
 
+After **Reopen anyway…**, a manager can retry cleanup of the old remote task
+through `agor_sessions_retry_cleanup`. Read the task first with
+`agor_tasks_get`, then pass its Session ID, Task ID,
+`termination_request.requested_at`, and current `recovery_revision` (or
+`requested_at` for an older request). The configured cleanup helper runs for
+that exact dispatch. A `cleanup_verified` result records verified termination
+on the failed task so workspace cleanup can proceed. `cleanup_unverified` means
+the host still needs attention. A stale revision returns `condition_changed`
+and requires a fresh task read before another explicit retry.
+
 ### Template Variables
 
 Executor command templates use literal `{variable}` substitution, not

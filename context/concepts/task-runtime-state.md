@@ -528,6 +528,19 @@ compares task/request/recovery revision, clears the guard, rotates the revision,
 and preserves the original cause. A retry does not turn unexpected death into
 user cancellation. Normal Stop retains user-stop precedence.
 
+The same authenticated `retry_cleanup` route accepts a terminal remote task with
+unverified containment. `agor_sessions_retry_cleanup` exposes this operation with
+an exact Session, Task, termination timestamp and observed recovery revision.
+`beginTerminalCleanup` records a new attempt and expiring coordination lease
+under the Task row lock. Overlapping attempts and stale revisions are refused.
+An explicit retry can reclaim an expired lease after a daemon crash, but expiry
+supplies no containment proof. The trusted helper must confirm the exact
+tenant/Task dispatch, including fencing any delayed launch. Only that result
+can set `sdk_failure.termination` to `verified`. A late result from an older
+attempt cannot overwrite its replacement. The Task lifecycle, completion time
+and Session projection remain immutable during this evidence recovery, so a
+newer Session task continues independently.
+
 Unverified settlement remains nonpromptable with no automatic rediscovery;
 fresh scoped quiescence evidence can still resolve it. Unverified settlement
 atomically compares the executor acknowledgement observed before containment;

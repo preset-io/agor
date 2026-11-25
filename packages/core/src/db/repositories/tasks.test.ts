@@ -4828,3 +4828,159 @@ describe('durable single-attempt cleanup and explicit retry', () => {
     }
   );
 });
+
+describe('terminal executor cleanup evidence', () => {
+  async function forceFailedRemote(db: Database) {
+    const repo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await repo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_mode: 'templated',
+      })
+    );
+    const requested = await repo.claimTermination({
+      taskId: task.task_id,
+      cause: 'user_stop',
+      errorMessage: 'Stop',
+    });
+    const epoch = requested.task.termination_request!.requested_at;
+    await repo.claimTerminationCoordination({
+      taskId: task.task_id,
+      claimToken: 'original',
+      leaseDurationMs: 60000,
+      instanceId: 'daemon',
+      bootId: 'boot',
+    });
+    await repo.settleTermination({
+      taskId: task.task_id,
+      outcome: 'unverified',
+      coordinationToken: 'original',
+      errorMessage: 'Unverified',
+      sdkFailure: {
+        reason: 'termination_unverified',
+        tool: 'codex',
+        detected_at: epoch,
+        termination: 'unverified',
+      },
+    });
+    const failed = await repo.settleTermination({
+      taskId: task.task_id,
+      outcome: 'forced_unverified',
+      expectedTerminationRequestedAt: epoch,
+      expectedRecoveryRevision: epoch,
+    });
+    const claim = (token: string, revision = epoch, now?: Date) =>
+      repo.beginTerminalCleanup({
+        taskId: task.task_id,
+        requestedAt: epoch,
+        revision,
+        claimToken: token,
+        leaseDurationMs: 60000,
+        instanceId: 'daemon',
+        bootId: 'boot',
+        now,
+      });
+    return { repo, sessionId, failed: failed.task, epoch, claim };
+  }
+  dbTest(
+    'verified cleanup enriches evidence without changing a terminal Task or its successor',
+    async ({ db }) => {
+      const state = await forceFailedRemote(db);
+      const next = await state.repo.create(
+        createTaskData({ session_id: state.sessionId, status: TaskStatus.QUEUED })
+      );
+      await state.repo.claimDispatchAndProjectSession(next.task_id, TaskStatus.QUEUED, {
+        status: TaskStatus.DISPATCHING,
+      });
+      const session = await new SessionRepository(db).findById(state.sessionId);
+      const [first, duplicate] = await Promise.all([
+        state.claim('cleanup-a'),
+        state.claim('cleanup-b'),
+      ]);
+      expect([first, duplicate].filter(Boolean)).toHaveLength(1);
+      const admitted = first ?? duplicate;
+      const attempt = admitted!.termination_request!.cleanup_attempt!.attempt_id;
+      const settled = await state.repo.finishTerminalCleanup({
+        taskId: state.failed.task_id,
+        requestedAt: state.epoch,
+        attemptId: attempt,
+        confirmed: true,
+        diagnostic: 'verified absent',
+      });
+      expect(settled).toMatchObject({
+        status: state.failed.status,
+        completed_at: state.failed.completed_at,
+        duration_ms: state.failed.duration_ms,
+        sdk_failure: { termination: 'verified' },
+      });
+      expect(await new SessionRepository(db).findById(state.sessionId)).toEqual(session);
+      expect((await state.repo.findById(next.task_id))?.status).toBe(TaskStatus.DISPATCHING);
+      expect(
+        await state.repo.finishTerminalCleanup({
+          taskId: state.failed.task_id,
+          requestedAt: state.epoch,
+          attemptId: attempt,
+          confirmed: true,
+          diagnostic: 'duplicate',
+        })
+      ).toBeNull();
+    }
+  );
+  dbTest(
+    'failed cleanup retains uncertainty and fences stale retries and completions',
+    async ({ db }) => {
+      const state = await forceFailedRemote(db);
+      expect(await state.claim('bad', 'wrong-revision')).toBeNull();
+      const first = await state.claim('first');
+      expect(first?.sdk_failure?.termination).toBe('unverified');
+      expect(await state.claim('overlap', 'first')).toBeNull();
+      await state.repo.finishTerminalCleanup({
+        taskId: state.failed.task_id,
+        requestedAt: state.epoch,
+        attemptId: 'first',
+        confirmed: false,
+        diagnostic: 'exit 1',
+      });
+      expect(await state.claim('stale')).toBeNull();
+      expect(await state.claim('second', 'first')).not.toBeNull();
+      expect(
+        await state.repo.finishTerminalCleanup({
+          taskId: state.failed.task_id,
+          requestedAt: state.epoch,
+          attemptId: 'first',
+          confirmed: true,
+          diagnostic: 'late success',
+        })
+      ).toBeNull();
+      expect((await state.repo.findById(state.failed.task_id))?.sdk_failure?.termination).toBe(
+        'unverified'
+      );
+    }
+  );
+  dbTest(
+    'an explicit retry can reclaim a crashed cleanup lease without inferring absence',
+    async ({ db }) => {
+      const state = await forceFailedRemote(db);
+      const start = new Date();
+      await state.claim('crashed', state.epoch, start);
+      expect(await state.claim('early', 'crashed', new Date(start.getTime() + 1000))).toBeNull();
+      expect(
+        await state.claim('replacement', 'crashed', new Date(start.getTime() + 61000))
+      ).not.toBeNull();
+      expect(
+        await state.repo.finishTerminalCleanup({
+          taskId: state.failed.task_id,
+          requestedAt: state.epoch,
+          attemptId: 'crashed',
+          confirmed: true,
+          diagnostic: 'late success',
+        })
+      ).toBeNull();
+      expect((await state.repo.findById(state.failed.task_id))?.sdk_failure?.termination).toBe(
+        'unverified'
+      );
+    }
+  );
+});

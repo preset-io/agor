@@ -27,6 +27,7 @@ vi.mock('./executor-tracking.js', () => ({
 import {
   beginExecutorTermination,
   forceFailUnverifiedTask,
+  reconcileTerminalExecutorCleanup,
   requestExecutorTermination,
 } from './termination-coordinator.js';
 
@@ -83,6 +84,8 @@ function appDouble(tool = 'codex', options: { getDelayMs?: number; config?: unkn
     return current;
   });
   const settleTermination = vi.fn();
+  const beginTerminalCleanup = vi.fn();
+  const finishTerminalCleanup = vi.fn();
   const sessionGet = vi.fn(async () => ({
     session_id: sessionId,
     agentic_tool: tool,
@@ -97,6 +100,8 @@ function appDouble(tool = 'codex', options: { getDelayMs?: number; config?: unkn
             claimTerminationCoordination,
             beginCleanupAttempt,
             settleTermination,
+            beginTerminalCleanup,
+            finishTerminalCleanup,
           }
         : { get: sessionGet },
     get: (key: string) =>
@@ -137,6 +142,8 @@ function appDouble(tool = 'codex', options: { getDelayMs?: number; config?: unkn
     claimTermination,
     claimTerminationCoordination,
     settleTermination,
+    beginTerminalCleanup,
+    finishTerminalCleanup,
     sessionGet,
   };
 }
@@ -1296,5 +1303,146 @@ describe('remote cleanup integration', () => {
     await execute(state);
     expect(runCleanup).not.toHaveBeenCalled();
     expect(containExecutorProcess).toHaveBeenCalled();
+  });
+});
+
+describe('cleanup after a terminal remote force-fail', () => {
+  function setup() {
+    const state = appDouble('codex', {
+      config: {
+        execution: {
+          executor_cleanup_command_template: 'trusted-cleanup',
+          executor_cleanup_timeout_ms: 20000,
+        },
+      },
+    });
+    const failed = task(TaskStatus.FAILED, {
+      executor_mode: 'templated',
+      completed_at: '2026-01-01T00:00:01Z',
+      sdk_failure: { reason: 'termination_unverified', termination: 'unverified' },
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: 'epoch',
+        recovery_revision: 'revision',
+      },
+    });
+    state.setCurrent(failed);
+    state.beginTerminalCleanup.mockResolvedValue({
+      ...failed,
+      termination_request: {
+        ...failed.termination_request!,
+        cleanup_attempt: { attempt_id: 'retry', started_at: 'now' },
+      },
+    });
+    state.finishTerminalCleanup.mockImplementation(async (input) => ({
+      ...failed,
+      sdk_failure: {
+        ...failed.sdk_failure!,
+        termination: input.confirmed ? 'verified' : 'unverified',
+      },
+    }));
+    return state;
+  }
+  function execute(state: ReturnType<typeof setup>, session = sessionId) {
+    return runWithTenantContext('tenant-a', () =>
+      reconcileTerminalExecutorCleanup({
+        app: state.app,
+        taskId,
+        sessionId: session,
+        requestedAt: 'epoch',
+        revision: 'revision',
+        runInFreshTenantWriteDatabase,
+      })
+    );
+  }
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runCleanup.mockResolvedValue({ confirmed: true, diagnostic: 'exit 0' });
+  });
+  it('uses trusted exact task/tenant context and preserves failed lifecycle', async () => {
+    const state = setup();
+    await expect(execute(state)).resolves.toMatchObject({
+      status: 'terminal',
+      task: {
+        status: 'failed',
+        completed_at: '2026-01-01T00:00:01Z',
+        sdk_failure: { termination: 'verified' },
+      },
+    });
+    expect(runCleanup).toHaveBeenCalledWith(
+      'trusted-cleanup',
+      expect.objectContaining({
+        tenant_id: 'tenant-a',
+        task_id: taskId,
+        session_id: sessionId,
+        branch_id: 'branch-a',
+        requested_at: 'epoch',
+        attempt_id: 'retry',
+      }),
+      20000
+    );
+    expect(state.settleTermination).not.toHaveBeenCalled();
+    expect(state.claimTermination).not.toHaveBeenCalled();
+  });
+  it('preserves the guard when the helper fails', async () => {
+    runCleanup.mockResolvedValue({ confirmed: false, diagnostic: 'exit 1' });
+    await expect(execute(setup())).resolves.toMatchObject({
+      status: 'unverified',
+      task: {
+        status: 'failed',
+        sdk_failure: { termination: 'unverified' },
+      },
+    });
+  });
+  it('rejects a task from another session before invoking its helper', async () => {
+    await expect(execute(setup(), 'other-session')).resolves.toMatchObject({
+      status: 'condition_changed',
+    });
+    expect(runCleanup).not.toHaveBeenCalled();
+  });
+  it('does not invoke the helper if the durable attempt was rejected', async () => {
+    const state = setup();
+    state.beginTerminalCleanup.mockResolvedValue(null);
+    await expect(execute(state)).resolves.toMatchObject({ status: 'condition_changed' });
+    expect(runCleanup).not.toHaveBeenCalled();
+  });
+  it('does not dispatch cleanup without trusted tenant identity', async () => {
+    const state = setup();
+    await expect(
+      reconcileTerminalExecutorCleanup({
+        app: state.app,
+        taskId,
+        sessionId,
+        requestedAt: 'epoch',
+        revision: 'revision',
+        runInFreshTenantWriteDatabase,
+      })
+    ).resolves.toMatchObject({ status: 'condition_changed' });
+    expect(state.beginTerminalCleanup).not.toHaveBeenCalled();
+    expect(runCleanup).not.toHaveBeenCalled();
+  });
+  it('rejects a late helper result after the request changes', async () => {
+    const state = setup();
+    state.finishTerminalCleanup.mockResolvedValue(null);
+    await expect(execute(state)).resolves.toMatchObject({ status: 'condition_changed' });
+  });
+  it('returns already verified evidence after a lost response without repeating cleanup', async () => {
+    const state = setup();
+    state.setCurrent(
+      task(TaskStatus.FAILED, {
+        executor_mode: 'templated',
+        sdk_failure: { termination: 'verified' },
+        termination_request: { cause: 'user_stop', requested_at: 'epoch' },
+      })
+    );
+    await expect(execute(state)).resolves.toMatchObject({ status: 'terminal' });
+    expect(runCleanup).not.toHaveBeenCalled();
+    expect(state.beginTerminalCleanup).not.toHaveBeenCalled();
+  });
+  it('leaves an active task in the normal Stop workflow', async () => {
+    const state = setup();
+    state.setCurrent(task(TaskStatus.RUNNING));
+    await expect(execute(state)).resolves.toMatchObject({ status: 'condition_changed' });
+    expect(runCleanup).not.toHaveBeenCalled();
   });
 });

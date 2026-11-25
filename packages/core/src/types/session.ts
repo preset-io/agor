@@ -46,6 +46,8 @@ export const SESSION_STOP_OUTCOMES = [
   'condition_changed',
   'not_stoppable',
   'force_failed',
+  'cleanup_verified',
+  'cleanup_unverified',
 ] as const;
 
 export type SessionStopOutcome = (typeof SESSION_STOP_OUTCOMES)[number];
@@ -85,6 +87,17 @@ interface SessionStopResultBase {
 
 /** Result returned by the authenticated Session Stop endpoint. */
 export type SessionStopResult =
+  | (SessionStopResultBase & {
+      success: true;
+      outcome: 'cleanup_verified';
+      stoppedTaskId: TaskID;
+    })
+  | (SessionStopResultBase & {
+      success: false;
+      outcome: 'cleanup_unverified';
+      reason: string;
+      stoppedTaskId: TaskID;
+    })
   | (SessionStopResultBase & {
       success: true;
       outcome: 'stopped' | 'already_idle';
