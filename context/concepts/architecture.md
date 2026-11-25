@@ -49,8 +49,9 @@ agor-daemon (FeathersJS server, REST + WS + JSON-RPC /mcp)
 | Agent runtime          | `packages/executor/`                                                                               |
 | Task runtime state     | `context/concepts/task-runtime-state.md`                                                           |
 | Real-time UI           | `packages/client/` reactive helpers + `apps/agor-ui/src/hooks/`                                    |
+| UI state / memory      | `apps/agor-ui/src/store/` + `context/concepts/frontend-state.md`                                   |
 | MCP tools              | `apps/agor-daemon/src/mcp/tools/`                                                                  |
 
 ## Tech stack (one-liner)
 
-FeathersJS · Drizzle · LibSQL/SQLite · PostgreSQL · simple-git · React 18 + Vite · Ant Design · React Flow · oclif · pnpm/turborepo.
+FeathersJS · Drizzle · LibSQL/SQLite · PostgreSQL · simple-git · React 19 + Vite · zustand · Ant Design · React Flow · oclif · pnpm/turborepo.
