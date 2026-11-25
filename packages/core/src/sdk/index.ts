@@ -14,6 +14,8 @@ export type {
   SDKControlGetContextUsageResponse,
   SDKMessage,
   SDKPartialAssistantMessage,
+  SDKPermissionDenial,
+  SDKPermissionDeniedMessage,
   SDKResultMessage,
   SDKSystemMessage,
   SDKUserMessage,

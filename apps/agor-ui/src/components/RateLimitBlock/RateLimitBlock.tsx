@@ -67,16 +67,18 @@ export const RateLimitBlock: React.FC<RateLimitBlockProps> = ({
     isRateLimit && settled
       ? `${status === 'rejected' ? 'Rate limited' : 'Approaching rate limit'} (${rateLimitType ?? 'unknown'}).`
       : rawText;
-  const isWarning = isRateLimit && status !== 'allowed';
+  const isPermissionDenied = isSdkEvent && sdkSubtype === 'permission_denied';
+  const isWarning = (isRateLimit && status !== 'allowed') || isPermissionDenied;
   const iconColor = isWarning ? token.colorWarning : token.colorTextTertiary;
 
-  const icon = isRateLimit ? (
-    <WarningOutlined style={{ color: iconColor, fontSize: 14 }} />
-  ) : isSdkEvent ? (
-    <InfoCircleOutlined style={{ color: token.colorTextTertiary, fontSize: 14 }} />
-  ) : (
-    <ClockCircleOutlined style={{ color: iconColor, fontSize: 14 }} />
-  );
+  const icon =
+    isRateLimit || isPermissionDenied ? (
+      <WarningOutlined style={{ color: iconColor, fontSize: 14 }} />
+    ) : isSdkEvent ? (
+      <InfoCircleOutlined style={{ color: token.colorTextTertiary, fontSize: 14 }} />
+    ) : (
+      <ClockCircleOutlined style={{ color: iconColor, fontSize: 14 }} />
+    );
 
   const formattedContent = (
     <Space orientation="vertical" size="small" style={{ width: '100%' }}>
