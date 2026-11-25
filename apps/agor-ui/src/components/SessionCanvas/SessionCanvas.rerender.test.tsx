@@ -44,8 +44,9 @@ vi.mock('../BranchCard', () => ({
   },
 }));
 
-vi.mock('../CardNode', () => ({
-  __esModule: true,
+// Keep layout constants real; only replace the leaf renderer.
+vi.mock('../CardNode', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../CardNode')>()),
   default: () => {
     cardNodeRenders += 1;
     return <div data-testid="card-node" />;

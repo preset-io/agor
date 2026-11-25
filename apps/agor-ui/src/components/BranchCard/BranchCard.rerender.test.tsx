@@ -7,6 +7,7 @@ import { sessionPatched } from '../../store/agorRealtimeActions';
 import { agorStore } from '../../store/agorStore';
 import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
 import { markBoardLoaded } from '../../test/userScopeCoverage';
+import { CARD_WIDTH } from '../CardNode';
 import SessionCanvas from '../SessionCanvas/SessionCanvas';
 
 // ── Render counters ──────────────────────────────────────────────────────────
@@ -19,8 +20,9 @@ const branchCardRenders = new Map<string, number>();
 const branchCardSessions = new Map<string, Session[]>();
 
 vi.mock('../SessionCard', () => ({ __esModule: true, default: () => null }));
-vi.mock('../CardNode', () => ({
-  __esModule: true,
+// Keep layout constants real; only replace the leaf renderer.
+vi.mock('../CardNode', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../CardNode')>()),
   default: () => <div data-testid="card-node" />,
 }));
 
@@ -154,6 +156,11 @@ function seedStore() {
 }
 
 describe('BranchCard store-selector session isolation', () => {
+  it('preserves the real card width when mocking the leaf renderer', async () => {
+    const actual = await vi.importActual<typeof import('../CardNode')>('../CardNode');
+    expect(CARD_WIDTH).toBe(actual.CARD_WIDTH);
+  });
+
   beforeEach(() => {
     branchCardRenders.clear();
     branchCardSessions.clear();
