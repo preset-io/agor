@@ -2,7 +2,7 @@
  * Cookie consent for agor.live (components/CookieConsent.tsx; policy in
  * content/privacy.mdx). Three categories: necessary storage (always on),
  * analytics (Google Analytics, Microsoft Clarity), and marketing (Tag
- * Manager with Google Ads and LinkedIn, HubSpot). Visitors accept all,
+ * Manager with Google Ads and LinkedIn, HubSpot, RB2B). Visitors accept all,
  * analytics only, or neither.
  *
  * The visitor's stored choice wins. Without one, optional cookies are off
@@ -12,8 +12,8 @@
  * visitor rejects them.
  *
  * Google Analytics reads the result through Consent Mode (set first, by
- * consentBootScript). Clarity loads with analytics consent; Tag Manager and
- * HubSpot with marketing consent.
+ * consentBootScript). Clarity loads with analytics consent; Tag Manager,
+ * HubSpot, and RB2B with marketing consent.
  */
 
 export const CONSENT_KEY = 'agor-cookie-consent';
@@ -88,7 +88,7 @@ export function consentBootScript(): string {
 export interface ConsentState {
   /** Analytics cookies allowed: Google Analytics, Microsoft Clarity. */
   analytics: boolean;
-  /** Marketing cookies allowed: Tag Manager (Google Ads, LinkedIn), HubSpot. */
+  /** Marketing cookies allowed: Tag Manager (Google Ads, LinkedIn), HubSpot, RB2B. */
   marketing: boolean;
   /** The visitor has made a choice (so the banner stays closed). */
   decided: boolean;

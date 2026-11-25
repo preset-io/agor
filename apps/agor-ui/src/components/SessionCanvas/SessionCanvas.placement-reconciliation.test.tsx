@@ -64,6 +64,10 @@ vi.mock('reactflow', async () => {
     ),
     MiniMap: () => null,
     NodeResizer: () => null,
+    // The real NodeToolbar portals into a mounted React Flow renderer; render inline here.
+    NodeToolbar: ({ isVisible, children }: { isVisible?: boolean; children?: ReactNode }) =>
+      isVisible ? <>{children}</> : null,
+    Position: { Top: 'top', Right: 'right', Bottom: 'bottom', Left: 'left' },
     ReactFlow: (
       props: CapturedFlowProps & { children?: ReactNode; onInit?: (value: unknown) => void }
     ) => {
