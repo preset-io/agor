@@ -107,7 +107,7 @@
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
     "uuid": "^14.0.3",
-    "zod": "^4.6.5"
+    "zod": "^4.6.6"
   },
   "optionalDependencies": {
     "@lydell/node-pty": "1.2.0-beta.15"
