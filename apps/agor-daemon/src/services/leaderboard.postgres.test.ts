@@ -7,6 +7,7 @@ import {
   BranchRepository,
   createDatabase,
   type Database,
+  eq,
   generateId,
   initializeDatabase,
   RepoRepository,
@@ -14,7 +15,9 @@ import {
   SessionRepository,
   TaskRepository,
   type TenantScopeAwareDatabase,
+  tasks as taskRows,
   UsersRepository,
+  update,
 } from '@agor/core/db';
 import type { AgenticToolName, SessionID, UUID } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
@@ -87,6 +90,11 @@ async function seedTasks(
     });
     const at = new Date(Date.UTC(2026, 0, 1, row.hour)).toISOString();
     await tasks.update(task.task_id, { started_at: at, completed_at: at });
+    // Repository creation intentionally uses server time; analytics filter admission time.
+    await update(scoped, taskRows)
+      .set({ created_at: new Date(at) })
+      .where(eq(taskRows.task_id, task.task_id))
+      .run();
   }
 }
 
@@ -105,6 +113,52 @@ describePostgres('LeaderboardService session-cumulative usage on PostgreSQL', ()
     },
     180_000
   );
+
+  it.skipIf(process.env.AGOR_RUN_LEADERBOARD_FORK_BENCHMARK !== '1')(
+    'many forks share one extracted parent history',
+    async () => {
+      const { benchmarkForkLeaderboard } = await import('./leaderboard.benchmark-fixture');
+      await runWithTenantDatabaseScope(db, `benchmark-${generateId()}`, benchmarkForkLeaderboard);
+    },
+    180_000
+  );
+
+  it('a windowed fork inherits from a parent entirely before the window', async () => {
+    await runWithTenantDatabaseScope(db, `leaderboard-${generateId()}`, async (scoped) => {
+      const base = await seedBranch(scoped);
+      const parent = await seedSession(scoped, base, 'codex');
+      await seedTasks(scoped, parent, base.ownerId, [{ hour: 0, costUsd: 2 }]);
+      const fork = await seedSession(scoped, base, 'codex', parent);
+      await seedTasks(scoped, fork, base.ownerId, [
+        { hour: 2, costUsd: 2.5 },
+        { hour: 3, costUsd: 3 },
+      ]);
+      const service = new LeaderboardService(scoped);
+      const startDate = '2026-01-01T02:00:00.000Z';
+      const full = await service.find({ query: { groupBy: 'tool', startDate } });
+      expect(full.data[0]?.totalCost).toBeCloseTo(1, 6);
+      expect(full.data[0]?.taskCount).toBe(2);
+      const edge = await service.find({
+        query: { groupBy: 'tool', startDate, endDate: startDate },
+      });
+      expect(edge.data[0]?.totalCost).toBeCloseTo(0.5, 6);
+      expect(edge.data[0]?.taskCount).toBe(1);
+    });
+  });
+
+  it('a fork includes the last parent report completed exactly at its start', async () => {
+    await runWithTenantDatabaseScope(db, `leaderboard-${generateId()}`, async (scoped) => {
+      const base = await seedBranch(scoped);
+      const parent = await seedSession(scoped, base, 'codex');
+      await seedTasks(scoped, parent, base.ownerId, [
+        { hour: 1, costUsd: 2 },
+        { hour: 1, costUsd: 3 },
+      ]);
+      const fork = await seedSession(scoped, base, 'codex', parent);
+      await seedTasks(scoped, fork, base.ownerId, [{ hour: 1, costUsd: 3.5 }]);
+      expect((await new TaskRepository(scoped).getSessionUsage(fork)).cost).toBeCloseTo(0.5, 6);
+    });
+  });
 
   it('keeps the fork baseline when the first task has no usage', async () => {
     await runWithTenantDatabaseScope(db, `leaderboard-${generateId()}`, async (scoped) => {

@@ -713,6 +713,63 @@ describe('LeaderboardService session-cumulative usage', () => {
     );
   }
 
+  dbTest(
+    'a fork inherits the latest positive report independently for each metric',
+    async ({ db }) => {
+      const parent = await seedOneSession(db, 'codex', 'sess-parent');
+      const fork = await seedOneSession(db, 'codex', 'sess-fork', parent);
+      await seedSeries(db, parent, [
+        { costUsd: 3, inputTokens: 200, outputTokens: 20 },
+        { costUsd: 2, inputTokens: 0, outputTokens: 0 },
+        { costUsd: 0, inputTokens: 300, outputTokens: 0 },
+      ]);
+      await seedSeries(
+        db,
+        fork,
+        [{ costUsd: 2.5, inputTokens: 350, outputTokens: 25 }],
+        'model',
+        3
+      );
+      await seedSeries(
+        db,
+        parent,
+        [{ costUsd: 9, inputTokens: 900, outputTokens: 90 }],
+        'model',
+        4
+      );
+      const usage = await new TaskRepository(db).getSessionUsage(fork as SessionID);
+      expect(usage.cost).toBeCloseTo(0.5, 10);
+      expect(usage.input).toBe(50);
+      expect(usage.output).toBe(5);
+    }
+  );
+
+  dbTest(
+    'a fork includes the last parent report completed exactly at its start',
+    async ({ db }) => {
+      const parent = await seedOneSession(db, 'codex', 'sess-parent');
+      const fork = await seedOneSession(db, 'codex', 'sess-fork', parent);
+      // Equal completion times must still use task ID to pick the final report.
+      for (const costUsd of [2, 3]) {
+        await seedTask(db, {
+          sessionId: parent,
+          createdBy: userId,
+          createdAt: tsAt(),
+          completedAt: tsAt({ daysOffset: 1 }),
+          model: 'model',
+          inputTokens: 0,
+          outputTokens: 0,
+          costUsd,
+        });
+      }
+      await seedSeries(db, fork, [{ costUsd: 3.5 }], 'model', 1);
+      expect((await new TaskRepository(db).getSessionUsage(fork as SessionID)).cost).toBeCloseTo(
+        0.5,
+        10
+      );
+    }
+  );
+
   dbTest('a fork that starts below the parent total counts in full', async ({ db }) => {
     const parent = await seedOneSession(db, 'claude-code', 'sess-parent');
     const fork = await seedOneSession(db, 'claude-code', 'sess-fork', parent);
@@ -760,6 +817,27 @@ describe('LeaderboardService session-cumulative usage', () => {
     expect(row?.totalCost).toBeCloseTo(2.5, 10);
     expect(row?.taskCount).toBe(2);
   });
+
+  for (const tool of ['claude-code', 'codex'] as const) {
+    dbTest(
+      `${tool}: a windowed fork inherits from a parent entirely before the window`,
+      async ({ db }) => {
+        const parent = await seedOneSession(db, tool, 'sess-parent');
+        const fork = await seedOneSession(db, tool, 'sess-fork', parent);
+        await seedSeries(db, parent, [{ costUsd: 1 }, { costUsd: 2 }]);
+        await seedSeries(db, fork, [{ costUsd: 2.5 }, { costUsd: 3 }], 'model', 2);
+
+        const startDate = tsAt({ daysOffset: 2 }).toISOString();
+        const [full] = await totals(db, { startDate });
+        expect(full?.totalCost).toBeCloseTo(1, 10);
+        expect(full?.taskCount).toBe(2);
+        // The inclusive end edge keeps only the first fork task, not its parent.
+        const [edge] = await totals(db, { startDate, endDate: startDate });
+        expect(edge?.totalCost).toBeCloseTo(0.5, 10);
+        expect(edge?.taskCount).toBe(1);
+      }
+    );
+  }
 
   for (const filter of ['user', 'model'] as const) {
     dbTest(`${filter} filters preserve earlier tasks in the session baseline`, async ({ db }) => {
@@ -935,6 +1013,15 @@ dbTest.skipIf(process.env.AGOR_RUN_LEADERBOARD_BENCHMARK !== '1')(
   async ({ db }) => {
     const { benchmarkLeaderboard } = await import('./leaderboard.benchmark-fixture');
     await runWithTenantDatabaseScope(db, `benchmark-${generateId()}`, benchmarkLeaderboard);
+  },
+  180_000
+);
+
+dbTest.skipIf(process.env.AGOR_RUN_LEADERBOARD_FORK_BENCHMARK !== '1')(
+  'many forks share one extracted parent history',
+  async ({ db }) => {
+    const { benchmarkForkLeaderboard } = await import('./leaderboard.benchmark-fixture');
+    await runWithTenantDatabaseScope(db, `benchmark-${generateId()}`, benchmarkForkLeaderboard);
   },
   180_000
 );

@@ -68,24 +68,6 @@ function reportedColumn(name: string): SQL {
   return sql`${sql.identifier('reported_usage')}.${sql.identifier(name)}`;
 }
 
-function parentBaseline(db: Database, metric: TaskUsageMetric): SQL {
-  // Freeze inheritance at the first execution, including missing/zero reports.
-  const forkStartedAt = sql`(
-    SELECT MIN(COALESCE(fork_task.started_at, fork_task.created_at)) FROM ${tasks} fork_task
-    WHERE fork_task.session_id = ${sessions.session_id}
-      AND fork_task.status NOT IN (${TaskStatus.CREATED}, ${TaskStatus.QUEUED})
-  )`;
-  const parentValue = reportedValue(db, sql.raw('fork_parent.data'), metric);
-  return sql`(
-    SELECT ${parentValue} FROM ${tasks} fork_parent
-    WHERE fork_parent.session_id = ${sessions.forked_from_session_id}
-      AND ${parentValue} > 0
-      AND COALESCE(fork_parent.completed_at, fork_parent.created_at) <= ${forkStartedAt}
-    ORDER BY COALESCE(fork_parent.completed_at, fork_parent.created_at) DESC, fork_parent.task_id DESC
-    LIMIT 1
-  )`;
-}
-
 function perTaskUsage(metric: TaskUsageMetric): SQL {
   const value = reportedColumn(metric);
   const cumulativeTools = toolsReportingCumulative(metric);
@@ -131,19 +113,96 @@ export function taskUsageTable(
   if (options.matchingSessionIds) {
     forkWhere.push(sql`${sessions.session_id} IN (${options.matchingSessionIds})`);
   }
-  // Compute inherited values once per qualifying fork, not per Task/CASE use.
-  // Keeping parent lookups out of the window projection also avoids enormous
-  // PostgreSQL cost estimates and JIT compilation even on narrow date windows.
+  // Freeze inheritance at the first execution, including missing/zero reports.
+  // Aggregate once per fork, never inside a parent-row/metric subquery.
   // biome-ignore lint/suspicious/noExplicitAny: Database union type prevents calling .select() with dynamic fields
   const forks = (db as any)
     .select({
       session_id: sessions.session_id,
-      ...Object.fromEntries(
-        TASK_USAGE_METRICS.map((metric) => [metric, parentBaseline(db, metric).as(metric)])
-      ),
+      parent_session_id: sql`${sessions.forked_from_session_id}`.as('parent_session_id'),
+      started_at: sql`MIN(COALESCE(${tasks.started_at}, ${tasks.created_at}))`.as('started_at'),
     })
     .from(sessions)
-    .where(and(...forkWhere));
+    .innerJoin(tasks, eq(tasks.session_id, sessions.session_id))
+    .where(
+      and(...forkWhere, sql`${tasks.status} NOT IN (${TaskStatus.CREATED}, ${TaskStatus.QUEUED})`)
+    )
+    .groupBy(sessions.session_id, sessions.forked_from_session_id);
+
+  // Parent reports are independent of the task/date filters: a qualifying fork
+  // can inherit from a parent entirely outside the selected window. Extract
+  // each parent's JSON only once even when hundreds of forks share it.
+  // biome-ignore lint/suspicious/noExplicitAny: Database union type prevents calling .select() with dynamic fields
+  const parents = (db as any)
+    .select({
+      task_id: tasks.task_id,
+      session_id: tasks.session_id,
+      finished_at: sql`COALESCE(${tasks.completed_at}, ${tasks.created_at})`.as('finished_at'),
+      ...Object.fromEntries(
+        TASK_USAGE_METRICS.map((metric) => [
+          metric,
+          reportedValue(db, tasks.data, metric).as(metric),
+        ])
+      ),
+    })
+    .from(tasks)
+    .where(sql`${tasks.session_id} IN (SELECT parent_session_id FROM fork_starts)`);
+
+  // Rank the narrow parent history once. The baseline joins use the latest
+  // positive ordinal for each metric, not the largest value (resets can drop).
+  const parentOrder = sql`SELECT *, ROW_NUMBER() OVER (
+    PARTITION BY session_id ORDER BY finished_at, task_id
+  ) AS report_order FROM parent_values`;
+  // Unpivot only the already-extracted scalars, not Task.data. This lets all
+  // metrics share one baseline join instead of six multiplying join estimates.
+  const parentMetrics = sql.join(
+    TASK_USAGE_METRICS.map(
+      (metric) => sql`
+    SELECT session_id, finished_at, report_order, ${metric} AS metric_name,
+      ${sql.identifier(metric)} AS value FROM parent_reports
+  `
+    ),
+    sql` UNION ALL `
+  );
+  const metricNames = sql.join(
+    TASK_USAGE_METRICS.map(
+      (metric) => sql`
+    SELECT ${metric} AS metric_name
+  `
+    ),
+    sql` UNION ALL `
+  );
+  // Merge fork starts into the parent timeline before filling positive report
+  // ordinals. This avoids a parentTasks × forkCount intermediate. Parent events
+  // sort first at equal timestamps, so completion exactly at fork start counts.
+  const parentEvents = sql`SELECT session_id, finished_at AS event_at, 0 AS event_kind,
+      report_order, NULL AS fork_session_id, metric_name, value
+    FROM parent_metrics
+    UNION ALL
+    SELECT parent_session_id, started_at, 1, NULL, session_id, metric_name, NULL
+    FROM fork_starts CROSS JOIN metric_names`;
+  const history = sql`SELECT fork_session_id, session_id AS parent_session_id, metric_name,
+    MAX(CASE WHEN value > 0 THEN report_order END) OVER (
+      PARTITION BY session_id, metric_name ORDER BY event_at, event_kind, report_order
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS report_order
+    FROM parent_events`;
+  const latest = sql`SELECT * FROM parent_history WHERE fork_session_id IS NOT NULL`;
+  const baselines = sql`SELECT fork_latest.fork_session_id AS session_id,
+    ${sql.join(
+      TASK_USAGE_METRICS.map(
+        (metric) => sql`
+      MAX(CASE WHEN fork_latest.metric_name = ${metric} THEN parent_metrics.value END)
+        AS ${sql.identifier(metric)}
+    `
+      ),
+      sql`, `
+    )}
+    FROM fork_latest
+    LEFT JOIN parent_metrics ON parent_metrics.session_id = fork_latest.parent_session_id
+      AND parent_metrics.metric_name = fork_latest.metric_name
+      AND parent_metrics.report_order = fork_latest.report_order
+    GROUP BY fork_latest.fork_session_id`;
 
   // Materialize the narrow extraction so both engines evaluate each JSON path
   // once, rather than carrying wide data through six window sorts or inlining
@@ -179,7 +238,15 @@ export function taskUsageTable(
 
   const reportedFields = reported.as('reported_usage');
   const reportedSource = new Subquery(
-    sql`WITH fork_baselines AS MATERIALIZED (${forks.getSQL()}),
+    sql`WITH fork_starts AS MATERIALIZED (${forks.getSQL()}),
+        parent_values AS MATERIALIZED (${parents.getSQL()}),
+        parent_reports AS MATERIALIZED (${parentOrder}),
+        parent_metrics AS MATERIALIZED (${parentMetrics}),
+        metric_names AS (${metricNames}),
+        parent_events AS (${parentEvents}),
+        parent_history AS (${history}),
+        fork_latest AS MATERIALIZED (${latest}),
+        fork_baselines AS MATERIALIZED (${baselines}),
         reported_usage AS MATERIALIZED (${reported.getSQL()})
         SELECT * FROM reported_usage`,
     reported.getSelectedFields(),
