@@ -6,10 +6,8 @@ import {
   sanitizeZoneOrder,
   ZONE_GRID_HEADER,
   ZONE_GRID_PADDING,
-  ZONE_MIN_HEIGHT,
   zoneGridColumns,
   zoneGridDropIndex,
-  zoneGridWidthOnSwitch,
   zoneLayoutOf,
 } from './zone-layout';
 
@@ -35,17 +33,25 @@ describe('zoneGridColumns', () => {
   });
 
   it('never shows more grid columns than cards, so a few cards stretch instead', () => {
-    expect(zoneGridColumns('grid', 2600, 3)).toEqual({ count: 3, width: 560 });
+    expect(zoneGridColumns('grid', 2600, 3)).toEqual({ count: 2, width: 560 });
   });
 
-  it('keeps at least two grid columns, at no less than the minimum width', () => {
-    expect(zoneGridColumns('grid', 400)).toEqual({ count: 2, width: 320 });
-    expect(planZoneGrid('grid', 400, items([100])).contentWidth).toBe(700);
+  it('fits a single grid column at the arranged resize minimum', () => {
+    expect(zoneGridColumns('grid', 360, 4)).toEqual({ count: 1, width: 320 });
+    expect(planZoneGrid('grid', 360, items([100, 100])).positions.get('b1')).toEqual({
+      x: 20,
+      y: 200,
+    });
+    expect(zoneGridColumns('grid', 699, 4).count).toBe(1);
+    expect(zoneGridColumns('grid', 700, 4)).toEqual({ count: 2, width: 320 });
+  });
+
+  it('wraps cards even when a former row is wide enough for every card', () => {
+    expect(zoneGridColumns('grid', 2360, 4)).toEqual({ count: 2, width: 560 });
   });
 
   it('fits a column to a narrow zone instead of widening it', () => {
     expect(zoneGridColumns('column', 370)).toEqual({ count: 1, width: 330 });
-    expect(planZoneGrid('column', 370, items([100])).contentWidth).toBe(370);
     expect(zoneGridColumns('column', 1580).width).toBe(560);
   });
 
@@ -65,8 +71,6 @@ describe('planZoneGrid', () => {
     expect(plan.positions.get('b1')).toEqual({ x: ZONE_GRID_PADDING + 520, y: ZONE_GRID_HEADER });
     // 80 + 150 + 20 = 250, snapped up to 260.
     expect(plan.positions.get('b2')).toEqual({ x: ZONE_GRID_PADDING, y: 260 });
-    // Column 0 ends at 260 + 210 = 470; plus padding, snapped = 500.
-    expect(plan.contentHeight).toBe(500);
   });
 
   it('moves only the items below a grown item in its own column', () => {
@@ -89,17 +93,9 @@ describe('planZoneGrid', () => {
     expect(plan.positions.get('b1')).toEqual({ x: ZONE_GRID_PADDING, y: 200 });
   });
 
-  it('lines a row up side by side, as wide as its cards', () => {
+  it('lines a row up side by side', () => {
     const plan = planZoneGrid('row', 1060, items([150, 300]));
     expect(plan.positions.get('b1')).toEqual({ x: ZONE_GRID_PADDING + 520, y: ZONE_GRID_HEADER });
-    expect(plan.contentWidth).toBe(1060);
-    expect(plan.contentHeight).toBe(400);
-  });
-
-  it('keeps room for one card in an empty or short zone', () => {
-    expect(ZONE_MIN_HEIGHT).toBe(300);
-    expect(planZoneGrid('grid', 1060, []).contentHeight).toBe(ZONE_MIN_HEIGHT);
-    expect(planZoneGrid('row', 1060, items([120])).contentHeight).toBe(ZONE_MIN_HEIGHT);
   });
 
   it('treats unusable heights as zero', () => {
@@ -168,19 +164,6 @@ describe('zoneGridDropIndex', () => {
   it('reads a column top to bottom, and a row left to right', () => {
     expect(zoneGridDropIndex('column', 600, others, dragged, { x: 20, y: 270 })).toBe(1);
     expect(zoneGridDropIndex('row', 2620, others, dragged, { x: 1050, y: 80 })).toBe(2);
-  });
-});
-
-describe('zoneGridWidthOnSwitch', () => {
-  it('gives a grid square-ish columns when its width would make a single row', () => {
-    // Six cards in a 3140px zone (a row's width) would all fit side by side.
-    expect(zoneGridWidthOnSwitch(3140, 6)).toBe(1580);
-    expect(zoneGridWidthOnSwitch(5000, 9)).toBe(1580);
-  });
-
-  it('keeps a width that already wraps the cards, or a small zone', () => {
-    expect(zoneGridWidthOnSwitch(1060, 6)).toBeUndefined();
-    expect(zoneGridWidthOnSwitch(3140, 2)).toBeUndefined();
   });
 });
 

@@ -298,6 +298,169 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
     });
   });
 
+  function overflowingBoard(layout: 'row' | 'column' | 'grid' = 'row'): Board {
+    // The other zone covers the overflow: own-zone reorders must win over its trigger.
+    const next = structuredClone(board);
+    Object.assign(next.objects![IMPLEMENTING_ZONE_ID], { width: 360, height: 100, layout });
+    Object.assign(next.objects![REVIEWING_ZONE_ID], {
+      x: 2100,
+      y: 80,
+      width: 1000,
+      height: 1000,
+      trigger: { behavior: 'always_new', template: 'Continue' },
+    });
+    agorStore.setState({
+      boardObjectsByBoardId: new Map([
+        [
+          BOARD_ID,
+          [implementingPlacement, { ...reviewingCardPlacement, zone_id: IMPLEMENTING_ZONE_ID }],
+        ],
+      ]),
+    });
+    return next;
+  }
+
+  it.each(
+    (['row', 'column', 'grid'] as const).flatMap((layout) =>
+      (['branch', 'card'] as const).map((kind) => [layout, kind] as const)
+    )
+  )(
+    'reorders overflowing %s %s slots before considering another zone or its trigger',
+    async (layout, kind) => {
+      vi.useFakeTimers();
+      const next = overflowingBoard(layout);
+      const patch = vi.fn(async (_id: string, _data: unknown) => ({}));
+      const create = vi.fn(async () => ({}));
+      const client = { service: vi.fn(() => ({ patch, create })) } as unknown as AgorClient;
+      renderCanvas(client, next);
+      await act(async () => {});
+      const nodeId = kind === 'branch' ? BRANCH_ID : `card-${card.card_id}`;
+      const slot = currentNode(kind === 'branch' ? `card-${card.card_id}` : BRANCH_ID).position;
+      const moved = {
+        ...currentNode(nodeId),
+        position: slot,
+        positionAbsolute: { x: 1740 + slot.x, y: 80 + slot.y },
+      };
+      act(() => {
+        flowProps?.onNodeDragStart?.({}, moved);
+        flowProps?.onNodeDragStop?.({}, moved);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(600);
+      });
+      expect(patch).toHaveBeenCalledWith(
+        BOARD_ID,
+        expect.objectContaining({
+          _action: 'mergeObjectFields',
+          objects: { [IMPLEMENTING_ZONE_ID]: { order: [`card-${card.card_id}`, BRANCH_ID] } },
+        })
+      );
+      expect(patch.mock.calls).toHaveLength(1);
+      expect(create).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['branch', 'card'] as const)(
+    'removes a %s beyond the occupied row rather than on its remaining cards',
+    async (kind) => {
+      const next = overflowingBoard();
+      const patch = vi.fn(async () => ({}));
+      const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+      renderCanvas(client, next, { app: false });
+      await act(async () => {});
+      const id = kind === 'branch' ? BRANCH_ID : `card-${card.card_id}`;
+      const node = currentNode(id) as FlowNode & {
+        data: { onUnpin: (id: string) => Promise<void> };
+      };
+      await act(async () => {
+        await node.data.onUnpin(kind === 'branch' ? BRANCH_ID : card.card_id);
+      });
+      expect(patch).toHaveBeenCalledWith(
+        kind === 'branch' ? implementingPlacement.object_id : reviewingCardPlacement.object_id,
+        expect.objectContaining({ zone_id: null, position: { x: 2480, y: 160 } })
+      );
+    }
+  );
+
+  it.each(['row', 'column'] as const)(
+    'switches an overflowing %s to free with all shown cards inside its saved bounds',
+    async (layout) => {
+      const next = overflowingBoard(layout);
+      const patch = vi.fn(async () => ({}));
+      const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+      renderCanvas(client, next, { app: false });
+      await act(async () => {});
+      // React Flow reports slot widths, not standalone widths, after measuring.
+      currentNode(BRANCH_ID).width = 320;
+      currentNode(`card-${card.card_id}`).width = 320;
+      const zone = currentNode(IMPLEMENTING_ZONE_ID) as FlowNode & {
+        data: Parameters<typeof ZoneNode>[0]['data'];
+      };
+      await act(async () => {
+        await zone.data.onLayoutChange?.(
+          IMPLEMENTING_ZONE_ID,
+          'free',
+          zone.data.beginBoardWrite?.() ?? null
+        );
+      });
+      expect(patch).toHaveBeenCalledWith(
+        BOARD_ID,
+        expect.objectContaining({
+          _action: 'placeZoneEntities',
+          size: layout === 'row' ? { width: 760, height: 300 } : { width: 540, height: 440 },
+          positions: expect.objectContaining({
+            [implementingPlacement.object_id]: { x: 20, y: 80 },
+          }),
+        })
+      );
+    }
+  );
+
+  it.each(['free', 'row', 'column', 'grid'] as const)(
+    'persists the origin as well as size when resizing a %s zone from the top left',
+    async (layout) => {
+      vi.useFakeTimers();
+      const next = structuredClone(board);
+      Object.assign(next.objects![IMPLEMENTING_ZONE_ID], { layout });
+      const patch = vi.fn(async () => ({}));
+      const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+      renderCanvas(client, next, { app: false });
+      await act(async () => {});
+      act(() =>
+        flowProps?.onNodesChange?.([
+          { type: 'position', id: IMPLEMENTING_ZONE_ID, position: { x: 1700, y: 40 } },
+          {
+            type: 'dimensions',
+            id: IMPLEMENTING_ZONE_ID,
+            dimensions: { width: 1140, height: 760 },
+            resizing: true,
+          },
+        ])
+      );
+      // React Flow ends the resize with a dimensions-only event. It must not
+      // discard the origin captured with the last top/left movement.
+      act(() =>
+        flowProps?.onNodesChange?.([
+          {
+            type: 'dimensions',
+            id: IMPLEMENTING_ZONE_ID,
+            dimensions: { width: 1140, height: 760 },
+            resizing: false,
+          },
+        ])
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(600);
+      });
+      expect(patch).toHaveBeenCalledWith(
+        BOARD_ID,
+        expect.objectContaining({
+          objectData: expect.objectContaining({ x: 1700, y: 40, width: 1140, height: 760 }),
+        })
+      );
+    }
+  );
+
   it('persists no move on a board whose partition is not loaded (lean record, no zones)', async () => {
     vi.useFakeTimers();
     // A reconnect unloaded this board; its cached placement is pinned to a

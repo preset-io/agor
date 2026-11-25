@@ -71,14 +71,15 @@ import {
 import { drawnZoneFlowRect, isZoneDrag, zoneDrawingPreviewRect } from './canvas/utils/zoneDrawing';
 import 'reactflow/dist/style.css';
 import './SessionCanvas.css';
-import type { ZoneLayout } from '@agor/core/types';
+import type { BoardPosition, ZoneLayout } from '@agor/core/types';
+import { BRANCH_CARD_WIDTH } from '@agor/core/utils/board-placement';
 import {
   isAutoZoneLayout,
   ZONE_GRID_GAP,
+  ZONE_GRID_PADDING,
   ZONE_MIN_HEIGHT,
   ZONE_MIN_WIDTH,
   zoneGridDropIndex,
-  zoneGridWidthOnSwitch,
   zoneLayoutOf,
 } from '@agor/core/utils/zone-layout';
 import { boardCommentZoneParentObjectKey, hasMinimumRole, ROLES, shortId } from '@agor-live/client';
@@ -124,7 +125,7 @@ import { AutocompleteTextarea } from '../AutocompleteTextarea/AutocompleteTextar
 import BranchCard from '../BranchCard';
 import CardModal from '../CardModal';
 import type { CardNodeData } from '../CardNode';
-import CardNode from '../CardNode';
+import CardNode, { CARD_WIDTH } from '../CardNode';
 import { ActionErrorNotice } from '../CompactNotice';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import SessionCard from '../SessionCard';
@@ -159,7 +160,12 @@ import {
 import { getValidZoneParentId, sanitizeOrphanedNodeParents } from './canvas/utils/nodeParentUtils';
 import { ZoneTriggerModal } from './canvas/ZoneTriggerModal';
 import { DEFAULT_BOARD_OBJECT_Z_INDEX, selectedZIndex } from './canvas/zOrder';
-import { applyZoneGridLayouts, autoLayoutOfZoneNode, zoneGridOrder } from './canvas/zoneGridLayout';
+import {
+  applyZoneGridLayouts,
+  autoLayoutOfZoneNode,
+  occupiedZoneSize,
+  zoneGridOrder,
+} from './canvas/zoneGridLayout';
 import { createZoneTriggerSession } from './canvas/zoneTriggerSessionCreation';
 
 interface SessionCanvasProps {
@@ -929,20 +935,39 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       // A card widened past its arranged slot (a session peek) still drops by its slot.
       const slotWidth = Number(node.data?.slotWidth) || undefined;
       return {
-        width: slotWidth || measured?.width || node.width || (node.type === 'cardNode' ? 380 : 500),
+        width:
+          slotWidth ||
+          measured?.width ||
+          node.width ||
+          (node.type === 'cardNode' ? CARD_WIDTH : BRANCH_CARD_WIDTH),
         height: measured?.height || node.height || (node.type === 'cardNode' ? 120 : 200),
       };
     });
 
-    // Arranged zones render at their fitted size, so drops hit-test against what is shown.
+    const occupiedSizeOf = useStableCallback((zone: Node) =>
+      occupiedZoneSize(
+        zone,
+        shownNodesRef.current.filter(
+          (node) =>
+            node.parentId === zone.id && (node.type === 'branchNode' || node.type === 'cardNode')
+        ),
+        {
+          measuredSizes: measuredNodeSizesRef.current,
+          storedPositionOf: (id) => livePlacementOf(id)?.position,
+          heldOrderOf: (id) => heldZoneOrdersRef.current.get(id),
+        }
+      )
+    );
+
+    // Drop targets include arranged slots past the saved edge; the zone itself stays the saved size.
     const boardObjectsAsShown = useStableCallback((objects: Board['objects']) => {
       if (!objects) return objects;
       let shown = objects;
       for (const [id, object] of Object.entries(objects)) {
         if (object.type !== 'zone' || !isAutoZoneLayout(zoneLayoutOf(object))) continue;
-        const style = shownNodesRef.current.find((node) => node.id === id)?.style;
-        const width = Number(style?.width) || object.width;
-        const height = Number(style?.height) || object.height;
+        const zoneNode = shownNodesRef.current.find((node) => node.id === id);
+        if (!zoneNode) continue;
+        const { width, height } = occupiedSizeOf(zoneNode);
         if (width === object.width && height === object.height) continue;
         if (shown === objects) shown = { ...objects };
         shown[id] = { ...object, width, height };
@@ -957,7 +982,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         ? shownNodesRef.current.find((candidate) => candidate.id === node.parentId)
         : undefined;
       if (!node || !zone) return undefined;
-      const zoneWidth = Number(zone.style?.width) || Number(zone.data?.width) || 0;
+      const zoneWidth = occupiedSizeOf(zone).width;
       return {
         x: zone.position.x + zoneWidth + 2 * ZONE_GRID_GAP,
         y: zone.position.y + node.position.y,
@@ -1073,7 +1098,15 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // Track resize state
     const resizeTimerRef = useRef<NodeJS.Timeout | null>(null);
     const pendingResizeUpdatesRef = useRef<
-      Record<string, { width: number; height: number; ticket: BoardWriteTicket }>
+      Record<
+        string,
+        {
+          width: number;
+          height: number;
+          position?: BoardPosition;
+          ticket: BoardWriteTicket;
+        }
+      >
     >({});
 
     // Handler to open edit modal for existing markdown note
@@ -1173,8 +1206,21 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             const placement = livePlacementOf(node.id);
             if (placement) positions[placement.object_id] = node.position;
           }
-          const width = Number(zoneNode.style?.width) || zone.width;
-          const height = Number(zoneNode.style?.height) || zone.height;
+          const occupied = occupiedSizeOf(zoneNode);
+          // Free cards regain their standalone width, which may exceed a narrow slot.
+          const width = Math.max(
+            occupied.width,
+            ...children.map(
+              (node) =>
+                node.position.x +
+                Math.max(
+                  shownSizeOf(node).width,
+                  node.type === 'cardNode' ? CARD_WIDTH : BRANCH_CARD_WIDTH
+                ) +
+                ZONE_GRID_PADDING
+            )
+          );
+          const height = occupied.height;
           return writeZone(ticket, 'change the zone layout', () =>
             client.service('boards').patch(board.board_id, {
               _action: 'placeZoneEntities',
@@ -1186,12 +1232,11 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         }
 
         holdZoneOrder(objectId, order);
-        const gridWidth =
-          layout === 'grid' ? zoneGridWidthOnSwitch(zone.width, order.length) : undefined;
+        // Only the layout and order change: the zone keeps the size people set.
         const saved = await writeZone(ticket, 'change the zone layout', () =>
           client.service('boards').patch(board.board_id, {
             _action: 'mergeObjectFields',
-            objects: { [objectId]: { layout, order, ...(gridWidth ? { width: gridWidth } : {}) } },
+            objects: { [objectId]: { layout, order } },
           } as unknown as Partial<Board>)
         );
         if (!saved) releaseZoneOrder(objectId, order);
@@ -1460,7 +1505,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           draggable: canMutateBoard,
           zIndex: 500, // Above zones, below comments
           // Set dimensions for collision detection (matches BranchCard size)
-          width: 500,
+          width: BRANCH_CARD_WIDTH,
           height: 200, // Approximate height, will be measured by React Flow
           // Set parentId for visual nesting but allow dragging outside zone
           // Only set if zone actually exists — stale zone_id references cause React Flow errors
@@ -1611,7 +1656,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           position,
           draggable: canMutateBoard,
           zIndex: 500, // Same level as branches
-          width: 380,
+          width: CARD_WIDTH,
           height: 120,
           parentId: validZoneParentId,
           extent: undefined,
@@ -2428,7 +2473,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             // `getNode` is a stable reference and only runs inside this dimensions
             // branch, so the hot drag/position path does zero O(n) work.
             const node = reactFlowInstanceRef.current?.getNode(change.id);
-            // An arranged zone fits its cards on screen; only a person resizing it saves a size.
+            // React Flow measurements are not resize intent; arranged zones keep their saved size.
             if (node?.type === 'zone' && autoLayoutOfZoneNode(node) && change.resizing !== true) {
               return;
             }
@@ -2439,10 +2484,19 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               const newWidth = change.dimensions.width;
               const newHeight = change.dimensions.height;
 
-              // Skip if dimensions haven't changed (tolerance of 1px for floating point)
+              // Left/top handles move the origin in the same batch as dimensions.
+              const positionChange = changes.find(
+                // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
+                (candidate: any) => candidate.id === change.id && candidate.type === 'position'
+              );
+              const { x, y } = positionChange?.position ?? node.position;
+
+              // Skip unchanged geometry (tolerance of 1px for floating point)
               if (
                 currentWidth &&
                 currentHeight &&
+                x === node.position.x &&
+                y === node.position.y &&
                 Math.abs(Number(currentWidth) - newWidth) < 1 &&
                 Math.abs(Number(currentHeight) - newHeight) < 1
               ) {
@@ -2456,6 +2510,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               pendingResizeUpdatesRef.current[change.id] = {
                 width: newWidth,
                 height: newHeight,
+                position:
+                  positionChange?.position ?? pendingResizeUpdatesRef.current[change.id]?.position,
                 ticket,
               };
 
@@ -2473,7 +2529,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 let dropped = false;
 
                 // Persist all resize changes
-                for (const [nodeId, { width, height, ticket }] of Object.entries(updates)) {
+                for (const [nodeId, { width, height, position, ticket }] of Object.entries(
+                  updates
+                )) {
                   // Checked before every PATCH, including after awaiting the
                   // previous one. A board that unloaded (a reconnect) since the
                   // resize was queued drops it, even once it has reloaded: its
@@ -2489,7 +2547,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       ? latestBoard.objects?.[nodeId]
                       : undefined;
                   if (objectData && objectData.type === 'zone') {
-                    const updatedObject = { ...objectData, width, height };
+                    const updatedObject = { ...objectData, width, height, ...(position ?? {}) };
 
                     try {
                       await client.service('boards').patch(ticket.boardId, {
@@ -2570,9 +2628,12 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         ) {
           const dropped = node.positionAbsolute || node.position;
           const { width, height } = shownSizeOf(node);
+          const objects = boardObjectsAsShown(board.objects);
+          const ownZone = objects?.[node.parentId];
+          // Own slots win even if a neighbouring zone covers the overflow.
           const target = findZoneAtPosition(
             { x: dropped.x + width / 2, y: dropped.y + height / 2 },
-            boardObjectsAsShown(board.objects)
+            ownZone ? { [node.parentId]: ownZone } : undefined
           );
           if (target?.zoneId === node.parentId) {
             // This drop replaces an earlier drag-out still waiting to save.

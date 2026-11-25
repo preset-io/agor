@@ -96,6 +96,28 @@ async function openArrangeMenu() {
 }
 
 describe('ZoneNode compact toolbar', () => {
+  it.each(['free', 'row', 'column', 'grid'] as const)(
+    'keeps two-axis resize handles and the toolbar for a selected %s zone',
+    (layout) => {
+      const { container } = renderZone(vi.fn(), CONNECTED, { layout });
+
+      // Arranged zones used to expose only a right-edge width control.
+      expect(container.querySelectorAll('.react-flow__resize-control.handle')).toHaveLength(4);
+      expect(container.querySelectorAll('.react-flow__resize-control.line')).toHaveLength(4);
+      expect(screen.getByRole('toolbar', { name: 'Zone actions' })).toBeInTheDocument();
+    }
+  );
+
+  it.each(['free', 'row', 'column', 'grid'] as const)(
+    'hides resize handles for a read-only %s zone',
+    (layout) => {
+      const { container } = renderZone(vi.fn(), CONNECTED, { layout, canEdit: false });
+
+      expect(container.querySelectorAll('.react-flow__resize-control')).toHaveLength(0);
+      expect(screen.queryByRole('toolbar', { name: 'Zone actions' })).not.toBeInTheDocument();
+    }
+  );
+
   it('does not mount NodeToolbar for an unselected zone', () => {
     nodeToolbarRenderSpy.mockClear();
     renderZone(vi.fn(), CONNECTED, { selected: false });

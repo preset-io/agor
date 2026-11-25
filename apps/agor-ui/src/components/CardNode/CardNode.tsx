@@ -22,7 +22,7 @@ import { isSafeExternalUrl } from '../../utils/safeExternalUrl';
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { MarkdownPreview } from '../MarkdownRenderer';
 
-const CARD_WIDTH = 380;
+export const CARD_WIDTH = 380;
 
 export interface CardNodeData {
   card: CardWithType;
