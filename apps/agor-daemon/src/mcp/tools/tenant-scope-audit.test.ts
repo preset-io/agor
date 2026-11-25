@@ -50,6 +50,8 @@ const ALLOWED_UNWRAPPED: Record<string, string> = {
   'branchesService.getLogs': 'loadEnvironmentForAction -> withTenantDatabase',
   'branchesService.renderEnvironment': 'loadEnvironmentForAction -> withTenantDatabase',
   'branchesService.checkHealth': 'withTenantDatabase (short unit)',
+  'branchesService.setEnvironmentCommands':
+    'loadEnvironmentForAction + withTenantDatabase (short units)',
   // GatewayService is identity-only; its repositories are
   // `bindRepositoryToTenantUnitOfWork`-bound, so each access opens its own short
   // tenant unit.
