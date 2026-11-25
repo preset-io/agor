@@ -122,6 +122,8 @@ interface AutocompleteTextareaProps {
   highlightWhenEmpty?: boolean;
   /** Style overrides for the underlying Ant Design textarea control. */
   textareaStyle?: React.CSSProperties;
+  /** `borderless` when a surrounding card owns the border and focus ring. */
+  variant?: 'outlined' | 'borderless';
 }
 
 // Minimum characters required after : before showing emoji picker (like Slack)
@@ -382,6 +384,7 @@ export const AutocompleteTextarea = React.forwardRef<
       kbLinkTarget = 'stable-uri',
       highlightWhenEmpty = false,
       textareaStyle,
+      variant = 'outlined',
     },
     ref
   ) => {
@@ -657,7 +660,7 @@ export const AutocompleteTextarea = React.forwardRef<
         // @ trigger: keep files first to preserve the existing prompt-composer
         // muscle memory, then append clearly labeled Knowledge and user groups.
         if (fileResults.length > 0) {
-          options.push({ heading: 'FILES & FOLDERS' });
+          options.push({ heading: 'Files and folders' });
           options.push(...fileResults);
         }
 
@@ -673,26 +676,26 @@ export const AutocompleteTextarea = React.forwardRef<
             type: 'kb_doc' as const,
           }));
           if (kbResults.length > 0) {
-            options.push({ heading: 'KNOWLEDGE BASE' });
+            options.push({ heading: 'Knowledge base' });
             options.push(...kbResults);
           }
         }
 
         const userResults = filterUsers(query);
         if (userResults.length > 0) {
-          options.push({ heading: 'USERS' });
+          options.push({ heading: 'People' });
           options.push(...userResults);
         }
       } else if (triggerType === ':') {
         // : trigger: show emojis
         if (emojiResults.length > 0) {
-          options.push({ heading: 'EMOJIS' });
+          options.push({ heading: 'Emoji' });
           options.push(...emojiResults);
         }
       } else if (triggerType === '/') {
         // / trigger: show slash commands
         if (slashCommandResults.length > 0) {
-          options.push({ heading: 'COMMANDS' });
+          options.push({ heading: 'Commands' });
           options.push(...slashCommandResults);
         }
       }
@@ -1218,7 +1221,7 @@ export const AutocompleteTextarea = React.forwardRef<
               fontSize: token.fontSizeSM,
             }}
           >
-            No results
+            No matches
           </div>
         )}
 
@@ -1236,7 +1239,6 @@ export const AutocompleteTextarea = React.forwardRef<
                     fontWeight: 600,
                     color: token.colorTextSecondary,
                     backgroundColor: token.colorBgContainer,
-                    textTransform: 'uppercase',
                     borderBottom: `1px solid ${token.colorBorder}`,
                     marginTop: idx > 0 ? token.paddingXS : 0,
                     zIndex: 10,
@@ -1497,16 +1499,21 @@ export const AutocompleteTextarea = React.forwardRef<
           placeholder={placeholder}
           autoSize={autoSize || { minRows: 2, maxRows: 10 }}
           className="agor-textarea agor-textarea-with-highlights"
+          variant={variant}
           style={{
-            borderColor:
-              shouldHighlightEmpty && !suppressEmptyHighlight
-                ? token.colorPrimary
-                : token.colorBorder,
-            boxShadow: suppressEmptyHighlight
-              ? 'none'
-              : shouldHighlightEmpty
-                ? `0 0 0 ${token.controlOutlineWidth}px ${token.controlOutline}`
-                : undefined,
+            // A borderless field sits in a card that draws the focus ring.
+            ...(variant === 'borderless' && { outline: 'none' }),
+            ...(variant === 'outlined' && {
+              borderColor:
+                shouldHighlightEmpty && !suppressEmptyHighlight
+                  ? token.colorPrimary
+                  : token.colorBorder,
+              boxShadow: suppressEmptyHighlight
+                ? 'none'
+                : shouldHighlightEmpty
+                  ? `0 0 0 ${token.controlOutlineWidth}px ${token.controlOutline}`
+                  : undefined,
+            }),
             backgroundColor: hasHighlights ? 'transparent' : undefined,
             transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
             position: 'relative',

@@ -1,9 +1,49 @@
-import type { AgorClient } from '@agor-live/client';
+import type { AgorClient, Session } from '@agor-live/client';
 import { DollarOutlined } from '@ant-design/icons';
 import { Alert, Button, Descriptions, Popover, Space, Spin, Typography } from 'antd';
 import { useState } from 'react';
 import { useSessionUsage } from '../../hooks/useSessionUsage';
 import { Tag } from '../Tag';
+
+/** Estimated cost and token breakdown for a session usage snapshot. */
+export function SessionUsageSummary({
+  usage,
+  onRefresh,
+}: {
+  usage: NonNullable<Session['usage_summary']>;
+  /** Fetches a fresh snapshot; without it, the summary says how to refresh. */
+  onRefresh?: () => void;
+}) {
+  return (
+    <Space direction="vertical">
+      {/* The colon is part of the label, so it sits right after the word. */}
+      <Descriptions
+        size="small"
+        column={1}
+        colon={false}
+        items={[
+          { key: 'cost', label: 'Estimated cost:', children: `$${usage.cost.toFixed(4)}` },
+          { key: 'total', label: 'Total tokens:', children: usage.total.toLocaleString() },
+          { key: 'input', label: 'Input:', children: usage.input.toLocaleString() },
+          { key: 'output', label: 'Output:', children: usage.output.toLocaleString() },
+          { key: 'read', label: 'Cache read:', children: usage.cacheRead.toLocaleString() },
+          {
+            key: 'creation',
+            label: 'Cache creation:',
+            children: usage.cacheCreation.toLocaleString(),
+          },
+        ]}
+      />
+      {onRefresh ? (
+        <Button type="text" size="small" onClick={onRefresh}>
+          Refresh
+        </Button>
+      ) : (
+        <Typography.Text type="secondary">Snapshot at opening. Reopen to refresh.</Typography.Text>
+      )}
+    </Space>
+  );
+}
 
 export function SessionUsagePopover({
   client,
@@ -35,27 +75,7 @@ export function SessionUsagePopover({
             </Button>
           </Space>
         ) : usage ? (
-          <Space direction="vertical">
-            <Descriptions
-              size="small"
-              column={1}
-              items={[
-                { key: 'cost', label: 'Estimated cost', children: `$${usage.cost.toFixed(4)}` },
-                { key: 'total', label: 'Total tokens', children: usage.total.toLocaleString() },
-                { key: 'input', label: 'Input', children: usage.input.toLocaleString() },
-                { key: 'output', label: 'Output', children: usage.output.toLocaleString() },
-                { key: 'read', label: 'Cache read', children: usage.cacheRead.toLocaleString() },
-                {
-                  key: 'creation',
-                  label: 'Cache creation',
-                  children: usage.cacheCreation.toLocaleString(),
-                },
-              ]}
-            />
-            <Typography.Text type="secondary">
-              Snapshot at opening. Reopen to refresh.
-            </Typography.Text>
-          </Space>
+          <SessionUsageSummary usage={usage} />
         ) : null
       }
     >

@@ -416,8 +416,9 @@ it('creates with inherited defaults, displays the nonblocking warning, and opens
     </ConfigProvider>
   );
   await act(() => userEvent.click(screen.getByTestId('mcp-chip')));
-  expect(await screen.findByText(/Using defaults. Missing defaults/)).toBeVisible();
-  expect(await screen.findByText(/Unavailable MCP server/)).toBeVisible();
+  // The popover can still be opening when the text first mounts.
+  await waitFor(() => expect(screen.getByText(/Using defaults. Missing defaults/)).toBeVisible());
+  await waitFor(() => expect(screen.getByText(/Unavailable MCP server/)).toBeVisible());
   await act(() => userEvent.click(screen.getByText('New Session · Picker validation')));
   await act(() => userEvent.click(screen.getByRole('button', { name: 'Create Session' })));
   await waitFor(() => expect(create).toHaveBeenCalledTimes(1));

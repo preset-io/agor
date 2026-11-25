@@ -142,6 +142,7 @@ function renderPanel({
   onChooseAgenticTool,
   client = null,
   activeSession = session,
+  activeBranch = branch,
   open = true,
   onClose = vi.fn(),
   currentUserId,
@@ -150,6 +151,7 @@ function renderPanel({
   onChooseAgenticTool?: ReturnType<typeof vi.fn>;
   client?: AgorClient | null;
   activeSession?: Session;
+  activeBranch?: Branch;
   open?: boolean;
   onClose?: ReturnType<typeof vi.fn>;
   currentUserId?: string;
@@ -161,7 +163,7 @@ function renderPanel({
           <SessionPanel
             client={client}
             session={activeSession}
-            branch={branch}
+            branch={activeBranch}
             open={open}
             onClose={onClose}
             currentUserId={currentUserId}
@@ -680,7 +682,7 @@ describe.each([390, 1280])('shared Stop path at %ipx', (width) => {
     const stop = screen.getByLabelText('Stop');
     fireEvent.click(stop);
     fireEvent.click(stop);
-    expect(stop).toBeDisabled();
+    expect(stop).toHaveAttribute('aria-disabled', 'true');
     expect(create).toHaveBeenCalledExactlyOnceWith({ expected_task_id: taskId });
     expect(service).toHaveBeenCalledWith(`sessions/${session.session_id}/stop`);
     rejectStop(Object.assign(new Error('Not allowed to stop this session'), { code: 403 }));
@@ -779,4 +781,35 @@ describe('SessionPanel archive feedback', () => {
       }
     }
   );
+});
+
+describe('composer placeholder', () => {
+  const liveSession = { ...session, agentic_tool: 'claude-code' } as unknown as Session;
+  const teammateBranch = {
+    ...branch,
+    custom_context: { teammate: { kind: 'teammate', displayName: 'Kelly' } },
+  } as unknown as Branch;
+
+  beforeEach(() => {
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1280);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('names the teammate and adds the desktop hint', () => {
+    renderPanel({ activeSession: liveSession, activeBranch: teammateBranch });
+    expect(autocomplete.props.placeholder).toBe('Message Kelly… @ to mention, / for commands');
+  });
+
+  it("keeps today's wording without a teammate, and queues while running", () => {
+    renderPanel({ activeSession: liveSession });
+    expect(autocomplete.props.placeholder).toBe('Prompt here… @ to mention, / for commands');
+  });
+
+  it('asks for a follow-up while the agent runs', () => {
+    renderPanel({
+      activeSession: { ...liveSession, status: 'running' } as Session,
+      activeBranch: teammateBranch,
+    });
+    expect(autocomplete.props.placeholder).toBe('Queue a follow-up @ to mention, / for commands');
+  });
 });

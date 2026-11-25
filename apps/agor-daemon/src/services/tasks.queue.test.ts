@@ -205,4 +205,25 @@ describe('public queued-task management (SQLite)', () => {
       }
     }
   );
+  dbTest(
+    'moves a queued task to the front so it is the next to drain (composer Send now)',
+    async ({ db }) => {
+      const seed = await seedQueue(db);
+      const server = await queueTestServer(db);
+      const tasks = new TaskRepository(db);
+      try {
+        const client = await queueClient(server, seed.owner.user_id);
+        const ids = seed.queued.map((t) => t.task_id);
+        await client.reorderQueued({
+          session_id: seed.session.session_id,
+          expected_task_ids: ids,
+          task_ids: [ids[2], ids[0], ids[1]],
+        });
+        expect((await tasks.getNextQueued(seed.session.session_id))?.task_id).toBe(ids[2]);
+        expect(await tasks.findById(seed.active.task_id)).toEqual(seed.active);
+      } finally {
+        await server.close();
+      }
+    }
+  );
 });

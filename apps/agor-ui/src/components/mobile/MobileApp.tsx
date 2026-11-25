@@ -28,6 +28,7 @@ import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useBoardPartition } from '../../hooks/useBoardPartition';
 import { useBranchSessions } from '../../hooks/useBranchSessions';
 import { useCommentsForYou } from '../../hooks/useCommentsForYou';
+import { useComposerFocused } from '../../hooks/useComposerFocus';
 import { type CreateBranchFn, useCreateFlows } from '../../hooks/useCreateFlows';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
@@ -205,6 +206,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const settingsHydrated = useAgorStore((s) => s.agenticToolSettingsHydrated);
 
   const [moreOpen, setMoreOpen] = useState(false);
+  const composerFocused = useComposerFocused();
   const [askPickerOpen, setAskPickerOpen] = useState(false);
   const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
   const [branchEditor, setBranchEditor] = useState<{
@@ -661,14 +663,17 @@ export const MobileApp: React.FC<MobileAppProps> = ({
 
       {/* Docked as the last flex child of the fixed shell on EVERY /m screen,
           including session detail, so content (and the session composer) lays
-          out above it with no overlap. On sub-views no tab is highlighted. */}
-      <MobileTabBar
-        activeTab={activeTab}
-        onSelect={handleTabSelect}
-        homeBadge={homeBadge}
-        moreBadge={commentsBadge}
-        askPending={creatingSession || !settingsHydrated}
-      />
+          out above it with no overlap. On sub-views no tab is highlighted.
+          Hidden while the session composer has focus. */}
+      {!composerFocused && (
+        <MobileTabBar
+          activeTab={activeTab}
+          onSelect={handleTabSelect}
+          homeBadge={homeBadge}
+          moreBadge={commentsBadge}
+          askPending={creatingSession || !settingsHydrated}
+        />
+      )}
 
       <Drawer
         open={askPickerOpen}
