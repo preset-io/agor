@@ -88,3 +88,52 @@ it('shows the repository default branch as the source placeholder for a non-fork
   fireEvent.click(screen.getByText('Advanced Teammate Settings'));
   expect(await screen.findByPlaceholderText('trunk')).toBeInTheDocument();
 });
+
+describe('teammate avatar when choosing a starter persona', () => {
+  const repo = {
+    repo_id: 'own-repo',
+    default_branch: 'trunk',
+    remote_url: 'https://github.com/acme/handbook.git',
+  } as Repo;
+  let fields: ReturnType<typeof useTeammateForm>;
+
+  function Harness() {
+    fields = useTeammateForm(repo);
+    return (
+      <Form form={fields.form}>
+        <TeammateFormFields
+          form={fields.form}
+          repos={[repo]}
+          frameworkRepo={repo}
+          onTemplateChange={fields.handleTemplateChange}
+          onDisplayNameChange={fields.handleDisplayNameChange}
+          customRepoSelected={false}
+          onCustomRepoChange={fields.setCustomRepoSelected}
+        />
+      </Form>
+    );
+  }
+
+  it('keeps an emoji the user already picked', () => {
+    render(<Harness />);
+    // The emoji picker popover writes the value through this same form field.
+    fields.form.setFieldValue('emoji', '🦊');
+
+    fireEvent.click(screen.getByText('Start from scratch'));
+    expect(fields.form.getFieldValue('emoji')).toBe('🦊');
+
+    fireEvent.click(screen.getByText('Builder'));
+    expect(fields.form.getFieldValue('emoji')).toBe('🦊');
+  });
+
+  it('applies each persona emoji while the user has not picked one', () => {
+    render(<Harness />);
+    expect(fields.form.getFieldValue('emoji')).toBe('🤖');
+
+    fireEvent.click(screen.getByText('Builder'));
+    expect(fields.form.getFieldValue('emoji')).toBe('🛠️');
+
+    fireEvent.click(screen.getByText('Start from scratch'));
+    expect(fields.form.getFieldValue('emoji')).toBe('✨');
+  });
+});

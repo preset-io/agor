@@ -6,7 +6,7 @@ import {
 import { DownOutlined, InfoCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import { Alert, Collapse, Form, Input, Select, Space, Tooltip, Typography, theme } from 'antd';
-import type { TeammateGalleryCardId } from '@/utils/teammateTemplates';
+import { DEFAULT_TEAMMATE_EMOJI, type TeammateGalleryCardId } from '@/utils/teammateTemplates';
 import { FormEmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import { TeammateGallery } from '../TeammateGallery';
 
@@ -57,7 +57,7 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
     <>
       <Form.Item label="Name" required tooltip="Human-friendly name and icon for this AI teammate">
         <Space.Compact style={{ display: 'flex' }}>
-          <FormEmojiPickerInput fieldName="emoji" defaultEmoji="🤖" />
+          <FormEmojiPickerInput fieldName="emoji" defaultEmoji={DEFAULT_TEAMMATE_EMOJI} />
           <Form.Item
             name="displayName"
             noStyle

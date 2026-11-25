@@ -3,6 +3,7 @@ import { Form } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { slugify } from '@/utils/repoSlug';
 import {
+  DEFAULT_TEAMMATE_EMOJI,
   getTeammateTemplate,
   resolveTemplateSourceBranch,
   resolveTemplateSourceRemoteUrl,
@@ -20,6 +21,7 @@ export function useTeammateForm(frameworkRepo: Repo | undefined) {
   const [isFormValid, setIsFormValid] = useState(false);
   const [customRepoSelected, setCustomRepoSelected] = useState(false);
   const lastAutoName = useRef('');
+  const lastAutoEmoji = useRef<string | undefined>(undefined);
 
   const validateForm = useCallback(() => {
     const values = form.getFieldsValue();
@@ -56,11 +58,22 @@ export function useTeammateForm(frameworkRepo: Repo | undefined) {
   const handleTemplateChange = useCallback(
     (templateId: TeammateGalleryCardId) => {
       const template = getTeammateTemplate(templateId);
+      // Like the branch name, a template only fills in the avatar until the
+      // user picks their own.
+      const currentEmoji = form.getFieldValue('emoji');
+      const keepCustomEmoji =
+        !!currentEmoji &&
+        currentEmoji !== DEFAULT_TEAMMATE_EMOJI &&
+        currentEmoji !== lastAutoEmoji.current;
+      const templateEmoji = keepCustomEmoji ? undefined : template?.emoji;
+      if (templateEmoji) {
+        lastAutoEmoji.current = templateEmoji;
+      }
       form.setFieldsValue({
         templateId,
         sourceBranch: resolveTemplateSourceBranch(templateId),
         sourceRemoteUrl: resolveTemplateSourceRemoteUrl(templateId),
-        ...(template?.emoji ? { emoji: template.emoji } : {}),
+        ...(templateEmoji ? { emoji: templateEmoji } : {}),
       });
       validateForm();
     },
@@ -72,6 +85,7 @@ export function useTeammateForm(frameworkRepo: Repo | undefined) {
     setIsFormValid(false);
     setCustomRepoSelected(false);
     lastAutoName.current = '';
+    lastAutoEmoji.current = undefined;
   }, [form]);
 
   return {
