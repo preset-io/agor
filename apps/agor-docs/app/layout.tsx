@@ -6,8 +6,9 @@ import { type ReactNode, Suspense } from 'react';
 import { CookieConsent } from '../components/CookieConsent';
 import { DocsAuroraBackground } from '../components/DocsAuroraBackground';
 import { GoogleAnalytics } from '../components/GoogleAnalytics';
-import { ADS_CONVERSIONS, adsConversionSnippet, consentBootScript } from '../lib/consent';
+import { consentBootScript } from '../lib/consent';
 import { crtIntroBootScript } from '../lib/crtIntro';
+import { hubspotFormTrackingScript, hubspotMeetingTrackingScript } from '../lib/hubspotTracking';
 import {
   AGOR_CLOUD_DEMO_URL,
   DISCORD_INVITE_URL,
@@ -165,85 +166,15 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         {/* The cookie banner. It also loads HubSpot's tracking code (portal
             246818610) and Microsoft Clarity, only once consent allows. */}
         <CookieConsent />
-        {/* GTM event on contact-form submission. HubSpot's forms-embed
-            runtime calls window.postMessage({type:'hsFormCallback', ...})
-            unconditionally on every form event — confirmed by reading its
-            shipped JS (js.hsforms.net/forms/embed/v2.js): the dispatch isn't
-            gated on iframe/cross-origin embedding, so this fires the same
-            way whether the form's rendered inline (as ours is, via
-            HubSpotForm) or in a HubSpot-hosted iframe. `id` is the form
-            GUID; `source_page` (when present in submissionValues) carries
-            the per-CTA attribution already stamped by HubSpotForm, so this
-            single site-wide listener covers every "Sign up for Agor Cloud"
-            entry point without needing one tag per placement. */}
+        {/* GA4 + GTM events on sign-up form submission, for every "Sign up
+            for Agor Cloud" entry point (see lib/hubspotTracking.ts). */}
         <Script id="hs-form-submit-tracking" strategy="afterInteractive">
-          {`(function () {
-            window.addEventListener('message', function (event) {
-              var payload = event.data;
-              if (
-                !payload ||
-                payload.type !== 'hsFormCallback' ||
-                payload.eventName !== 'onFormSubmitted' ||
-                payload.id !== '${HUBSPOT_FORM_ID}'
-              ) {
-                return;
-              }
-              var submissionValues = (payload.data && payload.data.submissionValues) || {};
-              var sourcePage;
-              if (Array.isArray(submissionValues)) {
-                var match = submissionValues.filter(function (field) {
-                  return field.name === 'source_page';
-                })[0];
-                sourcePage = match && match.value;
-              } else {
-                sourcePage = submissionValues.source_page;
-              }
-              window.dataLayer = window.dataLayer || [];
-              window.dataLayer.push({
-                event: 'hubspot_interest_form_success',
-                form_name: 'agor_cloud_beta',
-                source_page: sourcePage || 'unknown',
-              });
-              ${adsConversionSnippet(ADS_CONVERSIONS.signup)}
-            });
-          })();`}
+          {hubspotFormTrackingScript(HUBSPOT_FORM_ID)}
         </Script>
-        {/* GTM events for the "Book a demo" HubSpot meeting scheduler.
-            Unlike the contact form, this is a genuinely cross-origin iframe
-            (meetings-na2.hubspot.com), so its postMessage contract is much
-            narrower — confirmed by reading its shipped JS bundle
-            (MeetingsPublic .../bundles/project.js): it only ever posts a
-            consent-readiness handshake, an iframe-resize notice, and a
-            final `{meetingBookSucceeded}`/`{meetingBookFailed}` on booking
-            completion. There's no "opened" or "in progress" signal — the
-            scheduler never tells the embedder someone's picking a date.
-            "Opened" is tracked separately, client-side, in MeetingEmbed
-            (HubSpotMeetingModal.tsx), since we already know that moment
-            ourselves without needing HubSpot's cooperation. Origin-checked
-            here (unlike the form listener above) because this really is a
-            different origin posting to us, not our own same-window script. */}
+        {/* GA4 + GTM events when a demo is booked in the HubSpot scheduler
+            (lib/hubspotTracking.ts). MeetingEmbed reports the open. */}
         <Script id="hs-meeting-book-tracking" strategy="afterInteractive">
-          {`(function () {
-            window.addEventListener('message', function (event) {
-              if (event.origin !== '${hubspotMeetingOrigin}') {
-                return;
-              }
-              var payload = event.data;
-              if (!payload || typeof payload !== 'object') {
-                return;
-              }
-              window.dataLayer = window.dataLayer || [];
-              if (payload.meetingBookSucceeded) {
-                window.dataLayer.push({
-                  event: 'hubspot_meeting_booked',
-                  form_name: 'agor_cloud_demo',
-                });
-                ${adsConversionSnippet(ADS_CONVERSIONS.demo)}
-              } else if (payload.meetingBookFailed) {
-                window.dataLayer.push({ event: 'hubspot_meeting_book_failed' });
-              }
-            });
-          })();`}
+          {hubspotMeetingTrackingScript(hubspotMeetingOrigin)}
         </Script>
       </body>
     </html>
