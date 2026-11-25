@@ -14,6 +14,7 @@ import { getDefaultModelForTool, SessionStatus } from '@agor-live/client';
 import {
   BranchesOutlined,
   ClockCircleOutlined,
+  CommentOutlined,
   EllipsisOutlined,
   ForkOutlined,
   IdcardOutlined,
@@ -106,6 +107,8 @@ export interface SessionFooterProps {
   onModelConfigCommit: (config: ModelConfig) => void;
   onOpenSessionSettings?: (sessionId: string) => void;
   onSendPrompt: () => void;
+  /** Post a human-to-human ping note. Omit to hide the Ping button entirely. */
+  onSendPing?: () => void;
   onStop: () => void;
   onFork: () => void;
   onBtwSend: () => void;
@@ -162,6 +165,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   onModelConfigCommit,
   onOpenSessionSettings,
   onSendPrompt,
+  onSendPing,
   onStop,
   onFork,
   onBtwSend,
@@ -265,6 +269,9 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   const btwForkDisabled = connectionDisabled || !hasInput || composerAttachmentsPresent;
   const spawnDisabled = connectionDisabled || isRunning || composerAttachmentsPresent;
   const sendDisabled = connectionDisabled || composerAttachmentUploading || !hasInput;
+  // Pings never touch the executor, so unlike sendDisabled they don't care
+  // about composerAttachmentUploading (attachments aren't sent with a ping).
+  const pingDisabled = connectionDisabled || !hasInput;
 
   // Overflow menu scale: one row height, one label size, one control height.
   const rowHeight = isMobile ? MOBILE_TOUCH_TARGET : token.controlHeight;
@@ -1286,6 +1293,21 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                   >
                     {/* Desktop keeps text labels; phones are icon-only touch targets. */}
                     {isMobile ? null : 'Stop'}
+                  </Button>
+                </Tooltip>
+              )}
+              {onSendPing && (
+                <Tooltip title="Post a note to collaborators, not sent to the agent">
+                  <Button
+                    size={actionSize}
+                    style={touchActionStyle}
+                    aria-label="Ping collaborators"
+                    icon={<CommentOutlined />}
+                    onClick={onSendPing}
+                    disabled={pingDisabled}
+                    data-testid="ping-bar-btn"
+                  >
+                    {isMobile ? null : 'Ping'}
                   </Button>
                 </Tooltip>
               )}

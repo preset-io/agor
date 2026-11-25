@@ -152,6 +152,11 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
         );
       }
 
+      // Pings ('mention' messages) are human-to-human notes, never part of the
+      // agent's own conversation — exclude unconditionally so the agent can't
+      // read them back through this tool either.
+      conditions.push(sql`${messagesTable.type} != 'mention'`);
+
       // Search: parse "term1 term2 | term3 term4" into (t1 AND t2) OR (t3 AND t4)
       if (search) {
         const orGroups = search.split(/\s*\|\s*/).map((group) => {

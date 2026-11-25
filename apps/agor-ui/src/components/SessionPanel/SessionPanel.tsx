@@ -135,6 +135,13 @@ export interface PromptInputHandle {
   /** Empty the composer, or leave only `remainder` (text typed after a send began). */
   clear: (remainder?: string) => void;
   insertText: (text: string) => void;
+  /**
+   * User ids mentioned via the `@` autocomplete since the last clear(),
+   * filtered down to mentions whose inserted `@name` text is still present
+   * in the current value (so deleting a mention drops it). Used by the ping
+   * compose action — see `handleSendPing`.
+   */
+  getMentionedUserIds: () => string[];
 }
 
 interface PromptInputProps {
@@ -223,6 +230,14 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
       [saveDraft]
     );
 
+    // userId -> inserted "@name" text, tracked as the user types/selects
+    // mentions. Cleared on submit/session-switch alongside the draft.
+    const mentionsRef = React.useRef<Map<string, string>>(new Map());
+
+    const handleMentionSelect = React.useCallback((userId: string, insertedText: string) => {
+      mentionsRef.current.set(userId, insertedText);
+    }, []);
+
     // Keep refs in sync (zero-cost, no re-render)
     valueRef.current = value;
     inputValueRef.current = value;
@@ -264,6 +279,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
           setValue(remainder);
           // A remainder is re-persisted by the debounced draft save.
           deleteDraft(sessionId);
+          mentionsRef.current.clear();
         },
         insertText: (text: string) => {
           untouchedSeedRef.current = false;
@@ -275,6 +291,12 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
             return nextValue;
           });
         },
+        getMentionedUserIds: () => {
+          const currentValue = textareaElementRef.current?.value ?? valueRef.current;
+          return Array.from(mentionsRef.current.entries())
+            .filter(([, insertedText]) => currentValue.includes(insertedText))
+            .map(([userId]) => userId);
+        },
       }),
       [sessionId, deleteDraft, discardDraftSeed, inputValueRef]
     );
@@ -285,6 +307,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
       if (prevSessionId.current !== sessionId) {
         persistDraft(prevSessionId.current, valueRef.current);
         setValue(getDraft(sessionId));
+        mentionsRef.current.clear();
         prevSessionId.current = sessionId;
       }
     }, [sessionId, persistDraft, getDraft]);
@@ -351,6 +374,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
               }
             : undefined
         }
+        onMentionSelect={handleMentionSelect}
       />
     );
   }
@@ -413,6 +437,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // Get actions from context
   const {
     onSendPrompt,
+    onSendPing,
     onFork,
     onBtwFork,
     onOpenSettings,
@@ -1222,6 +1247,42 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
+  // Post a ping — a human-to-human note, never sent to the agent. Shares the
+  // composer textarea with handleSendPrompt (including the send-in-flight
+  // guard) but skips attachments/permission mode entirely since it never
+  // reaches the executor.
+  const handleSendPing = async () => {
+    const sendStartComposerIdentity = composerSessionIdentityRef.current;
+    if (composerSendInFlightRef.current === sendStartComposerIdentity || connectionDisabled) {
+      return;
+    }
+
+    composerSendInFlightRef.current = sendStartComposerIdentity;
+    try {
+      const sendStartSessionId = session.session_id;
+      const value = promptRef.current?.getValue() ?? '';
+      if (!value.trim()) return;
+
+      if (!onSendPing) {
+        showError('Cannot send ping from this view.');
+        return;
+      }
+
+      const mentionedUserIds = promptRef.current?.getMentionedUserIds() ?? [];
+      const sendResult = await onSendPing(sendStartSessionId, value, mentionedUserIds);
+      if (sendResult === false) return;
+
+      promptRef.current?.clear();
+    } catch (error) {
+      console.error('Ping send failed — keeping text in composer:', error);
+      showError(error instanceof Error ? error.message : 'Failed to send ping');
+    } finally {
+      if (composerSendInFlightRef.current === sendStartComposerIdentity) {
+        composerSendInFlightRef.current = null;
+      }
+    }
+  };
+
   const handleStop = async () => {
     if (!session || !client || connectionDisabled || stopRequestInFlight) return;
 
@@ -1550,6 +1611,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       onModelConfigCommit={stableFooterHandlers.onModelConfigCommit}
       onOpenSessionSettings={onOpenSettings}
       onSendPrompt={stableFooterHandlers.onSendPrompt}
+      onSendPing={onSendPing ? handleSendPing : undefined}
       onStop={stableFooterHandlers.onStop}
       onFork={stableFooterHandlers.onFork}
       onBtwSend={stableFooterHandlers.onBtwSend}
