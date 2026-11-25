@@ -31,10 +31,12 @@ import {
   DownOutlined,
   EditOutlined,
   EllipsisOutlined,
+  ExpandAltOutlined,
   InboxOutlined,
   RobotOutlined,
   SearchOutlined,
   SettingOutlined,
+  ShrinkOutlined,
   UpOutlined,
 } from '@ant-design/icons';
 import type { InputRef, MenuProps } from 'antd';
@@ -89,6 +91,10 @@ import {
   readPromptDraftSeed,
   savePromptDraft,
 } from '../../utils/promptDrafts';
+import {
+  REACT_FLOW_DRAG_HANDLE_CLASS,
+  REACT_FLOW_NO_DRAG_CLASS,
+} from '../../utils/reactFlowDragClasses';
 import { describeSessionStatus } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
@@ -377,6 +383,20 @@ export interface SessionPanelProps {
   open: boolean;
   onClose: () => void;
   uploadPolicy?: import('@agor/core/types').UploadIngressPolicy;
+  /**
+   * When provided, an "eject to board" button appears in the header.
+   * Only used in sidebar/drawer mode (not when already ejected).
+   */
+  onEject?: () => void;
+  /**
+   * When true, the panel is rendered inside a ReactFlow canvas node.
+   * - The header gets the drag-handle class so the node can be dragged by it.
+   * - The body gets wheel-stop propagation so scrolling the conversation
+   *   doesn't accidentally zoom the canvas.
+   * - The left border is suppressed (the node container provides its own border).
+   * - `onClose` becomes "Re-dock to sidebar" in the header button.
+   */
+  isEjected?: boolean;
 }
 
 const SessionPanel: React.FC<SessionPanelProps> = ({
@@ -390,6 +410,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   open,
   onClose,
   uploadPolicy,
+  onEject,
+  isEjected = false,
 }) => {
   const { token } = theme.useToken();
   const isMobileShell = useIsMobileViewport();
@@ -1571,17 +1593,21 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         display: open ? 'flex' : 'none',
         flexDirection: 'column',
         background: token.colorBgElevated,
-        // No adjacent canvas on the mobile full-screen shell, so drop the left seam.
-        borderLeft: isMobileShell ? undefined : `1px solid ${token.colorBorder}`,
+        // The ejected node container provides its own border; the mobile full-screen
+        // shell has no adjacent canvas, so it drops the left seam too.
+        borderLeft: isEjected || isMobileShell ? undefined : `1px solid ${token.colorBorder}`,
       }}
     >
-      {/* Header */}
+      {/* Header — becomes drag-handle when ejected so the user can move the canvas node */}
       <div
+        className={isEjected ? REACT_FLOW_DRAG_HANDLE_CLASS : undefined}
         style={{
           flexShrink: 0,
           padding: `${token.paddingSM}px ${token.padding}px`,
           borderBottom: `1px solid ${token.colorBorder}`,
           background: token.colorBgContainer,
+          cursor: isEjected ? 'grab' : undefined,
+          userSelect: isEjected ? 'none' : undefined,
         }}
       >
         {/* Row 1: icon + title + badge + actions, center-aligned */}
@@ -1706,7 +1732,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               </Flex>
             </div>
           </div>
-          <Space size={4}>
+          <Space size={4} className={isEjected ? REACT_FLOW_NO_DRAG_CLASS : undefined}>
             <SessionAttachmentsDropdown items={attachmentItems} />
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">
@@ -1727,8 +1753,28 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 style={mobileHeaderButtonStyle}
               />
             </Tooltip>
+            {onEject && !isEjected && !isMobileShell && (
+              <Tooltip title="Pop out to board">
+                <Button
+                  type="text"
+                  icon={<ExpandAltOutlined />}
+                  onClick={onEject}
+                  style={{ marginLeft: token.sizeUnit }}
+                />
+              </Tooltip>
+            )}
+            {isEjected && (
+              <Tooltip title="Re-dock to sidebar">
+                <Button
+                  type="text"
+                  icon={<ShrinkOutlined />}
+                  onClick={onClose}
+                  style={{ marginLeft: token.sizeUnit }}
+                />
+              </Tooltip>
+            )}
             {/* Desktop closes from the right; mobile closes from the leading X above. */}
-            {!isMobileShell && (
+            {!isEjected && !isMobileShell && (
               <Tooltip title="Close Panel">
                 <Button
                   type="text"
@@ -1827,6 +1873,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       {/* Body - Scrollable content */}
       <div
         ref={bodyRef}
+        className={isEjected ? REACT_FLOW_NO_DRAG_CLASS : undefined}
         style={{
           flex: 1,
           overflowX: 'hidden',
@@ -1836,6 +1883,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           padding: `${token.sizeUnit * 3}px ${token.sizeUnit * 6}px 0`,
           position: 'relative',
         }}
+        // Prevent canvas wheel-zoom while scrolling the conversation or typing
+        onWheel={isEjected ? (e) => e.stopPropagation() : undefined}
       >
         {searchOpen && query.trim() && totalMatches === 0 && !searchPending && (
           <div
