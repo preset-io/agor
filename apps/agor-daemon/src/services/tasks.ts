@@ -576,9 +576,19 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     );
   }
 
-  private trackTaskCompleted(task: Task, cleanupResult?: ExecutorCleanupCommandResult): void {
+  private async trackTaskCompleted(
+    task: Task,
+    cleanupResult?: ExecutorCleanupCommandResult
+  ): Promise<void> {
     recordTaskSettlement(getDaemonMetrics(this.app), task);
+    if (!analyticsLogger.isEnabled()) return;
     const normalized = task.normalized_sdk_response;
+    // Stored SDK cost can be session-cumulative. Reuse aggregate accounting,
+    // including resets and frozen fork inheritance, inside the caller's scope.
+    const cost =
+      normalized?.costUsd == null
+        ? null
+        : await this.taskRepo.getTaskCost(task.task_id, task.session_id);
     analyticsLogger.track(
       'task.completed',
       {
@@ -588,7 +598,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         input_tokens: normalized?.tokenUsage?.inputTokens ?? null,
         output_tokens: normalized?.tokenUsage?.outputTokens ?? null,
         total_tokens: normalized?.tokenUsage?.totalTokens ?? null,
-        cost_usd: normalized?.costUsd ?? null,
+        cost_usd: cost,
         context_window_limit: normalized?.contextWindowLimit ?? null,
         context_window_percentage: normalized?.contextUsageSnapshot?.percentage ?? null,
         has_error: Boolean(task.error_message),
@@ -765,7 +775,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         return;
       }
 
-      this.trackTaskCompleted(
+      await this.trackTaskCompleted(
         result.task,
         input.outcome === 'verified_absent' ? cleanupResult : undefined
       );
@@ -1112,7 +1122,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     // run the broader task-completion side effects below.
     if (isTerminalTransition) {
       const task = result as Task;
-      this.trackTaskCompleted(task);
+      await this.trackTaskCompleted(task);
     }
 
     // Task terminality is the authoritative lifecycle boundary. Project every

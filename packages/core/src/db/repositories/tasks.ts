@@ -815,6 +815,16 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     };
   }
 
+  /** Read one Task's delta without removing its earlier/fork baselines. */
+  async getTaskCost(taskId: TaskID, sessionId: SessionID): Promise<number> {
+    const usage = taskUsageTable(this.db, { sessionId });
+    const row = await select(this.db, { cost: usage.usage_cost_usd })
+      .from(usage)
+      .where(eq(usage.task_id, taskId))
+      .one();
+    return Number(row?.cost ?? 0);
+  }
+
   /**
    * Whether `listed` (a `Session.tasks` read earlier) named every Task this
    * Session had dispatched, once each and nothing else: the lean transcript

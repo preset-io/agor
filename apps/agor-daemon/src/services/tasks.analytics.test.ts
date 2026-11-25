@@ -36,6 +36,7 @@ function makeService(repository: {
   findById?: ReturnType<typeof vi.fn>;
   update?: ReturnType<typeof vi.fn>;
   settleTermination?: ReturnType<typeof vi.fn>;
+  getTaskCost?: ReturnType<typeof vi.fn>;
 }) {
   const sessionsService = {
     get: vi.fn().mockResolvedValue({
@@ -124,6 +125,60 @@ describe('TasksService analytics lifecycle events', () => {
 
     expect(track).not.toHaveBeenCalledWith('task.started', expect.anything(), expect.anything());
   });
+
+  it('does not read task costs when analytics is disabled', async () => {
+    setAnalyticsLoggerForTests({ isEnabled: () => false, track: vi.fn() });
+    const running = makeTask({ status: TaskStatus.RUNNING });
+    const terminal = makeTask({
+      status: TaskStatus.COMPLETED,
+      normalized_sdk_response: { costUsd: 3 },
+    });
+    const getTaskCost = vi.fn().mockRejectedValue(new Error('Cost lookup must not run'));
+    const { service } = makeService({
+      findById: vi.fn().mockResolvedValue(running),
+      update: vi.fn().mockResolvedValue(terminal),
+      getTaskCost,
+    });
+    Reflect.set(service, 'processTerminalTaskTransition', vi.fn());
+    await service.patch(running.task_id, { status: TaskStatus.COMPLETED });
+    expect(getTaskCost).not.toHaveBeenCalled();
+  });
+
+  it.each(['patch', 'settlement'] as const)(
+    '%s completion sends the per-task cost rather than the stored running total',
+    async (entry) => {
+      const track = vi.fn();
+      setAnalyticsLoggerForTests({ isEnabled: () => true, track });
+      const running = makeTask({ status: TaskStatus.RUNNING });
+      const terminal = makeTask({
+        status: TaskStatus.COMPLETED,
+        normalized_sdk_response: { costUsd: 3 },
+      });
+      const getTaskCost = vi.fn().mockResolvedValue(1);
+      const { service } = makeService({
+        findById: vi.fn().mockResolvedValue(running),
+        update: vi.fn().mockResolvedValue(terminal),
+        settleTermination: vi.fn().mockResolvedValue({ outcome: 'transitioned', task: terminal }),
+        getTaskCost,
+      });
+      Reflect.set(service, 'processTerminalTaskTransition', vi.fn());
+      if (entry === 'patch') {
+        await service.patch(running.task_id, { status: TaskStatus.COMPLETED });
+      } else {
+        await service.settleTermination({
+          taskId: terminal.task_id,
+          outcome: 'verified_absent',
+          coordinationToken: 'test-coordination-token',
+        });
+      }
+      expect(track).toHaveBeenCalledWith(
+        'task.completed',
+        expect.objectContaining({ cost_usd: 1 }),
+        { userId: terminal.created_by }
+      );
+      expect(getTaskCost).toHaveBeenCalledExactlyOnceWith(terminal.task_id, terminal.session_id);
+    }
+  );
 
   it('emits task.completed once when transitioning to a terminal status, including timed_out', async () => {
     const track = vi.fn();

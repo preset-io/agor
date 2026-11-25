@@ -12,11 +12,14 @@ import {
   type Database,
   generateId,
   insert,
+  isSQLiteDatabase,
   RepoRepository,
   runWithTenantDatabaseScope,
   sessions,
+  sql,
   TaskRepository,
   tasks,
+  taskUsageTable,
   users,
 } from '@agor/core/db';
 import { type SessionID, TaskStatus } from '@agor/core/types';
@@ -623,6 +626,51 @@ describe('LeaderboardService session-cumulative usage', () => {
   async function totals(db: Database, query: Record<string, unknown> = {}) {
     const result = await new LeaderboardService(db).find({ query: { groupBy: 'tool', ...query } });
     return result.data;
+  }
+
+  dbTest('SQLite indexes fork baselines instead of scanning them per task', async ({ db }) => {
+    const parent = await seedOneSession(db, 'codex', 'plan-parent');
+    await seedSeries(db, parent, [{ costUsd: 1 }, { costUsd: 2 }]);
+    const fork = await seedOneSession(db, 'codex', 'plan-fork', parent);
+    await seedSeries(db, fork, [{ costUsd: 3 }], 'test-model', 3);
+    if (!isSQLiteDatabase(db)) throw new Error('Expected SQLite');
+    // Pin all callers: leaderboard admission and session/task usage lookups.
+    for (const options of [
+      {},
+      { sessionId: fork as SessionID },
+      { matchingSessionIds: sql`SELECT session_id FROM sessions` },
+    ]) {
+      const usage = taskUsageTable(db, options);
+      const plan = await db.all<{ detail: string }>(sql`EXPLAIN QUERY PLAN SELECT * FROM ${usage}`);
+      const details = plan.map((row) => row.detail).join('\n');
+      expect(details).not.toMatch(/SCAN fork_baselines/);
+      expect(details).toMatch(/SEARCH fork_baselines USING AUTOMATIC.*INDEX/);
+    }
+  });
+
+  for (const tool of ['claude-code', 'codex', 'gemini', 'copilot'] as const) {
+    dbTest(`${tool} single-task cost uses the same baselines as aggregates`, async ({ db }) => {
+      const sessionId = await seedOneSession(db, tool);
+      await seedSeries(db, sessionId, [
+        { costUsd: 1 },
+        { costUsd: 3 },
+        'no-usage',
+        { costUsd: 0 },
+        { costUsd: 0.5 },
+        { costUsd: 1.5 },
+      ]);
+      const repo = new TaskRepository(db);
+      const rows = await repo.findBySession(sessionId as SessionID);
+      rows.sort((a, b) => a.completed_at!.localeCompare(b.completed_at!));
+      const costs = await Promise.all(
+        rows.map((task) => repo.getTaskCost(task.task_id, task.session_id))
+      );
+      expect(costs).toEqual(
+        tool === 'codex' || tool === 'claude-code' ? [1, 2, 0, 0, 0.5, 1] : [1, 3, 0, 0, 0.5, 1.5]
+      );
+      const other = await seedOneSession(db, tool, `other-${tool}`);
+      expect(await repo.getTaskCost(rows[1]!.task_id, other as SessionID)).toBe(0);
+    });
   }
 
   dbTest('claude-code cumulative cost 1, 2, 3 counts 3', async ({ db }) => {

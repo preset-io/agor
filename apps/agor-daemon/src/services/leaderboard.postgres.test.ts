@@ -123,6 +123,31 @@ describePostgres('LeaderboardService session-cumulative usage on PostgreSQL', ()
     180_000
   );
 
+  it('single-task costs retain fork baselines and deny another tenant', async () => {
+    const tenant = `task-cost-${generateId()}`;
+    const target = await runWithTenantDatabaseScope(db, tenant, async (scoped) => {
+      const base = await seedBranch(scoped);
+      const parent = await seedSession(scoped, base, 'codex');
+      await seedTasks(scoped, parent, base.ownerId, [{ hour: 0, costUsd: 2 }]);
+      const fork = await seedSession(scoped, base, 'codex', parent);
+      await seedTasks(scoped, fork, base.ownerId, [
+        { hour: 2, costUsd: 3 },
+        { hour: 3, costUsd: 4 },
+      ]);
+      const repo = new TaskRepository(scoped);
+      const rows = await repo.findBySession(fork);
+      for (const task of rows) {
+        expect(await repo.getTaskCost(task.task_id, fork)).toBe(1);
+      }
+      return rows[0]!;
+    });
+    await runWithTenantDatabaseScope(db, `other-${generateId()}`, async (scoped) => {
+      expect(await new TaskRepository(scoped).getTaskCost(target.task_id, target.session_id)).toBe(
+        0
+      );
+    });
+  });
+
   it('a windowed fork inherits from a parent entirely before the window', async () => {
     await runWithTenantDatabaseScope(db, `leaderboard-${generateId()}`, async (scoped) => {
       const base = await seedBranch(scoped);

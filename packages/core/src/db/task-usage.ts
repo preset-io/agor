@@ -175,8 +175,9 @@ export function taskUsageTable(
   // Merge fork starts into the parent timeline before filling positive report
   // ordinals. This avoids a parentTasks × forkCount intermediate. Parent events
   // sort first at equal timestamps, so completion exactly at fork start counts.
+  // TEXT affinity lets SQLite index fork_baselines.session_id automatically.
   const parentEvents = sql`SELECT session_id, finished_at AS event_at, 0 AS event_kind,
-      report_order, NULL AS fork_session_id, metric_name, value
+      report_order, CAST(NULL AS TEXT) AS fork_session_id, metric_name, value
     FROM parent_metrics
     UNION ALL
     SELECT parent_session_id, started_at, 1, NULL, session_id, metric_name, NULL
