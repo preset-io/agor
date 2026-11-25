@@ -8,6 +8,7 @@
 
 import crypto from 'node:crypto';
 import http from 'node:http';
+import { Forbidden } from '@feathersjs/errors';
 import { z } from 'zod';
 import type {
   MCPOAuthClientRegistrationID,
@@ -18,7 +19,11 @@ import type {
   MCPOAuthTokenEndpointAuthMethod,
 } from '../../types/mcp.js';
 import { MCP_OAUTH_DEFAULT_DCR_MODE } from '../../types/mcp.js';
-import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
+import {
+  assertSafeOAuthUrl,
+  OutboundPreDispatchAuthorityError,
+  safeOutboundFetch,
+} from '../../utils/safe-outbound-fetch';
 import { asMCPExternalError } from './external-error.js';
 import { applyTokenEndpointClientAuth, type OAuthTokenResponse } from './oauth-auth.js';
 import { resolveTokenExpiry } from './oauth-token-expiry.js';
@@ -1616,6 +1621,8 @@ export interface MCPOAuthResolvedClient {
   clientSecret?: string;
   method: 'configured' | 'dynamic_registration';
   clientRegistrationId?: MCPOAuthClientRegistrationID;
+  /** Whether this dynamic client was resolved from a persistent or in-memory cache. */
+  cached?: boolean;
   /**
    * The redirect URI this client was registered under, as Agor sent it.
    *
@@ -1813,8 +1820,15 @@ async function resolveOAuthClient(options: {
     ? 'metadata'
     : 'legacy_fallback';
   try {
-    const register = () =>
-      registerDynamicClient(
+    const inLocalCache =
+      !options.resolveDynamicClientRegistration &&
+      options.reuseDynamicClientRegistration !== false &&
+      dynamicClientCache.get(registrationEndpoint)?.redirect_uri === options.actualRedirectUri;
+
+    let didRegister = false;
+    const register = async () => {
+      didRegister = true;
+      return registerDynamicClient(
         registrationEndpoint,
         options.actualRedirectUri,
         MCP_OAUTH_DCR_CLIENT_NAME,
@@ -1824,6 +1838,7 @@ async function resolveOAuthClient(options: {
         registrationEndpointSource,
         options.assertCurrent
       );
+    };
     const resolved = options.resolveDynamicClientRegistration
       ? await options.resolveDynamicClientRegistration(
           {
@@ -1851,10 +1866,12 @@ async function resolveOAuthClient(options: {
         })
       : resolved.registration;
     options.assertCurrent?.();
+    const cached = options.resolveDynamicClientRegistration ? !didRegister : inLocalCache;
     return {
       clientId: registration.client_id,
       ...(registration.client_secret ? { clientSecret: registration.client_secret } : {}),
       method: 'dynamic_registration',
+      cached: Boolean(cached),
       ...(resolved.registrationId ? { clientRegistrationId: resolved.registrationId } : {}),
       registeredRedirectUri: options.actualRedirectUri,
       clientName: MCP_OAUTH_DCR_CLIENT_NAME,
@@ -2158,6 +2175,150 @@ export async function validateMCPOAuthMetadata(
  * @param options.tokenUrlOverride - Override the auto-discovered token endpoint URL
  * @returns Authorization URL and flow context
  */
+/** Bounded preflight probe timeout to verify cached DCR clients before opening the browser. */
+const OAUTH_AUTHORIZE_PREFLIGHT_TIMEOUT_MS = 5_000;
+const OAUTH_AUTHORIZE_PREFLIGHT_MAX_BYTES = 64 * 1024;
+
+function isClientUnregisteredPhrase(text: string): boolean {
+  if (!text) return false;
+  return (
+    /(?:unknown|unregistered|not\s+registered|not\s+found|does\s+not\s+exist|invalid)[_\s]client(?:_id)?\b/i.test(
+      text
+    ) ||
+    /client(?:_id)?(?:\s+['"][^'"\n\r]+['"]|\s+[`][^`\n\r]+[`])?\s+(?:is\s+)?(?:not\s+registered|unregistered|unknown|not\s+found|does\s+not\s+exist)\b/i.test(
+      text
+    ) ||
+    /no\s+such\s+client(?:_id)?\b/i.test(text)
+  );
+}
+
+function hasStaleClientOAuthError(
+  error: string,
+  description = '',
+  hasRegistrationLink = false
+): boolean {
+  const err = error.trim().toLowerCase();
+  if (err === 'invalid_client' || err === 'unauthorized_client') return true;
+  if (err === 'invalid_request') {
+    return hasRegistrationLink || isClientUnregisteredPhrase(description);
+  }
+  return false;
+}
+
+function isStaleClientAuthorizeLocation(locationHeader: string | null): boolean {
+  if (!locationHeader) return false;
+  try {
+    const loc = new URL(locationHeader, 'https://placeholder.invalid');
+    const check = (params: URLSearchParams) =>
+      hasStaleClientOAuthError(params.get('error') || '', params.get('error_description') || '');
+    return (
+      check(loc.searchParams) ||
+      (loc.hash ? check(new URLSearchParams(loc.hash.replace(/^#/, ''))) : false)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Detects whether an authorization endpoint response indicates an unregistered / stale client.
+ *
+ * Signals recognized:
+ * 1. 3xx redirect Location (query or fragment) with error=invalid_client / unauthorized_client.
+ * 2. HTTP 400 containing OAuth 2.1 registration Link header (rel="...#registration").
+ * 3. HTTP 400 with plain-text body or statusText indicating the client is not registered (e.g. FastMCP / Cloudflare).
+ * 4. HTTP 400 with JSON error: invalid_client, unauthorized_client, or invalid_request indicating client issues.
+ */
+function isStaleClientAuthorizeResponse(
+  status: number,
+  headers: Headers,
+  statusText?: string,
+  rawBody?: string,
+  bodyJson?: { error?: string; error_description?: string }
+): boolean {
+  if (status >= 300 && status < 400) {
+    return isStaleClientAuthorizeLocation(headers.get('location'));
+  }
+  if (status !== 400) return false;
+
+  if (isClientUnregisteredPhrase(statusText || '')) {
+    return true;
+  }
+
+  if (isClientUnregisteredPhrase(rawBody || '')) {
+    return true;
+  }
+
+  const link = headers.get('link') || '';
+  const hasRegistrationLink =
+    /(?:^|;|\s)rel\s*=\s*["']?[^"';]*registration/i.test(link) ||
+    link.toLowerCase().includes('rel="http://oauth.net/core/2.1/#registration"');
+
+  return (
+    hasRegistrationLink ||
+    hasStaleClientOAuthError(
+      bodyJson?.error || '',
+      bodyJson?.error_description || '',
+      hasRegistrationLink
+    )
+  );
+}
+
+async function checkAuthorizeProbe(
+  url: string,
+  allowLocalhostHttp: boolean,
+  assertCurrent?: () => void
+): Promise<{ isStale: boolean }> {
+  assertCurrent?.();
+  try {
+    const probeResponse = await safeOutboundFetch(url, {
+      method: 'GET',
+      redirect: 'manual',
+      signal: AbortSignal.timeout(OAUTH_AUTHORIZE_PREFLIGHT_TIMEOUT_MS),
+      maxResponseBytes: OAUTH_AUTHORIZE_PREFLIGHT_MAX_BYTES,
+      allowLocalhostHttp,
+      assertCurrent,
+    });
+    assertCurrent?.();
+    const status = probeResponse.status;
+    if (status >= 300 && status < 400) {
+      return { isStale: isStaleClientAuthorizeResponse(status, probeResponse.headers) };
+    }
+    if (status === 400) {
+      let rawText = '';
+      let bodyJson: { error?: string; error_description?: string } | undefined;
+      try {
+        rawText = await probeResponse.text();
+        assertCurrent?.();
+        bodyJson = JSON.parse(rawText) as { error?: string; error_description?: string };
+      } catch {
+        assertCurrent?.();
+        // Plain text or unparseable JSON
+      }
+      return {
+        isStale: isStaleClientAuthorizeResponse(
+          status,
+          probeResponse.headers,
+          probeResponse.statusText,
+          rawText,
+          bodyJson
+        ),
+      };
+    }
+  } catch (error) {
+    assertCurrent?.();
+    if (
+      error instanceof OutboundPreDispatchAuthorityError ||
+      error instanceof Forbidden ||
+      (error as { name?: string })?.name === 'Forbidden'
+    ) {
+      throw error;
+    }
+    // Network errors, timeouts, or unmocked URL in tests: proceed normally
+  }
+  return { isStale: false };
+}
+
 /**
  * Build the OAuth authorization URL + cache context once we already have AS
  * metadata. Shared by both the RFC 9728 path (after fetching resource +
@@ -2188,6 +2349,11 @@ async function startMCPOAuthFlowWithAS(opts: {
   reuseDynamicClientRegistration?: boolean;
   /** PostgreSQL daemons inject a fleet-wide encrypted registration authority. */
   resolveDynamicClientRegistration?: MCPOAuthDynamicClientRegistrationResolver;
+  /** Invalidate dynamic client registration if current matches clientId. */
+  invalidateDynamicClientRegistration?: (
+    clientId: string,
+    registrationId?: MCPOAuthClientRegistrationID
+  ) => Promise<boolean>;
   resourceUri: string;
   issuer: string;
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
@@ -2250,7 +2416,7 @@ async function startMCPOAuthFlowWithAS(opts: {
   });
   console.log('[MCP OAuth] OAuth endpoints resolved');
 
-  const resolvedClient = await resolveOAuthClient({
+  let resolvedClient = await resolveOAuthClient({
     clientId,
     clientSecret: opts.clientSecret,
     dcrMode,
@@ -2292,6 +2458,106 @@ async function startMCPOAuthFlowWithAS(opts: {
   applyProviderAuthorizationParameters(authUrl);
   if (scopeString) {
     authUrl.searchParams.set('scope', scopeString);
+  }
+
+  // Preflight check: bounded probe for cached dynamic clients to detect forgotten registrations before browser redirect.
+  if (resolvedClient.method === 'dynamic_registration' && resolvedClient.cached) {
+    opts.assertCurrent?.();
+    const probe = await checkAuthorizeProbe(
+      authUrl.toString(),
+      allowLocalhostHttp,
+      opts.assertCurrent
+    );
+    opts.assertCurrent?.();
+    if (probe.isStale) {
+      console.log(
+        `[MCP OAuth] event=oauth_preflight_stale_detected client_id=${resolvedClient.clientId}`
+      );
+      if (opts.invalidateDynamicClientRegistration) {
+        opts.assertCurrent?.();
+        let invalidated = false;
+        try {
+          invalidated = resolvedClient.clientRegistrationId
+            ? await opts.invalidateDynamicClientRegistration(
+                resolvedClient.clientId,
+                resolvedClient.clientRegistrationId
+              )
+            : await opts.invalidateDynamicClientRegistration(resolvedClient.clientId);
+        } catch (error) {
+          opts.assertCurrent?.();
+          if (
+            error instanceof OutboundPreDispatchAuthorityError ||
+            error instanceof Forbidden ||
+            (error as { name?: string })?.name === 'Forbidden'
+          ) {
+            throw error;
+          }
+          console.warn(
+            `[MCP OAuth] event=oauth_dcr_invalidation_failed client_id=${resolvedClient.clientId} trigger=preflight`,
+            error
+          );
+        }
+        opts.assertCurrent?.();
+        if (invalidated) {
+          console.log(
+            `[MCP OAuth] event=oauth_dcr_invalidated client_id=${resolvedClient.clientId} trigger=preflight`
+          );
+        }
+      }
+      if (resolvedClient.registrationEndpoint) {
+        const cached = dynamicClientCache.get(resolvedClient.registrationEndpoint);
+        if (!cached || cached.client_id === resolvedClient.clientId) {
+          dynamicClientCache.delete(resolvedClient.registrationEndpoint);
+        }
+      }
+
+      console.log(
+        `[MCP OAuth] event=oauth_preflight_recovery_started client_id=${resolvedClient.clientId}`
+      );
+
+      opts.assertCurrent?.();
+      resolvedClient = await resolveOAuthClient({
+        clientId,
+        clientSecret: opts.clientSecret,
+        dcrMode,
+        authServerMetadata,
+        fallbackRegistrationEndpoint,
+        hasFullOverrides,
+        actualRedirectUri,
+        scope: scopeString,
+        cacheKey,
+        resourceUri,
+        issuer,
+        authorizationEndpoint,
+        tokenEndpoint,
+        compatibilityMode,
+        allowLocalhostHttp,
+        reuseDynamicClientRegistration: false,
+        resolveDynamicClientRegistration: opts.resolveDynamicClientRegistration,
+        assertCurrent: opts.assertCurrent,
+      });
+
+      authUrl.searchParams.set('client_id', resolvedClient.clientId);
+      assertAuthorizeRedirectUriMatchesClient(resolvedClient, actualRedirectUri);
+      logOAuthAuthorizeBuilt(resolvedClient, actualRedirectUri, authorizationEndpoint);
+
+      opts.assertCurrent?.();
+      const retryProbe = await checkAuthorizeProbe(
+        authUrl.toString(),
+        allowLocalhostHttp,
+        opts.assertCurrent
+      );
+      opts.assertCurrent?.();
+      if (retryProbe.isStale) {
+        console.warn(
+          `[MCP OAuth] event=oauth_preflight_retry_failed client_id=${resolvedClient.clientId}`
+        );
+        throw new OAuthConfigurationError(
+          'client_registration_required',
+          'The MCP server is rejecting the OAuth client registration. The server may have reset its client store. Please try reconnecting later or contact the MCP server operator.'
+        );
+      }
+    }
   }
 
   opts.assertCurrent?.();
@@ -2363,6 +2629,11 @@ export async function startMCPOAuthFlow(
     reuseDynamicClientRegistration?: boolean;
     /** Fleet-wide DCR lease/persistence boundary for multi-daemon callers. */
     resolveDynamicClientRegistration?: MCPOAuthDynamicClientRegistrationResolver;
+    /** Invalidate dynamic client registration if current matches clientId. */
+    invalidateDynamicClientRegistration?: (
+      clientId: string,
+      registrationId?: MCPOAuthClientRegistrationID
+    ) => Promise<boolean>;
     /** Exact protected resource identifier sent to authorization/token endpoints. */
     resourceUri?: string;
     compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
@@ -2431,6 +2702,7 @@ export async function startMCPOAuthFlow(
       scope: options.scope,
       reuseDynamicClientRegistration: options.reuseDynamicClientRegistration,
       resolveDynamicClientRegistration: options.resolveDynamicClientRegistration,
+      invalidateDynamicClientRegistration: options.invalidateDynamicClientRegistration,
       resourceUri,
       issuer: options.prefetchedAuthServerMetadata.issuer,
       compatibilityMode,
@@ -2537,6 +2809,7 @@ export async function startMCPOAuthFlow(
     resourceScopesSupported: resourceMetadata.scopes_supported,
     reuseDynamicClientRegistration: options?.reuseDynamicClientRegistration,
     resolveDynamicClientRegistration: options?.resolveDynamicClientRegistration,
+    invalidateDynamicClientRegistration: options?.invalidateDynamicClientRegistration,
     resourceUri,
     issuer: authServerUrl,
     compatibilityMode,

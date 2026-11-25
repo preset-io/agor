@@ -222,6 +222,7 @@ if (misnamedGatedTests.length > 0) {
   process.exit(1);
 }
 
+const filterArgs = process.argv.slice(2).filter((arg) => !arg.startsWith('-'));
 const discovered = workspaceTests
   .flatMap(({ workspace, workspaceRoot, postgresTests }) =>
     postgresTests.map((file) => ({
@@ -231,10 +232,19 @@ const discovered = workspaceTests
       relativeTest: path.relative(workspaceRoot, file),
     }))
   )
+  .filter((entry) => {
+    if (filterArgs.length === 0) return true;
+    return filterArgs.some(
+      (arg) =>
+        entry.file.endsWith(arg) ||
+        entry.relativeTest.endsWith(arg) ||
+        path.resolve(repoRoot, arg) === entry.file
+    );
+  })
   .sort((a, b) => a.file.localeCompare(b.file));
 if (discovered.length === 0) {
   console.error(
-    'No *.postgres.test.ts files were discovered; refusing to report a false green run.'
+    'No matching *.postgres.test.ts files were discovered; refusing to report a false green run.'
   );
   process.exit(1);
 }

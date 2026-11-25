@@ -105,7 +105,7 @@ export class OutboundPreDispatchAuthorityError extends Error {
 }
 
 export interface SafeOutboundFetchOptions extends Omit<RequestInit, 'redirect' | 'signal'> {
-  redirect?: 'error' | 'follow';
+  redirect?: 'error' | 'follow' | 'manual';
   timeoutMs?: number;
   maxRedirects?: number;
   maxResponseBytes?: number;
@@ -453,6 +453,7 @@ export async function safeOutboundFetch(
       // and would multiply admission queries for every call.
       const response = await requestOnce(url, options, signal);
       if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+      if (redirectMode === 'manual') return response;
       if (redirectMode !== 'follow' || hop >= maxRedirects) {
         throw new UnsafeOutboundUrlError('Outbound OAuth redirect is not allowed');
       }

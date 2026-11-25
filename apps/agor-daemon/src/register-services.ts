@@ -125,6 +125,7 @@ import type {
   MCPOAuthBrowserOperation,
   MCPOAuthBrowserReservation,
   MCPOAuthBrowserReservationRequest,
+  MCPOAuthClientRegistrationID,
   MCPOAuthClientRegistrationResetRequest,
   MCPOAuthClientRegistrationResetResult,
   MCPOAuthConnectTokenClaims,
@@ -2817,6 +2818,19 @@ export async function registerMCPServices(
                     assertServerCurrent: assertDurableClientRegistrationAuthority,
                   }
                 )
+            : undefined,
+        invalidateDynamicClientRegistration:
+          durableBinding && durableOAuthClientRegistrations
+            ? async (clientId: string, registrationId?: MCPOAuthClientRegistrationID) => {
+                assertFlowAuthority?.();
+                await assertDurableClientRegistrationAuthority?.();
+                return durableOAuthClientRegistrations.invalidateIfCurrentMatchesClientId(
+                  durableBinding.tenantId,
+                  durableBinding.mcpServerId,
+                  clientId,
+                  registrationId
+                );
+              }
             : undefined,
         resourceUri: effectiveMcpUrl,
         compatibilityMode: effectiveCompatibilityMode,
