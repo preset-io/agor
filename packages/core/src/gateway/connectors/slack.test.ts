@@ -1,3 +1,7 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { Readable } from 'node:stream';
+import { WebClient } from '@slack/web-api';
 import { describe, expect, it, vi } from 'vitest';
 
 const socketModeMocks = vi.hoisted(() => ({
@@ -2195,7 +2199,14 @@ describe('SlackConnector.uploadFile', () => {
           calls.push(args);
           return {
             ok: true,
-            files: [{ id: 'F123', permalink: 'https://slack.example/files/F123', name: 'a.png' }],
+            files: [
+              {
+                ok: true,
+                files: [
+                  { id: 'F123', permalink: 'https://slack.example/files/F123', name: 'a.png' },
+                ],
+              },
+            ],
           };
         },
       },
@@ -2222,12 +2233,12 @@ describe('SlackConnector.uploadFile', () => {
       files: {
         uploadV2: async (args: unknown) => {
           calls.push(args);
-          return { ok: true, files: [{ id: 'F456', name: 'b.png' }] };
+          return { ok: true, files: [{ ok: true, files: [{ id: 'F456', title: 'b.png' }] }] };
         },
       },
     };
 
-    await connector.uploadFile({
+    const result = await connector.uploadFile({
       channel: 'C123',
       threadTs: '1700000000.000001',
       file: Buffer.from('bytes'),
@@ -2235,6 +2246,7 @@ describe('SlackConnector.uploadFile', () => {
       comment: 'here you go',
     });
 
+    expect(result).toEqual({ id: 'F456', permalink: null, name: 'b.png' });
     expect(calls).toEqual([
       {
         channel_id: 'C123',
@@ -2244,6 +2256,128 @@ describe('SlackConnector.uploadFile', () => {
         initial_comment: 'here you go',
       },
     ]);
+  });
+
+  it('reads the file id from the real @slack/web-api uploadV2 response shape', async () => {
+    // uploadV2 is a three-step SDK helper whose result nests each
+    // files.completeUploadExternal response: `{ ok, files: [{ ok, files: [...] }] }`.
+    // Drive the real WebClient against a fake Slack API so that nesting is the
+    // SDK's, not a hand-written mock's.
+    const requests: Array<{ path: string; body: Buffer }> = [];
+    const server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        const path = req.url ?? '';
+        requests.push({ path, body: Buffer.concat(chunks) });
+        const { port } = server.address() as AddressInfo;
+        res.setHeader('Content-Type', 'application/json');
+        if (path === '/api/files.getUploadURLExternal') {
+          res.end(
+            JSON.stringify({
+              ok: true,
+              upload_url: `http://127.0.0.1:${port}/upload/F0IMAGE`,
+              file_id: 'F0IMAGE',
+            })
+          );
+        } else if (path === '/upload/F0IMAGE') {
+          res.setHeader('Content-Type', 'text/plain');
+          res.end('OK - 9');
+        } else if (path === '/api/files.completeUploadExternal') {
+          res.end(JSON.stringify({ ok: true, files: [{ id: 'F0IMAGE', title: 'chart.png' }] }));
+        } else {
+          res.statusCode = 404;
+          res.end(JSON.stringify({ ok: false, error: 'unknown_method' }));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const { port } = server.address() as AddressInfo;
+      const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+      (connector as unknown as { web: WebClient }).web = new WebClient('xoxb-test', {
+        slackApiUrl: `http://127.0.0.1:${port}/api/`,
+        retryConfig: { retries: 0 },
+      });
+
+      const result = await connector.uploadFile({
+        channel: 'C123',
+        threadTs: '1700000000.000001',
+        file: Readable.from([Buffer.from('png-bytes')]),
+        filename: 'chart.png',
+      });
+
+      expect(result).toEqual({ id: 'F0IMAGE', permalink: null, name: 'chart.png' });
+      expect(requests.map((r) => r.path)).toEqual([
+        '/api/files.getUploadURLExternal',
+        '/upload/F0IMAGE',
+        '/api/files.completeUploadExternal',
+      ]);
+      expect(requests[1]?.body.toString()).toContain('png-bytes');
+      const complete = new URLSearchParams(requests[2]?.body.toString());
+      expect(complete.get('channel_id')).toBe('C123');
+      expect(complete.get('thread_ts')).toBe('1700000000.000001');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('returns the first file when uploadV2 contains multiple completion groups and files', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      files: {
+        uploadV2: async () => ({
+          ok: true,
+          files: [
+            { ok: true, files: [{ id: 'F123', title: 'first.png' }, { id: 'F456' }] },
+            { ok: true, files: [{ id: 'F789' }] },
+          ],
+        }),
+      },
+    };
+    expect(
+      await connector.uploadFile({ channel: 'C123', file: Buffer.from('x'), filename: 'a.png' })
+    ).toEqual({ id: 'F123', permalink: null, name: 'first.png' });
+  });
+
+  it('falls back to the requested filename when completion metadata has no name or title', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      files: {
+        uploadV2: async () => ({ ok: true, files: [{ ok: true, files: [{ id: 'F123' }] }] }),
+      },
+    };
+    expect(
+      await connector.uploadFile({ channel: 'C123', file: Buffer.from('x'), filename: 'a.png' })
+    ).toEqual({ id: 'F123', permalink: null, name: 'a.png' });
+  });
+
+  it.each([
+    { ok: true },
+    { ok: true, files: [] },
+    { ok: true, files: [{ ok: true, files: [] }] },
+    { ok: true, files: [{ ok: true, files: [{ title: 'a.png' }] }] },
+  ])('rejects missing file ids in uploadV2 response %j', async (response) => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = { files: { uploadV2: async () => response } };
+    await expect(
+      connector.uploadFile({ channel: 'C123', file: Buffer.from('x'), filename: 'a.png' })
+    ).rejects.toThrow('Slack API error: upload response missing file id');
+  });
+
+  it('propagates SDK upload rejections without reporting success', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    const error = new Error('Slack API error: not_in_channel');
+    (connector as unknown as { web: unknown }).web = {
+      files: {
+        uploadV2: async () => {
+          throw error;
+        },
+      },
+    };
+    await expect(
+      connector.uploadFile({ channel: 'C123', file: Buffer.from('x'), filename: 'a.png' })
+    ).rejects.toBe(error);
   });
 
   it('throws a Slack API error when the upload fails', async () => {
