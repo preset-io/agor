@@ -1625,6 +1625,182 @@ describe('DCR request and redirect binding end to end', () => {
   });
 });
 
+describe('re-registration when the server reports an unknown client', () => {
+  const originalFetch = globalThis.fetch;
+  const registrationEndpoint = 'https://auth.example.test/oauth/register';
+  const authorizeEndpoint = 'https://auth.example.test/oauth/authorize';
+  const redirectUri = 'https://agor.example.test/mcp-servers/oauth-callback';
+  const options = {
+    prefetchedAuthServerMetadata: {
+      issuer: 'https://auth.example.test',
+      authorization_endpoint: authorizeEndpoint,
+      token_endpoint: 'https://auth.example.test/oauth/token',
+      registration_endpoint: registrationEndpoint,
+    },
+    cacheKey: 'https://mcp.example.test/mcp',
+    resourceUri: 'https://mcp.example.test/mcp',
+    compatibilityMode: 'legacy' as const,
+    dcrMode: 'fallback' as const,
+    reuseDynamicClientRegistration: false,
+    recoverUnknownClient: {},
+  };
+  const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json', ...headers },
+    });
+  // The provider forgot every client but the one registered last.
+  const mockProvider = (authorize: () => Response) => {
+    let registrations = 0;
+    const calls = { register: 0, authorize: 0 };
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (String(url).startsWith(registrationEndpoint)) {
+        calls.register += 1;
+        registrations += 1;
+        return json(201, {
+          client_id: `client-${registrations}`,
+          redirect_uris: [redirectUri],
+          token_endpoint_auth_method: 'none',
+        });
+      }
+      calls.authorize += 1;
+      return authorize();
+    }) as unknown as typeof fetch;
+    return calls;
+  };
+  const unknownJson = () =>
+    json(400, {
+      error: 'invalid_request',
+      error_description: 'Client ID is not registered with this server',
+      registration_endpoint: registrationEndpoint,
+    });
+
+  beforeEach(() => {
+    clearAuthCodeTokenCache();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('registers again and authorizes with the new client on a JSON invalid_request carrying registration_endpoint', async () => {
+    const calls = { register: 0 };
+    let authorizeCalls = 0;
+    let registrations = 0;
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (String(url).startsWith(registrationEndpoint)) {
+        calls.register += 1;
+        registrations += 1;
+        return json(201, { client_id: `client-${registrations}`, redirect_uris: [redirectUri] });
+      }
+      authorizeCalls += 1;
+      return unknownJson();
+    }) as unknown as typeof fetch;
+    const invalidated: string[] = [];
+    const resolver: MCPOAuthDynamicClientRegistrationResolver = async (_req, register) => ({
+      registration: await register(),
+      registrationId: `reg-${calls.register}` as MCPOAuthClientRegistrationID,
+    });
+    const context = await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...options,
+      resolveDynamicClientRegistration: resolver,
+      recoverUnknownClient: {
+        invalidateRegistration: async (id) => {
+          invalidated.push(id);
+        },
+      },
+    });
+    expect(invalidated).toEqual(['reg-1']);
+    expect(calls.register).toBe(2);
+    expect(authorizeCalls).toBe(1);
+    expect(context.clientId).toBe('client-2');
+    expect(new URL(context.authorizationUrl).searchParams.get('client_id')).toBe('client-2');
+  });
+
+  it('recovers on the Link rel=registration header even when the body is HTML', async () => {
+    const calls = mockProvider(
+      () =>
+        new Response('<html>Client Not Registered</html>', {
+          status: 400,
+          headers: {
+            'content-type': 'text/html',
+            link: `<${registrationEndpoint}>; rel="http://oauth.net/core/2.1/#registration"`,
+          },
+        })
+    );
+    const context = await startMCPOAuthFlow('', undefined, redirectUri, options);
+    expect(calls.register).toBe(2);
+    expect(context.clientId).toBe('client-2');
+  });
+
+  it('drops the process-local cached registration before registering again', async () => {
+    __seedDynamicClientCacheForTests(registrationEndpoint, {
+      client_id: 'stale-client',
+      redirect_uri: redirectUri,
+    });
+    const calls = mockProvider(unknownJson);
+    const context = await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...options,
+      reuseDynamicClientRegistration: true,
+    });
+    expect(calls.register).toBe(1);
+    expect(context.clientId).toBe('client-1');
+  });
+
+  it('never loops: a server that rejects every registration is re-registered once per attempt', async () => {
+    const calls = mockProvider(unknownJson);
+    const context = await startMCPOAuthFlow('', undefined, redirectUri, options);
+    // 1 initial + 1 recovery registration, 1 probe; the replacement is not probed.
+    expect(calls.register).toBe(2);
+    expect(calls.authorize).toBe(1);
+    expect(context.clientId).toBe('client-2');
+  });
+
+  it('keeps the registration when the authorize endpoint accepts the client or the signal is unrelated', async () => {
+    for (const authorize of [
+      () => new Response(null, { status: 302, headers: { location: 'https://x.test/consent' } }),
+      () => json(400, { error: 'invalid_request', error_description: 'bad redirect_uri' }),
+      () => json(500, { error: 'server_error' }),
+      () => new Response('not json', { status: 400 }),
+    ]) {
+      const calls = mockProvider(authorize);
+      const context = await startMCPOAuthFlow('', undefined, redirectUri, options);
+      expect(calls.register).toBe(1);
+      expect(context.clientId).toBe('client-1');
+    }
+  });
+
+  it('does not probe unless recovery is enabled, and never probes a configured client', async () => {
+    const calls = mockProvider(unknownJson);
+    await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...options,
+      recoverUnknownClient: undefined,
+    });
+    expect(calls.authorize).toBe(0);
+    await startMCPOAuthFlow('', 'configured-client', redirectUri, options);
+    expect(calls.authorize).toBe(0);
+  });
+
+  it('probes with a throwaway state and challenge, never the real flow secrets', async () => {
+    let probed: URL | undefined;
+    mockProvider(() => new Response(null, { status: 302 }));
+    const registerOnly = vi.mocked(globalThis.fetch);
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (!String(url).startsWith(registrationEndpoint)) {
+        probed = new URL(String(url));
+        return new Response(null, { status: 302 });
+      }
+      return registerOnly(url, init);
+    }) as unknown as typeof fetch;
+    const context = await startMCPOAuthFlow('', undefined, redirectUri, options);
+    const real = new URL(context.authorizationUrl).searchParams;
+    expect(probed?.searchParams.get('client_id')).toBe(real.get('client_id'));
+    expect(probed?.searchParams.get('state')).not.toBe(real.get('state'));
+    expect(probed?.searchParams.get('code_challenge')).not.toBe(real.get('code_challenge'));
+  });
+});
+
 /**
  * The one record of what Agor SENT that survives a front-channel refusal.
  *
