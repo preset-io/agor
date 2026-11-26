@@ -3231,7 +3231,7 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     expect(payload.bot_events).toEqual(requiredBotEvents(wizardOptionsFor(dmOnly)));
     expect(payload.bot_scopes).not.toContain('app_mentions:read');
     expect(payload.bot_scopes).not.toContain('channels:history');
-    expect(payload.bot_events).toEqual(['message.im']);
+    expect(payload.bot_events).toEqual(['agent_session_stopped', 'message.im']);
     expect(payload.create_channel_config_hint).toEqual({
       channelType: 'slack',
       config: {
@@ -3356,7 +3356,12 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     expect(payload.bot_scopes).toEqual(requiredBotScopes(wizardOptionsFor(opts)));
     expect(payload.bot_scopes).toEqual(expect.arrayContaining(['reactions:read']));
     expect(payload.bot_scopes).not.toContain('reactions:write');
-    expect(payload.bot_events).toEqual(['message.im', 'reaction_added', 'reaction_removed']);
+    expect(payload.bot_events).toEqual([
+      'agent_session_stopped',
+      'message.im',
+      'reaction_added',
+      'reaction_removed',
+    ]);
     expect(payload.manifest.settings.event_subscriptions.bot_events).toEqual(payload.bot_events);
     expect(payload.create_channel_config_hint.config.inbound_reactions).toBe(true);
   });
