@@ -7,7 +7,7 @@ import InstallTabs from '../../components/InstallTabs.mdx';
 
 # Extended Installation
 
-The [Getting Started](/guide/getting-started) guide covers the recommended npm installation. This page covers everything else for **users and teams** running Agor, including optional companions, deployment alternatives, authentication options, and edge-case configurations.
+The [Getting Started](/guide/getting-started) guide covers the recommended user path: `curl -fsSL https://agor.live/install.sh | bash`. This page covers everything else for **users and teams** running Agor, including npm, optional companions, deployment alternatives, authentication options, and edge-case configurations.
 
 > Want to **build, modify, or contribute to** Agor? Head to the [Development Guide](/guide/development). It covers `docker compose up`, the `.agor.yml` variant system (SQLite / Postgres / RBAC / docs), and developing Agor with Agor itself.
 
@@ -63,6 +63,8 @@ operator inspect it before removing anything.
 Use whichever install method fits your setup:
 
 <InstallTabs />
+
+The curl script above is the recommended entry point; it runs the same npm install under the hood. npm directly remains fully supported for users who want to run each step themselves.
 
 ---
 
