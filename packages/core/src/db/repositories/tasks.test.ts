@@ -13,12 +13,13 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
+import { eq } from 'drizzle-orm';
 import { describe, expect, vi } from 'vitest';
 import { generateId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
 import * as databaseWrapper from '../database-wrapper';
 import { runDatabaseTransaction } from '../database-wrapper';
-import { sessions } from '../schema';
+import { sessions, tasks as tasksTable } from '../schema';
 import { ownedDbTest as dbTest, setTestBranchUserRole } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
 import { BranchRepository } from './branches';
@@ -4514,13 +4515,64 @@ describe('transcript-independent task queries', () => {
       expect(page.data).toHaveLength(10);
       expect(page.total).toBe(20);
       expect(page.data.every((task) => task.status === TaskStatus.COMPLETED)).toBe(true);
+      // claude-code costUsd is the session's running total, so twenty turns
+      // that each report 1 spent 1; its tokens are per turn and sum.
       expect(await repository.getSessionUsage(sessionId)).toEqual({
         total: 600,
         input: 400,
         output: 200,
         cacheRead: 40,
         cacheCreation: 20,
-        cost: 20,
+        cost: 1,
+      });
+    }
+  );
+});
+
+describe('session usage summary', () => {
+  dbTest(
+    'counts a claude-code running cost once, with a reset as a new baseline',
+    async ({ db }) => {
+      const sessionId = await createSessionWithDeps(db);
+      const repository = new TaskRepository(db);
+      const otherSessionId = await createSessionWithDeps(db);
+      for (const [index, costUsd] of [1, 2, 3, 0.5].entries()) {
+        const task = await repository.create(
+          createTaskData({
+            session_id: sessionId,
+            status: TaskStatus.COMPLETED,
+            normalized_sdk_response: {
+              tokenUsage: { totalTokens: 30, inputTokens: 20, outputTokens: 10 },
+              costUsd,
+            },
+          })
+        );
+        await databaseWrapper
+          .update(db, tasksTable)
+          .set({ completed_at: new Date(Date.UTC(2026, 10, 1, index)) })
+          .where(eq(tasksTable.task_id, task.task_id))
+          .run();
+      }
+      await repository.create(
+        createTaskData({
+          session_id: otherSessionId,
+          status: TaskStatus.COMPLETED,
+          normalized_sdk_response: {
+            tokenUsage: { totalTokens: 999, inputTokens: 999, outputTokens: 0 },
+            costUsd: 999,
+          },
+        })
+      );
+
+      // 1, 2, 3 is one running total (3); 0.5 starts a new one. Claude Code
+      // tokens are per task, so they stay summed.
+      expect(await repository.getSessionUsage(sessionId)).toEqual({
+        total: 120,
+        input: 80,
+        output: 40,
+        cacheRead: 0,
+        cacheCreation: 0,
+        cost: 3.5,
       });
     }
   );
