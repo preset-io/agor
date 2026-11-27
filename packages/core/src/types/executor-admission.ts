@@ -44,6 +44,7 @@ export const EXECUTOR_COMMAND_ADMISSION = {
   'environment.lifecycle': 'utility',
   'environment.logs': 'utility',
   'codex.auth-file': 'utility',
+  'codex.thread-retire': 'utility',
   'claude.auth-file': 'utility',
 } as const satisfies Record<string, ExecutorAdmissionClass>;
 

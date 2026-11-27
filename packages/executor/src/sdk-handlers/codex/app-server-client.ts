@@ -12,6 +12,12 @@ interface ThreadForkResult {
   thread?: { id?: string };
 }
 
+class AppServerError extends Error {
+  constructor(readonly response: NonNullable<JsonRpcResponse['error']>) {
+    super(sanitizeMCPExternalError(response, { stage: 'runtime' }).message);
+  }
+}
+
 export interface CodexAppServerClientOptions {
   /** Extra env values to pass to the spawned `codex app-server` process. */
   env?: NodeJS.ProcessEnv;
@@ -21,6 +27,8 @@ export interface CodexAppServerClientOptions {
   command?: string;
   /** Per-session opt-in; true respects native settings rather than forcing on. */
   includePlugins?: boolean;
+  /** Start a credential-free maintenance server against this exact SDK home. */
+  retirementHome?: string;
 }
 
 /**
@@ -69,6 +77,46 @@ export class CodexAppServerClient {
     return forkedThreadId;
   }
 
+  async retireThread(threadId: string): Promise<void> {
+    if (!this.options.retirementHome) throw new Error('Codex retirement home required');
+    await this.start();
+    const initialized = await this.request<{ codexHome?: string; userAgent?: string }>(
+      'initialize',
+      {
+        clientInfo: { name: 'agor-thread-retirement', version: '1' },
+        capabilities: { experimentalApi: true },
+      }
+    );
+    if (
+      initialized?.codexHome !== this.options.retirementHome ||
+      !/^agor-thread-retirement\/0\.169\.0(?:\s|$)/.test(initialized?.userAgent ?? '')
+    ) {
+      throw new Error('Codex retirement runtime mismatch');
+    }
+    this.sendNotification('initialized', {});
+    let result: unknown;
+    try {
+      result = await this.request<unknown>('thread/delete', { threadId });
+    } catch (error) {
+      // A previous call may have removed it before its executor result arrived.
+      if (
+        error instanceof AppServerError &&
+        error.response.code === -32600 &&
+        error.response.message === `no rollout found for thread id ${threadId}`
+      )
+        return;
+      throw error;
+    }
+    if (
+      !result ||
+      typeof result !== 'object' ||
+      Array.isArray(result) ||
+      Object.keys(result).length
+    ) {
+      throw new Error('Codex thread deletion was not confirmed');
+    }
+  }
+
   async close(): Promise<void> {
     const child = this.child;
     if (!child) return;
@@ -97,8 +145,26 @@ export class CodexAppServerClient {
     this.startPromise = new Promise<void>((resolve, reject) => {
       const args = ['app-server'];
       if (!this.options.includePlugins) args.push('--config', 'features.plugins=false');
+      const home = this.options.retirementHome;
+      if (home)
+        args.push(
+          '--config',
+          `sqlite_home=${JSON.stringify(home)}`,
+          '--config',
+          'mcp_servers={}',
+          '--config',
+          'check_for_update_on_startup=false'
+        );
       const child = spawn(this.command, args, {
-        env: { ...process.env, ...this.options.env },
+        env: home
+          ? {
+              PATH: process.env.PATH,
+              HOME: process.env.HOME,
+              TMPDIR: process.env.TMPDIR,
+              CODEX_HOME: home,
+              CODEX_SQLITE_HOME: home,
+            }
+          : { ...process.env, ...this.options.env },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       this.child = child;
@@ -189,9 +255,7 @@ export class CodexAppServerClient {
     clearTimeout(pending.timer);
 
     if (response.error) {
-      pending.reject(
-        new Error(sanitizeMCPExternalError(response.error, { stage: 'runtime' }).message)
-      );
+      pending.reject(new AppServerError(response.error));
       return;
     }
 

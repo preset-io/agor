@@ -944,6 +944,23 @@ export const CodexAuthFilePayloadSchema = BasePayloadSchema.extend({
 
 export type CodexAuthFilePayload = z.infer<typeof CodexAuthFilePayloadSchema>;
 
+export const CodexThreadRetirementPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('codex.thread-retire'),
+  params: z.object({
+    branchId: z.uuid(),
+    threadId: z.uuid(),
+    codexHome: z.string().min(1),
+    cwd: z.string().min(1),
+    principalBranchAccess: z.literal('read'),
+    sandboxBranchSdkHome: z.string().optional(),
+    sandboxHomeStore: z.string().optional(),
+    sandboxWorktreesRoot: z.string().optional(),
+    sandboxBaseRepoPath: z.string().optional(),
+  }),
+});
+
+export type CodexThreadRetirementPayload = z.infer<typeof CodexThreadRetirementPayloadSchema>;
+
 /**
  * Narrow user-runtime credential filesystem operation for Claude's
  * `~/.claude/.credentials.json`. Like `codex.auth-file`, the daemon resolves the
@@ -1028,6 +1045,7 @@ const ExecutorPayloadUnionSchema = z.discriminatedUnion('command', [
   ZellijAttachPayloadSchema,
   ZellijTabPayloadSchema,
   CodexAuthFilePayloadSchema,
+  CodexThreadRetirementPayloadSchema,
   ClaudeAuthFilePayloadSchema,
 ]);
 
@@ -1108,6 +1126,7 @@ export function getSupportedCommands(): string[] {
     'zellij.attach',
     'zellij.tab',
     'codex.auth-file',
+    'codex.thread-retire',
     'claude.auth-file',
   ];
 }

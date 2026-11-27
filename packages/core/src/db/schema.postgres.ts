@@ -3834,6 +3834,31 @@ export const kbImportReceipts = pgTable(
 );
 
 /** Hosted OpenCode checkpoints; no FKs so deleted Sessions' rows survive until their files are cleaned. */
+export const scheduledCodexRetirements = pgTable(
+  'scheduled_codex_retirements',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    session_id: varchar('session_id', { length: 36 }).primaryKey(),
+    branch_id: varchar('branch_id', { length: 36 }).notNull(),
+    user_id: varchar('user_id', { length: 36 }).notNull(),
+    thread_id: varchar('thread_id', { length: 36 }).notNull(),
+    next_attempt_at: t.timestamp('next_attempt_at').notNull(),
+    retired_at: t.timestamp('retired_at'),
+  },
+  (table) => ({
+    thread: uniqueIndex('scheduled_codex_retirements_thread').on(
+      table.tenant_id,
+      table.branch_id,
+      table.thread_id
+    ),
+    due: index('scheduled_codex_retirements_due').on(
+      table.tenant_id,
+      table.retired_at,
+      table.next_attempt_at
+    ),
+  })
+);
+
 export const opencodeCheckpointAttempts = pgTable(
   'opencode_checkpoint_attempts',
   {

@@ -3386,6 +3386,22 @@ export const kbImportReceipts = sqliteTable(
 );
 
 /** Hosted OpenCode checkpoints; no FKs so deleted Sessions' rows survive until their files are cleaned. */
+export const scheduledCodexRetirements = sqliteTable(
+  'scheduled_codex_retirements',
+  {
+    session_id: text('session_id').primaryKey(),
+    branch_id: text('branch_id').notNull(),
+    user_id: text('user_id').notNull(),
+    thread_id: text('thread_id').notNull(),
+    next_attempt_at: t.timestamp('next_attempt_at').notNull(),
+    retired_at: t.timestamp('retired_at'),
+  },
+  (table) => ({
+    thread: uniqueIndex('scheduled_codex_retirements_thread').on(table.branch_id, table.thread_id),
+    due: index('scheduled_codex_retirements_due').on(table.retired_at, table.next_attempt_at),
+  })
+);
+
 export const opencodeCheckpointAttempts = sqliteTable(
   'opencode_checkpoint_attempts',
   {

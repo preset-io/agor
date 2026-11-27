@@ -62,9 +62,11 @@ import {
   getCurrentTenantId,
   isDatabaseUniqueConstraintError,
   isPostgresDatabaseHandle,
+  normalizeCodexThreadHandle,
   runWithSystemDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
+  ScheduledCodexRetirementRepository,
   ScheduleRepository,
   SessionMCPServerRepository,
   SessionRepository,
@@ -127,6 +129,7 @@ import {
   type StructuredLogValue,
   structuredLogErrorCode,
 } from '../utils/structured-log.js';
+import { retireScheduledCodexThread } from './scheduled-codex-retirement.js';
 
 function isSQLiteBusyError(err: unknown): boolean {
   if (!err) return false;
@@ -605,6 +608,7 @@ export class SchedulerService {
         // Continue processing other schedules
       }
     }
+    await this.drainDueCodexRetirementTenants(now);
     if (stats.candidates > 0 || stats.failures > 0) {
       this.logWorkEvent(stats.failures > 0 ? 'warn' : 'info', 'scan_complete', {
         candidates: stats.candidates,
@@ -1612,7 +1616,7 @@ export class SchedulerService {
       })
     );
     const overflow = mine.slice(schedule.retention);
-    const sessionsToDelete: Session[] = [];
+    const sessionsToDelete: Array<{ session: Session; protectCodexHistory: boolean }> = [];
     let activeSkipped = 0;
     for (const session of overflow) {
       const initializationComplete = await this.withTenantDatabase(() =>
@@ -1629,7 +1633,17 @@ export class SchedulerService {
         activeSkipped += 1;
         continue;
       }
-      sessionsToDelete.push(session);
+      const protectCodexHistory =
+        session.agentic_tool === 'codex' && session.sdk_home_scope === 'branch';
+      if (
+        protectCodexHistory &&
+        (await this.withTenantDatabase(() => this.sessionRepo.findChildren(session.session_id)))
+          .length > 0
+      ) {
+        activeSkipped += 1;
+        continue;
+      }
+      sessionsToDelete.push({ session, protectCodexHistory });
     }
 
     if (activeSkipped > 0) {
@@ -1642,9 +1656,22 @@ export class SchedulerService {
 
     if (sessionsToDelete.length > 0) {
       const sessionService = this.app.service('sessions');
-      for (const session of sessionsToDelete) {
+      let deleted = 0;
+      for (const { session, protectCodexHistory } of sessionsToDelete) {
         try {
-          await sessionService.remove(session.session_id, { provider: undefined });
+          await sessionService.remove(session.session_id, {
+            provider: undefined,
+            ...(protectCodexHistory
+              ? {
+                  _scheduledCodexRetirement: {
+                    branch_id: session.branch_id,
+                    schedule_id: session.schedule_id,
+                    sdk_session_id: session.sdk_session_id,
+                  },
+                }
+              : {}),
+          });
+          deleted += 1;
         } catch (error) {
           // Concurrent reconcilers may have deleted the same retained-out row.
           // Re-read once; absence is idempotent success, presence is a real
@@ -1652,15 +1679,102 @@ export class SchedulerService {
           const stillPresent = await this.withTenantDatabase(() =>
             this.sessionRepo.findById(session.session_id)
           );
-          if (stillPresent) throw error;
+          if (
+            stillPresent &&
+            (!protectCodexHistory ||
+              !(
+                await this.withTenantDatabase(() =>
+                  this.sessionRepo.findChildren(session.session_id)
+                )
+              ).length)
+          )
+            throw error;
         }
       }
 
       this.logWorkEvent('info', 'retention_deleted', {
         schedule_id: schedule.schedule_id,
-        deleted_count: sessionsToDelete.length,
+        deleted_count: deleted,
         retention: schedule.retention,
       });
+    }
+  }
+
+  private async drainDueCodexRetirementTenants(now: number): Promise<void> {
+    if (this.config.tenantId) {
+      await runWithTenantContext(this.config.tenantId, () => this.drainCodexRetirements());
+      return;
+    }
+    const repo = new ScheduledCodexRetirementRepository(this.db);
+    try {
+      const refs = await runWithSystemDatabaseScope(
+        this.db,
+        'scheduled Codex retirement routing',
+        () => repo.dueTenants(new Date(now), 2),
+        { capability: 'scheduler_discovery' }
+      );
+      for (const { tenantId } of refs) {
+        await runWithTenantContext(tenantId, () => this.drainCodexRetirements());
+      }
+    } catch {
+      this.logWorkEvent('warn', 'codex_thread_retirement_inventory_unavailable');
+    }
+  }
+
+  private async drainCodexRetirements(): Promise<void> {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) return;
+    const repository = new ScheduledCodexRetirementRepository(this.db);
+    const repo = isPostgresDatabaseHandle(this.db)
+      ? bindRepositoryToTenantUnitOfWork(this.db, repository)
+      : repository;
+    try {
+      const now = new Date();
+      const due = await this.withTenantDatabase(() => repo.due(now, 2));
+      for (const candidate of due) {
+        const item = await this.withTenantDatabase(() =>
+          repo.claim(candidate.session_id, now, new Date(now.getTime() + 15 * 60_000))
+        );
+        if (!item) continue;
+        const event = { session_id: item.session_id };
+        try {
+          const branchId = item.branch_id as Branch['branch_id'];
+          const branch = await this.withTenantDatabase(() => this.branchRepo.findById(branchId));
+          const remaining = await this.withTenantDatabase(() =>
+            this.sessionRepo.findAll({ branchId })
+          );
+          if (
+            remaining.some(
+              (other) =>
+                normalizeCodexThreadHandle(other.sdk_session_id) === item.thread_id ||
+                other.session_id === item.session_id
+            )
+          )
+            continue;
+          // Permanent branch deletion owns removal of its whole SDK home.
+          const retired =
+            !branch ||
+            (await retireScheduledCodexThread({
+              app: this.app,
+              db: this.db,
+              config: this.app.get('config'),
+              tenantId,
+              branch,
+              userId: item.user_id as UserID,
+              threadId: item.thread_id,
+            }));
+          if (retired) await this.withTenantDatabase(() => repo.settle(item, new Date()));
+          this.logWorkEvent(
+            retired ? 'info' : 'warn',
+            retired ? 'codex_thread_retired' : 'codex_thread_retirement_unconfirmed',
+            event
+          );
+        } catch {
+          this.logWorkEvent('warn', 'codex_thread_retirement_unconfirmed', event);
+        }
+      }
+    } catch {
+      this.logWorkEvent('warn', 'codex_thread_retirement_inventory_unavailable');
     }
   }
 }

@@ -841,6 +841,7 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('claude.auth-file');
     expect(commands).toContain('branch.clean');
     expect(commands).toContain('branch.archive');
-    expect(commands.length).toBe(31);
+    expect(commands).toContain('codex.thread-retire');
+    expect(commands.length).toBe(32);
   });
 });

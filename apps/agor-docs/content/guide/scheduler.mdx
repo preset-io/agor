@@ -101,6 +101,7 @@ Because MCP is just JSON-RPC, you can bring any service into the loop: Agor’s 
   read audits from the full record. The run's `schedule_id` and `scheduled_run_at` stay on
   every row.
 - Use retention to keep noise down; the daemon automatically deletes older runs beyond your limit.
+- For Codex runs with per-branch SDK homes, Agor queues native thread cleanup when retention deletes a session whose completed task recorded creating that thread. Runs with forks or subsessions are kept. Existing history without that record is retained. Thread cleanup makes database pages available for reuse. Reclaiming those pages at the filesystem level requires separate compaction.
 - Need to rerun immediately? Manually spawn a session, or adjust/save the cron for a new next run.
 
 ## Best Practices
