@@ -44,12 +44,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@feathersjs/authentication-client": "^5.0.50",
+    "@feathersjs/authentication-client": "^5.0.51",
     "@feathersjs/feathers": "^5.0.50",
-    "@feathersjs/rest-client": "^5.0.50",
-    "@feathersjs/socketio-client": "^5.0.50",
+    "@feathersjs/rest-client": "^5.0.51",
+    "@feathersjs/socketio-client": "^5.0.51",
     "js-yaml": "^4.3.2",
-    "socket.io-client": "^4.8.3"
+    "socket.io-client": "^4.8.4"
   },
   "devDependencies": {
     "@agor/agentic-tools": "workspace:*",
