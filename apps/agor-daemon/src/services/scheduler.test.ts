@@ -1089,6 +1089,47 @@ describe('scheduler HA occurrence recovery', () => {
     expect(removeSession).toHaveBeenCalledWith(olderActive.session_id, { provider: undefined });
     expect(await sessions.findById(olderActive.session_id)).toBeNull();
   });
+
+  dbTest(
+    'retention preserves a resumable fork of a scheduled Codex occurrence without creation proof',
+    async ({ db }) => {
+      const { creator, schedule: createdSchedule } = await seedRunnableSchedule(
+        db,
+        { email: 'codex-retention-fork@example.com', name: 'Creator' },
+        { agentic_tool: 'codex' }
+      );
+      const schedule = await new ScheduleRepository(db).update(createdSchedule.schedule_id, {
+        retention: 1,
+      });
+      const sessions = new SessionRepository(db);
+      const occurrence = {
+        branch_id: schedule.branch_id,
+        created_by: creator.user_id,
+        agentic_tool: 'codex',
+        sdk_home_scope: 'branch',
+        status: SessionStatus.COMPLETED,
+        scheduled_from_branch: true,
+        schedule_id: schedule.schedule_id,
+      } as const;
+      const older = await sessions.create({ ...occurrence, scheduled_run_at: NOW - 60_000 });
+      const newer = await sessions.create({ ...occurrence, scheduled_run_at: NOW });
+      await sessions.markScheduledInitializationComplete(older.session_id);
+      await sessions.markScheduledInitializationComplete(newer.session_id);
+      const fork = await sessions.create({
+        branch_id: schedule.branch_id,
+        created_by: creator.user_id,
+        agentic_tool: 'codex',
+        genealogy: { forked_from_session_id: older.session_id, children: [] },
+      });
+      const { app, removeSession } = createSchedulerApp(db);
+      const scheduler = new SchedulerService(db, app);
+      await (
+        scheduler as unknown as { enforceRetentionPolicy(schedule: Schedule): Promise<void> }
+      ).enforceRetentionPolicy(schedule);
+      expect(removeSession).not.toHaveBeenCalled();
+      expect(await sessions.findById(fork.session_id)).not.toBeNull();
+    }
+  );
 });
 
 describe('renderSchedulePrompt', () => {

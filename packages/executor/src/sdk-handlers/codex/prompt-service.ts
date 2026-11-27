@@ -145,7 +145,7 @@ function applyMcpToolPermissions(config: CodexConfigObject, server: MCPServer): 
 const GATEWAY_MCP_STARTUP_TIMEOUT_MS = 30_000;
 
 function projectCodexCompletedEvent(
-  event: TurnCompletedEvent
+  event: Pick<TurnCompletedEvent, 'usage'> | { usage?: unknown }
 ): import('../../types/sdk-response').CodexSdkResponse {
   // The SDK object is an external runtime value even though its declared type
   // is closed. Project the documented accounting fields so extension metadata
@@ -1324,6 +1324,14 @@ export class CodexPromptService {
 
     const resumeThreadId = session.sdk_session_id;
     const startedFreshThread = !resumeThreadId;
+    const ownedThread = (threadId: string) =>
+      startedFreshThread &&
+      threadId &&
+      session.branch_id &&
+      session.sdk_home_scope === 'branch' &&
+      session.scheduled_from_branch
+        ? { agor_created_thread: { id: threadId, branch_id: session.branch_id } }
+        : undefined;
 
     // Check if we need to update thread settings due to approval policy change
     const previousApprovalPolicy = session.permission_config?.codex?.approvalPolicy || 'on-request';
@@ -1534,6 +1542,7 @@ export class CodexPromptService {
             codexDebug(
               `✅ [Codex] terminal event_msg (${payloadType}) received for session ${shortId(sessionId)}`
             );
+            const retirement = ownedThread(threadId);
 
             yield {
               type: 'complete',
@@ -1542,6 +1551,16 @@ export class CodexPromptService {
               threadId,
               resolvedModel,
               usage: taskCompleteUsage,
+              ...(retirement
+                ? {
+                    rawSdkEvent: {
+                      ...projectCodexCompletedEvent({
+                        usage: eventPayload?.usage ?? eventPayload?.token_usage,
+                      }),
+                      ...retirement,
+                    },
+                  }
+                : {}),
               rawContextUsage: contextUsage,
             };
 
@@ -1733,7 +1752,10 @@ export class CodexPromptService {
               threadId,
               resolvedModel,
               usage: mappedUsage,
-              rawSdkEvent: projectCodexCompletedEvent(event),
+              rawSdkEvent: {
+                ...projectCodexCompletedEvent(event),
+                ...ownedThread(threadId),
+              },
               rawContextUsage: contextUsage,
             };
 

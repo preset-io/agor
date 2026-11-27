@@ -74,6 +74,7 @@ import {
   findLatestAssistantMessages,
   truncateMessageText,
 } from './message-activity';
+import { admitCodexThreadReference } from './scheduled-codex-retirements';
 
 /**
  * Session with enriched last message
@@ -359,6 +360,13 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         this.db,
         async (tx) => {
           await lockBranchForAdmission(tx, insertData.branch_id);
+          if (
+            data.sdk_home_scope === 'branch' &&
+            data.agentic_tool === 'codex' &&
+            data.sdk_session_id
+          ) {
+            await admitCodexThreadReference(tx, insertData.branch_id, data.sdk_session_id);
+          }
           await insert(tx, sessions).values(insertData).run();
         },
         { sqliteImmediate: true, sqliteBusyRetries: 9 }
@@ -1017,6 +1025,16 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         }
 
         const insertData = this.sessionToInsert(merged);
+        if (
+          merged.sdk_home_scope === 'branch' &&
+          merged.agentic_tool === 'codex' &&
+          merged.sdk_session_id &&
+          (merged.sdk_session_id !== current.sdk_session_id ||
+            merged.branch_id !== current.branch_id ||
+            current.agentic_tool !== 'codex')
+        ) {
+          await admitCodexThreadReference(txAsDb(tx), insertData.branch_id, merged.sdk_session_id);
+        }
 
         // STEP 3: Write merged session (within same transaction)
         // Pass all columns via insertData (matches branch repo pattern).

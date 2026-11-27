@@ -47,6 +47,8 @@ export const NON_PORTABLE_TENANT_TABLES: ReadonlySet<string> = new Set([
   'user_provider_oauth_grants',
   'user_mcp_oauth_tokens',
   'github_install_states',
+  // A retirement names a native SDK home on this deployment.
+  'scheduled_codex_retirements',
   // Encrypted provider addresses and live delivery authority are deployment-bound.
   // Import must not replay effects or revive ciphertext under a different tenant.
   'teams_conversation_addresses',

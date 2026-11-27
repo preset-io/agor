@@ -51,6 +51,11 @@ export * from './pending-migrations';
 // Repositories
 export * from './repositories';
 export * from './repositories/branch-deletion';
+export {
+  lockCodexThreadReference,
+  normalizeCodexThreadHandle,
+  ScheduledCodexRetirementRepository,
+} from './repositories/scheduled-codex-retirements';
 export * from './sanitize-error';
 export * from './schema';
 export { type DatabaseDialect, detectDialectFromUrl, getDatabaseDialect } from './schema-factory';

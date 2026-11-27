@@ -15,8 +15,12 @@ import {
   BranchRepository,
   generateId,
   RepoRepository,
+  runWithTenantContext,
+  ScheduledCodexRetirementRepository,
+  ScheduleRepository,
   SessionRepository,
   TaskRepository,
+  UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Session, Task, UUID } from '@agor/core/types';
@@ -89,6 +93,64 @@ async function createTask(db: any, sessionId: UUID, overrides: Partial<Task> = {
 }
 
 describe('SessionsService.remove — swap-replace TOCTOU guard', () => {
+  dbTest('scheduled removal stages owned Codex history and fences new aliases', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const sessions = new SessionRepository(db);
+    const branchId = await createBranch(db);
+    const thread = '00000000-0000-4000-a000-00000000000a';
+    const owner = await new UsersRepository(db).create({
+      email: 'retirement-removal@example.com',
+      name: 'Retirement fixture',
+    });
+    const { schedule_id: scheduleId } = await new ScheduleRepository(db).create({
+      branch_id: branchId,
+      created_by: owner.user_id,
+      name: 'Example',
+      cron_expression: '0 * * * *',
+      prompt: 'Sync.',
+      agentic_tool_config: { agentic_tool: 'codex' },
+    });
+    const sessionId = await createSession(db, branchId, {
+      agentic_tool: 'codex',
+      sdk_home_scope: 'branch',
+      scheduled_from_branch: true,
+      schedule_id: scheduleId,
+      sdk_session_id: thread,
+    });
+    await createTask(db, sessionId, {
+      status: TaskStatus.COMPLETED,
+      raw_sdk_response: { agor_created_thread: { id: thread, branch_id: branchId } },
+    });
+    const options = {
+      _scheduledCodexRetirement: {
+        branch_id: branchId,
+        schedule_id: scheduleId,
+        sdk_session_id: thread,
+      },
+    };
+    const child = await createSession(db, branchId, {
+      genealogy: { forked_from_session_id: sessionId, children: [] },
+    });
+    await expect(service.remove(sessionId, options)).rejects.toThrow('has descendants');
+    const outbox = new ScheduledCodexRetirementRepository(db);
+    expect(await outbox.due(new Date(), 2)).toEqual([]);
+    await service.remove(child);
+    await service.remove(sessionId, options);
+    expect(await sessions.findById(sessionId)).toBeNull();
+    expect(await outbox.due(new Date(Date.now() + 100), 2)).toMatchObject([
+      { session_id: sessionId, branch_id: branchId, thread_id: thread },
+    ]);
+    const alias = await createSession(db, branchId, {
+      agentic_tool: 'codex',
+      sdk_home_scope: 'branch',
+    });
+    await expect(
+      runWithTenantContext('default', () =>
+        sessions.update(alias, { sdk_session_id: thread.toUpperCase() })
+      )
+    ).rejects.toThrow('being retired');
+  });
+
   dbTest(
     'refuses a _swapReplace removal when a task has landed on the session since the swap was initiated',
     async ({ db }) => {

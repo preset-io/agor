@@ -22,16 +22,21 @@ import {
   EntityNotFoundError,
   eq,
   getCurrentTenantId,
+  isPostgresDatabaseHandle,
+  lockCodexThreadReference,
   lockRowForUpdate,
   MCPServerRepository,
   mcpServers,
+  normalizeCodexThreadHandle,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
+  ScheduledCodexRetirementRepository,
   SessionEnvSelectionRepository,
   SessionMCPServerRepository,
   SessionRelationshipRepository,
   SessionRepository,
   type SessionWithLastMessage,
+  sessions,
   TaskRepository,
   type TenantScopeAwareDatabase,
   TenantWriteGateActiveError,
@@ -103,6 +108,7 @@ import {
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import { deploymentAgenticToolUnavailableMessage } from './agentic-tool-deployment.js';
+import { ownedScheduledCodexThread } from './scheduled-codex-retirement.js';
 import {
   BTW_ARCHIVED_REASON,
   MANUAL_ARCHIVED_REASON,
@@ -230,6 +236,8 @@ export type SessionParams = QueryParams<{
 }> &
   AuthenticatedParams &
   InternalEnrichmentParams & {
+    /** Exact internal scheduler retirement target. External transport never supplies this. */
+    _scheduledCodexRetirement?: Pick<Session, 'branch_id' | 'schedule_id' | 'sdk_session_id'>;
     /** Root-level include_last_message flag (bypasses Feathers query filtering, used by internal service calls) */
     _include_last_message?: boolean | 'true' | 'false';
     /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
@@ -682,7 +690,19 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       }
       if (admission.adoptBranch) await branchRepo.adoptSdkHome(branch.branch_id);
 
-      const createdSession = await new SessionRepository(scoped).create({
+      const sessionRepo = new SessionRepository(scoped);
+      const parentId =
+        createData.genealogy?.parent_session_id ?? createData.genealogy?.forked_from_session_id;
+      if (parentId) {
+        // Retention locks this row before checking for children. A fork or
+        // spawn which looked up the parent before removal must still recheck.
+        await lockRowForUpdate(scoped, scoped, sessions, eq(sessions.session_id, parentId));
+        const parent = await sessionRepo.findById(parentId);
+        if (!parent || parent.branch_id !== branch.branch_id) {
+          throw new Conflict('Session parent is no longer available');
+        }
+      }
+      const createdSession = await sessionRepo.create({
         ...createData,
         ...((params?._mcpSelectionExplicit ?? explicitMcpServerIds !== undefined) && {
           mcp_selection_explicit: true,
@@ -1857,6 +1877,48 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         }
       }
 
+      const retention =
+        params?.provider === undefined ? params?._scheduledCodexRetirement : undefined;
+      if (retention) {
+        await lockRowForUpdate(scoped, scoped, sessions, eq(sessions.session_id, String(id)));
+        const current = await sessionRepo.findById(String(id));
+        if (
+          !current ||
+          current.branch_id !== retention.branch_id ||
+          current.schedule_id !== retention.schedule_id ||
+          current.sdk_session_id !== retention.sdk_session_id ||
+          current.agentic_tool !== 'codex' ||
+          current.sdk_home_scope !== 'branch' ||
+          (await sessionRepo.findChildren(String(id))).length > 0
+        ) {
+          throw new Conflict('Scheduled Codex retention target changed or has descendants');
+        }
+        if (current.branch_id && current.created_by) {
+          const threadId = ownedScheduledCodexThread(
+            current,
+            await taskRepo.findBySession(current.session_id)
+          );
+          if (threadId) {
+            await lockCodexThreadReference(scoped, current.branch_id, threadId);
+            const candidates = await sessionRepo.findAll({ branchId: current.branch_id });
+            const referenced = candidates.some(
+              (session) =>
+                session.session_id !== current.session_id &&
+                normalizeCodexThreadHandle(session.sdk_session_id) === threadId
+            );
+            if (!referenced) {
+              if (tenantId && isPostgresDatabaseHandle(this.db))
+                await assertTenantWritable(scoped, tenantId);
+              await new ScheduledCodexRetirementRepository(scoped).stage({
+                session_id: current.session_id,
+                branch_id: current.branch_id,
+                user_id: current.created_by,
+                thread_id: threadId,
+              });
+            }
+          }
+        }
+      }
       return this.removeOne(String(id), params, false, sessionRepo, taskRepo);
     });
   }

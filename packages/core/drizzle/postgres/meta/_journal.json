@@ -834,6 +834,13 @@
       "when": 1790129001303,
       "tag": "0120_kb_namespace_others_can_tighten",
       "breakpoints": true
+    },
+    {
+      "idx": 120,
+      "version": "7",
+      "when": 1790129001304,
+      "tag": "0121_scheduled_codex_retirements",
+      "breakpoints": true
     }
   ]
 }

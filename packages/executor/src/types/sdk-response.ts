@@ -60,7 +60,10 @@ export type ClaudeCodeSdkResponseTyped = SDKResultMessage & {
 /**
  * Codex SDK Response - closed accounting projection of TurnCompletedEvent.
  */
-export type CodexSdkResponse = TurnCompletedEvent;
+export type CodexSdkResponse = TurnCompletedEvent & {
+  /** Executor-authenticated evidence that this task started a new provider thread. */
+  agor_created_thread?: { id: string; branch_id: string };
+};
 
 // ============================================================================
 // Gemini SDK Response (from Google Gemini CLI SDK)

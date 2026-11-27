@@ -473,7 +473,8 @@ function assertSupportedPolicies(relation: CatalogRelation): void {
       : relation.tableName === 'claude_oauth_attempts' ||
           relation.tableName === 'user_provider_oauth_grants' ||
           relation.tableName === 'kb_import_receipts' ||
-          relation.tableName === 'opencode_checkpoint_attempts'
+          relation.tableName === 'opencode_checkpoint_attempts' ||
+          relation.tableName === 'scheduled_codex_retirements'
         ? STRICT_SYSTEM_GUARDED_TENANT_POLICY_EXPRESSION
         : relation.tableName === 'github_install_states'
           ? STRICT_TENANT_POLICY_EXPRESSION
