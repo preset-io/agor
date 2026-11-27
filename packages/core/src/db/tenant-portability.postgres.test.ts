@@ -838,6 +838,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
       'github_install_states',
       'mcp_oauth_client_registrations',
       'mcp_oauth_pending_flows',
+      'scheduled_codex_retirements',
       'teams_conversation_addresses',
       'teams_message_deliveries',
       'user_mcp_oauth_tokens',
@@ -878,7 +879,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
       'github_install_states'
     );
 
-    for (const table of ['teams_conversation_addresses', 'teams_message_deliveries']) {
+    for (const table of [
+      'scheduled_codex_retirements',
+      'teams_conversation_addresses',
+      'teams_message_deliveries',
+    ]) {
       expect(manifest.database.identity.tenantTables).not.toContain(table);
       expect(manifest.database.tables.map((entry) => entry.name)).not.toContain(table);
     }
